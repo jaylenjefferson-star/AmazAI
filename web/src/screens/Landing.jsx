@@ -1,5 +1,7 @@
 import Companion from '../characters/Companion';
 import Logo from './../components/Logo';
+import { PublicFooter } from '../components/PublicShell';
+import { Link } from 'react-router-dom';
 import { startLogin, useAuth0 } from '../auth0';
 
 const STEPS = [
@@ -38,6 +40,10 @@ export default function Landing() {
     <div className="landing">
       <header className="landing-nav">
         <Logo size={26} title="AmazAI" />
+        <nav className="landing-nav-links">
+          <Link to="/about">About</Link>
+          <Link to="/security">Security</Link>
+        </nav>
         <span style={{ flex: 1 }} />
         <button className="ghost" onClick={() => startLogin(loginWithRedirect, { returnTo: '/' })}>
           Sign in
@@ -89,10 +95,7 @@ export default function Landing() {
         ))}
       </section>
 
-      <footer className="landing-foot">
-        <Logo size={20} title="AmazAI" />
-        <span>Private testing environment.</span>
-      </footer>
+      <PublicFooter />
     </div>
   );
 }

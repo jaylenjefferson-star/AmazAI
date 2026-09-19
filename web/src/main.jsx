@@ -12,6 +12,13 @@ import AuthGate from './components/AuthGate';
 import Shell from './app/Shell';
 
 import Landing from './screens/Landing';
+import About from './screens/About';
+import PolicyPage from './screens/PolicyPage';
+import termsRaw from './content/terms-of-use.md?raw';
+import privacyRaw from './content/privacy-policy.md?raw';
+import securityRaw from './content/security-responsible-disclosure.md?raw';
+import cookieRaw from './content/cookie-policy.md?raw';
+import acceptableUseRaw from './content/acceptable-use-policy.md?raw';
 import Onboarding, { hasOnboarded } from './screens/Onboarding';
 import Home from './screens/Home';
 import { Agents, Artifacts, Rooms, Routines } from './screens/Sections';
@@ -21,18 +28,20 @@ import Usage from './screens/Usage';
 import Gallery from './screens/Gallery';
 import Connectors from './screens/Connectors';
 
+const PUBLIC_PATHS = ['/welcome-to-amazai', '/about', '/terms', '/privacy', '/cookie-policy', '/acceptable-use', '/security'];
+
 /**
  * Routing.
  *
  * Three tiers, and the boundary between them is the point:
  *
- *   public    — the landing page, and the character gallery
+ *   public    — the marketing pages: landing, about, and the legal documents
  *   gated     — everything behind AuthGate
  *   first-run — gated, but redirected to onboarding until it is done
  *
- * The gallery is public on purpose: it is a design surface with no data on
- * it, and needing to sign in to check whether an animation reads correctly
- * would mean checking it less often.
+ * The public tier is reachable whether or not a visitor is signed in — a
+ * signed-in owner should be able to open the Privacy Policy from the footer
+ * without being bounced out of their session.
  */
 
 function Protected({ children }) {
@@ -60,7 +69,12 @@ function Router() {
     <Routes>
       {/* Public */}
       <Route path="/welcome-to-amazai" element={<PublicOnly><Landing /></PublicOnly>} />
-      <Route path="/characters" element={<Gallery />} />
+      <Route path="/about" element={<About />} />
+      <Route path="/terms" element={<PolicyPage raw={termsRaw} />} />
+      <Route path="/privacy" element={<PolicyPage raw={privacyRaw} />} />
+      <Route path="/cookie-policy" element={<PolicyPage raw={cookieRaw} />} />
+      <Route path="/acceptable-use" element={<PolicyPage raw={acceptableUseRaw} />} />
+      <Route path="/security" element={<PolicyPage raw={securityRaw} />} />
 
       {/* First run */}
       <Route path="/welcome" element={<Protected><Onboarding /></Protected>} />
@@ -77,6 +91,7 @@ function Router() {
         <Route path="/artifacts" element={<Artifacts />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/usage" element={<Usage />} />
+        <Route path="/characters" element={<Gallery />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
@@ -92,8 +107,7 @@ function Entry() {
   if (!configured) return <Router />;
   if (isLoading) return null;
 
-  const isPublicPath = location.pathname === '/characters'
-    || location.pathname === '/welcome-to-amazai';
+  const isPublicPath = PUBLIC_PATHS.includes(location.pathname);
 
   if (!isAuthenticated && !isPublicPath) return <Landing />;
   return <Router />;
