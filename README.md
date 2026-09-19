@@ -66,6 +66,10 @@ Enable Bedrock model access first — a fresh account has the models switched
 off and the failure looks like a permissions bug. Details and failure modes:
 **[CLOUDSHELL.md](CLOUDSHELL.md)**.
 
+Unsure whether the account is ready? `./scripts/doctor.sh` is read-only and
+reports model access, AgentCore permissions, CDK state and tooling in one
+pass, with the account ID masked.
+
 Works the same on your own machine with your own credentials. The manual
 runbook is in [BUILD_PLAN.md](BUILD_PLAN.md#5-deploy-runbook).
 

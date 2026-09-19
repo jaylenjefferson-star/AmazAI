@@ -16,6 +16,20 @@ opt-in. Do this first:
 
 Approval is usually instant.
 
+## If you want me to drive
+
+Run this one command and paste the whole output back to me. It is read-only —
+it creates nothing, changes nothing, and costs nothing — and it tells me your
+account's model access, AgentCore permissions, CDK state and tooling versions
+in one go, so I can fix whatever is wrong precisely instead of guessing.
+
+```bash
+git clone https://github.com/jaylenjefferson-star/AmazAI.git && cd AmazAI
+./scripts/doctor.sh
+```
+
+Your account ID is masked by default.
+
 ## Five commands
 
 Open CloudShell (the `>_` icon in the console toolbar, top right). Pick the
