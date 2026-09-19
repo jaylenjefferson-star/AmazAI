@@ -33,19 +33,23 @@ export function LogoMark({ size = 28, title }) {
         </linearGradient>
       </defs>
 
-      {/* The left limb: one continuous stroke turning at the apex. */}
+      {/* The left limb, drawn as a round-capped stroke: the caps are the
+          shape, so a path with hand-built end curves would only be a longer
+          way to say the same thing. */}
+      <line x1="49" y1="21" x2="19" y2="73"
+            stroke={`url(#${uid}-a)`} strokeWidth="27" strokeLinecap="round" />
+
+      {/* The right form, apex tucked under the limb's upper third so the two
+          interlock into an A rather than sitting beside each other. */}
       <path
-        d="M40 12a13 13 0 0 1 20 0l2 4-14 24-18 32a12 12 0 0 1-21-12Z"
-        fill={`url(#${uid}-a)`}
-      />
-      {/* The right form, overlapping so the crossbar reads as a seam. */}
-      <path
-        d="M52 34a12 12 0 0 1 21 0l17 30a12 12 0 0 1-10 18H52a12 12 0 0 1-10-18Z"
+        d="M48.5 31.5q4-8.5 11.5-4 3 1.8 4.6 5.2l22.4 38.6q5.6 10.7-6.4 10.7H44.4q-12 0-6.4-10.7Z"
         fill={`url(#${uid}-b)`}
       />
-      {/* Where they cross, lightened rather than outlined — an outline would
-          need a background colour and this sits on two themes. */}
-      <path d="M52 34a12 12 0 0 1 10-6l-14 24-8-6Z" fill="#fff" opacity=".22" />
+
+      {/* The overlap, lightened rather than outlined — an outline needs a
+          background colour and this mark sits on two themes. */}
+      <path d="M56 25q3 0 5 2L45 56l-7-4 13-21q3-6 5-6Z"
+            fill="#fff" opacity=".2" />
     </svg>
   );
 }
