@@ -51,8 +51,14 @@ cd web   && npm install && npm run build
 
 ### To deploy
 
-See the runbook in [BUILD_PLAN.md](BUILD_PLAN.md#5-deploy-runbook). Run it
-with your own AWS credentials, locally — not in a shared environment.
+```bash
+./scripts/deploy.sh --check    # verify prerequisites, change nothing
+./scripts/deploy.sh            # test, build, deploy, wire up, print next steps
+```
+
+Run it on your own machine with your own AWS credentials — not in a shared
+environment. `--check` is safe and read-only. The full runbook, if you would
+rather do it by hand, is in [BUILD_PLAN.md](BUILD_PLAN.md#5-deploy-runbook).
 
 `scripts/provision_agents.py` deliberately refuses to run while any enabled
 seat has `modelId: null`. Resolve the real Bedrock inference-profile IDs with
