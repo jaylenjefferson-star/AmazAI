@@ -30,15 +30,26 @@ prove what it did."**
 
 ## Status
 
-**Phase 1 (infrastructure) is written and synthesizes clean** — 76 resources:
+**Phase 1 (infrastructure)** — written, `cdk synth` clean. 76 resources:
 DynamoDB + 2 GSIs, drive/evidence/console buckets, Cognito with TOTP MFA
 required, one prefix-scoped harness execution role per seat, five Lambdas, HTTP
-API with a JWT authorizer, WebSocket API, the sweeper schedule, and CloudFront.
-Handlers are stubs that return 501 — Phase 3 onward.
+API with a JWT authorizer, WebSocket API, sweeper schedule, CloudFront.
 
-Deploying needs AWS credentials, which only the owner has. See the runbook in
+**Phase 3 (enforcement core)** — written, 158 tests passing. The deterministic
+half of the orchestrator: run state machine, tool router, approval policy,
+secret redaction, cost ledger, error classification, and defensive parsing of
+the AgentCore event stream.
+
+```bash
+python3 -m pytest        # 158 passed
+cd infra && npx cdk synth
+```
+
+Not yet built: the DynamoDB store layer, evidence sealing, the WebSocket push
+helper, and the handler bodies (they return 501). Deploying needs AWS
+credentials, which only the owner has — see the runbook in
 [BUILD_PLAN.md](BUILD_PLAN.md#5-deploy-runbook).
 
 Three decisions are waiting on the owner before Phase 2 (seat provisioning) —
-see [open decisions](docs/architecture/15-open-decisions.md). `scripts/seats.json`
-carries `modelId: null` for every seat until D2 lands.
+see [open decisions](docs/architecture/15-open-decisions.md).
+`scripts/seats.json` carries `modelId: null` for every seat until D2 lands.
