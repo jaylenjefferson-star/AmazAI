@@ -19,6 +19,7 @@ import Settings from './screens/Settings';
 import Task from './screens/Task';
 import Usage from './screens/Usage';
 import Gallery from './screens/Gallery';
+import Connectors from './screens/Connectors';
 
 /**
  * Routing.
@@ -70,6 +71,7 @@ function Router() {
         <Route path="/agents" element={<Agents />} />
         <Route path="/agents/new" element={<Agents />} />
         <Route path="/agents/:agentId" element={<Task />} />
+        <Route path="/connectors" element={<Connectors />} />
         <Route path="/rooms" element={<Rooms />} />
         <Route path="/routines" element={<Routines />} />
         <Route path="/artifacts" element={<Artifacts />} />

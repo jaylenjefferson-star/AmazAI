@@ -35,6 +35,14 @@ const live = {
   addMemory: (id, entry) => call('POST', `/agents/${id}/memory`, entry),
   deleteMemory: (id, memId) => call('DELETE', `/agents/${id}/memory/${memId}`),
 
+  connectorCatalog: () => call('GET', '/connectors/catalog'),
+  connectors: () => call('GET', '/connectors'),
+  connectorAccounts: (app) => call('GET', `/connectors/accounts${app ? `?app=${encodeURIComponent(app)}` : ''}`),
+  connectToken: (connectorId) => call('POST', '/connectors/connect-token', { connectorId }),
+  installConnector: (connectorId, accountId, allowedTools) =>
+    call('POST', `/connectors/${encodeURIComponent(connectorId)}/install`, { accountId, allowedTools }),
+  revokeConnector: (connectorId) => call('DELETE', `/connectors/${encodeURIComponent(connectorId)}`),
+
   threads: () => call('GET', '/threads'),
   thread: (id) => call('GET', `/threads/${id}`),
   createThread: (t) => call('POST', '/threads', t),

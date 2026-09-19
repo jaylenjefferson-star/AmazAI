@@ -17,6 +17,7 @@ import Logo from '../components/Logo';
 const NAV = [
   { to: '/',          label: 'Home',      end: true, glyph: '◉' },
   { to: '/agents',    label: 'Agents',    glyph: '◍' },
+  { to: '/connectors',label: 'Connectors',glyph: '⌁' },
   { to: '/rooms',     label: 'Rooms',     glyph: '◎' },
   { to: '/routines',  label: 'Routines',  glyph: '◐' },
   { to: '/artifacts', label: 'Artifacts', glyph: '▤' },
