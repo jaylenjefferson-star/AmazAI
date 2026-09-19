@@ -92,6 +92,12 @@ export function AmazAIAuthProvider({ children }) {
       // hidden iframe — Safari's tracking prevention blocks that, and this
       // console has to survive a refresh on a phone.
       useRefreshTokens
+      // Existing sessions created before the API audience was configured do
+      // not yet have a rotating refresh token. Fall back to Auth0's hidden
+      // session check once, then the next normal login carries the proper
+      // audience and refresh-token grant. This avoids showing a logged-in
+      // shell that cannot reach the control plane.
+      useRefreshTokensFallback
       cacheLocation="localstorage"
       onRedirectCallback={(appState) => {
         // Return people to what they were opening, then drop Auth0's ?code=
