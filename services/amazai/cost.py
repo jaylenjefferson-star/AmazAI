@@ -84,6 +84,30 @@ class BudgetCheck:
         return self.verdict is Verdict.STOP
 
 
+def budget_for_agent(agent: dict) -> Budget:
+    """The one place an agent row's raw `budget` dict becomes a `Budget`.
+
+    Shared by the orchestrator's own run loop and `collab.may_wake_now`, so a
+    priority-woken recipient is checked against exactly the same ceilings a
+    normally-triggered run would be -- not a second, looser copy of them.
+    """
+    b = agent.get("budget", {}) or {}
+    return Budget(
+        per_run_usd=float(b.get("perRunUsd", 2.0)),
+        per_month_usd=float(b.get("perMonthUsd", 40.0)),
+        on_ceiling=b.get("onCeiling", "hard_stop"),
+        max_tool_calls_per_run=int(b.get("maxToolCallsPerRun", 60)),
+    )
+
+
+def spent_this_month(store, agent_id: str) -> float:
+    from amazai import keys as K
+    from amazai.store import now_iso
+    month = now_iso()[:7]
+    rows = store.query(K.cost_pk(agent_id, month), limit=500)
+    return sum(float(r.get("totalUsd", 0.0)) for r in rows)
+
+
 def check(
     budget: Budget,
     *,

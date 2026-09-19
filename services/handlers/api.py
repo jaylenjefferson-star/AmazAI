@@ -17,8 +17,8 @@ import traceback
 
 import boto3
 
-from amazai import (agentcore, agents as A, approvals, connectors as C,
-                    identity, keys as K, models, pipedream, runs)
+from amazai import (agentcore, agents as A, approvals, collab, connectors as C,
+                    identity, keys as K, memory, models, pipedream, runs, skills)
 from amazai.policy import Capability
 from amazai.states import RunState
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
@@ -128,6 +128,10 @@ def handler(event, context):  # noqa: ARG001
     except identity.AuthError:
         return _resp(401, {"error": "unauthorized"})
     except A.ValidationError as exc:
+        return _resp(400, {"error": "invalid_request", "detail": str(exc)})
+    except skills.ValidationError as exc:
+        return _resp(400, {"error": "invalid_request", "detail": str(exc)})
+    except memory.ValidationError as exc:
         return _resp(400, {"error": "invalid_request", "detail": str(exc)})
     except A.Escalation as exc:
         return _resp(403, {"error": "forbidden", "detail": str(exc)})
@@ -302,17 +306,118 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     # --- memory ------------------------------------------------------------
     if (p := _match(path, "/agents/{id}/memory")) and method == "POST":
-        mem_id = new_id("mem_")
-        return _resp(201, store.put({
-            "pk": K.agent_pk(p[0]), "sk": K.memory_sk(mem_id),
-            "entity": "Memory", "memId": mem_id,
-            "title": body.get("title", ""), "body": body.get("body", ""),
-            "source": "user", "pinned": bool(body.get("pinned", True)),
-            "usedCount": 0,
-        }))
+        return _resp(201, _write_memory(store, K.agent_pk(p[0]), body, scope="agent",
+                                        actor=_actor(event)))
 
     if (p := _match(path, "/agents/{id}/memory/{memId}")) and method == "DELETE":
         store.delete(K.agent_pk(p[0]), K.memory_sk(p[1]))
+        return _resp(204, {})
+
+    if (p := _match(path, "/agents/{id}/memory/{memId}/revoke")) and method == "POST":
+        return _resp(200, store.update(K.agent_pk(p[0]), K.memory_sk(p[1]), memory.revoke()))
+
+    # --- shared user memory --------------------------------------------
+    # Facts every seat should know (name, timezone, standing preferences),
+    # not scoped to one agent's namespace. See 16-grokbot-ux-alignment §4.
+    # This route is only ever reached with a human Actor (api.py sits behind
+    # Auth0; an agent has no bearer token), so a direct POST here always
+    # publishes -- an agent can only reach shared memory through
+    # `propose_shared_memory` -> the `memory.publish` approval below.
+    if path == "/memory" and method == "GET":
+        return _resp(200, {"memory": store.query(K.user_pk(store.owner_id), sk_prefix="MEM#", limit=100)})
+
+    if path == "/memory" and method == "POST":
+        return _resp(201, _write_memory(store, K.user_pk(store.owner_id), body,
+                                        scope="shared_user", actor=_actor(event)))
+
+    if (p := _match(path, "/memory/{memId}")) and method == "DELETE":
+        store.delete(K.user_pk(store.owner_id), K.memory_sk(p[0]))
+        return _resp(204, {})
+
+    if (p := _match(path, "/memory/{memId}/revoke")) and method == "POST":
+        # Excluded from the very next prompt: orchestrator._drive re-reads
+        # status on every run and memory.visible() drops anything not
+        # `published`, so there is nothing left to invalidate.
+        return _resp(200, store.update(K.user_pk(store.owner_id), K.memory_sk(p[0]), memory.revoke()))
+
+    # --- task-scoped memory ----------------------------------------------
+    # Visible only to a run that is actually part of this task -- see
+    # orchestrator._drive's `effective_task_id` query. Never crosses to a
+    # different task because a different task's run never queries this pk.
+    if (p := _match(path, "/tasks/{taskId}/memory")) and method == "GET":
+        return _resp(200, {"memory": store.query(K.task_pk(p[0]), sk_prefix="MEM#", limit=100)})
+
+    if (p := _match(path, "/tasks/{taskId}/memory")) and method == "POST":
+        body = {**body, "taskId": p[0]}
+        return _resp(201, _write_memory(store, K.task_pk(p[0]), body, scope="task",
+                                        actor=_actor(event)))
+
+    # --- skills --------------------------------------------------------
+    if path == "/skills" and method == "GET":
+        return _resp(200, {"skills": store.query_index("gsi1", "gsi1pk", "SKILLS", limit=200)})
+
+    if path == "/skills" and method == "POST":
+        # A person authoring a skill directly goes straight to active,
+        # version 1; only an agent's `propose_skill` call produces a
+        # `proposed` row awaiting this same approval gate agent creation
+        # uses. Written atomically -- META + V1 or neither.
+        return _resp(201, skills.create(store, body, created_by=_owner(event)))
+
+    if (p := _match(path, "/skills/{id}")) and method == "PATCH":
+        existing = store.get(K.skill_pk(p[0]), "META")
+        if body.get("status") == "active" and existing["status"] == "proposed":
+            return _resp(200, store.update(K.skill_pk(p[0]), "META", skills.activate(existing)))
+        changes = {k: v for k, v in body.items()
+                  if k in {"name", "description", "status", "owner"}}
+        if changes.get("status") not in (None, *skills.STATUSES):
+            return _resp(400, {"error": f"status must be one of {sorted(skills.STATUSES)}"})
+        if not changes:
+            return _resp(400, {"error": "no editable fields supplied"})
+        return _resp(200, store.update(K.skill_pk(p[0]), "META", changes))
+
+    # --- skill versions --------------------------------------------------
+    # Immutable once written. Only `tools`/`capabilities`/`approvalRequired`
+    # changing forces the human-approval step below; a body/description-only
+    # edit becomes current immediately -- see skills.version_needs_approval.
+    if (p := _match(path, "/skills/{id}/versions")) and method == "GET":
+        return _resp(200, {"versions": store.query(K.skill_pk(p[0]), sk_prefix="V#", limit=1000)})
+
+    if (p := _match(path, "/skills/{id}/versions")) and method == "POST":
+        skill_id = p[0]
+        latest = skills.latest_version(store, skill_id)
+        fields = skills.validate_skill({**body, "name": store.get(K.skill_pk(skill_id), "META")["name"]})
+        next_version = (latest["version"] + 1) if latest else 1
+        needs_approval = bool(latest) and skills.version_needs_approval(latest, fields)
+        row = skills.propose_version(fields, skill_id=skill_id, next_version=next_version,
+                                     created_by=_owner(event))
+        if not needs_approval:
+            return _resp(201, skills.apply_version(store, skill_id, row, approved_by=_owner(event)))
+        store.put(row)
+        return _resp(202, {**row, "status": "pending_approval"})
+
+    if (p := _match(path, "/skills/{id}/versions/{version}/approve")) and method == "POST":
+        skill_id, version = p[0], int(p[1])
+        pending = store.get(K.skill_pk(skill_id), K.skill_version_sk(version))
+        return _resp(200, skills.apply_version(store, skill_id, pending, approved_by=_owner(event)))
+
+    # --- skill assignment --------------------------------------------------
+    # Assignment, not blanket injection: an active skill an agent is not
+    # assigned to never enters that agent's prompt (orchestrator._drive uses
+    # skills.assigned_active_skills, not the full SKILLS listing).
+    if (p := _match(path, "/skills/{id}/assignments")) and method == "POST":
+        skill_id = p[0]
+        skill = store.get(K.skill_pk(skill_id), "META")
+        version = int(body.get("version") or skill["currentVersion"])
+        return _resp(201, skills.assign(store, skill_id=skill_id, agent_id=body["agentId"],
+                                        version=version, assigned_by=_owner(event)))
+
+    if (p := _match(path, "/skills/{id}/assignments/{agentId}")) and method == "DELETE":
+        skills.unassign(store, skill_id=p[0], agent_id=p[1])
+        return _resp(204, {})
+
+
+    if (p := _match(path, "/skills/{id}")) and method == "DELETE":
+        store.delete(K.skill_pk(p[0]), "META")
         return _resp(204, {})
 
     # --- threads -----------------------------------------------------------
@@ -377,6 +482,27 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
                            "totalUsd": round(total, 4), "runs": rows})
 
     return _resp(404, {"error": "no such route", "path": path, "method": method})
+
+
+def _write_memory(store: Store, pk: str, body: dict, *, scope: str, actor: A.Actor) -> dict:
+    """Write one published memory row, tagged by scope and kind.
+
+    Every route that reaches this helper runs behind Auth0 (`api.py` never
+    sees an agent-originated request -- see `_actor`), so a `shared_user`
+    write here is always human-authored and always publishes immediately.
+    An agent can only reach `shared_user` through `propose_shared_memory` ->
+    the `memory.publish` approval in `_decide`.
+
+    `kind` supersedes the old bare `pinned` flag: `foundational` always
+    enters context (what `pinned: true` used to mean), `log` is dated
+    history, `note` is short-lived. A caller that still only sends `pinned`
+    keeps working exactly as before.
+    """
+    pinned = bool(body.get("pinned", True))
+    kind = body.get("kind") or ("foundational" if pinned else "note")
+    row = memory.plan_write({**body, "kind": kind}, pk, scope=scope,
+                            source="user", author=actor.user_id, status="published")
+    return store.put(row)
 
 
 def _create_agent(store: Store, body: dict, event: dict):
@@ -554,6 +680,18 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict,
             "createdAgentId": created["agentId"],
             "executionStatus": "created",
         })
+    if approve and decided["action"] == "skill.create":
+        created = _create_approved_skill(store, decided["arguments"], actor)
+        store.update(run_pk, K.approval_sk(approval_id), {
+            "createdSkillId": created["skillId"],
+            "executionStatus": "created",
+        })
+    if approve and decided["action"] == "memory.publish":
+        created = _create_approved_memory(store, decided["arguments"], actor)
+        store.update(run_pk, K.approval_sk(approval_id), {
+            "createdMemId": created["memId"],
+            "executionStatus": "created",
+        })
 
     verb = "approved" if approve else "denied"
     note = f'Your decision on "{decided["action"]}": {verb}.'
@@ -565,9 +703,42 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict,
     runs.advance(store, run, RunState.EXECUTING, pending=None)
     _invoke_orchestrator(run_id, store.owner_id, resume=True, resume_note=note)
     result = {"approval": approvals.to_card(decided), "resumed": True}
-    if created:
+    if created and decided["action"] == "agent.create":
         result["createdAgent"] = created
+    elif created and decided["action"] == "skill.create":
+        result["createdSkill"] = created
+    elif created and decided["action"] == "memory.publish":
+        result["createdMemory"] = created
     return _resp(200, result)
+
+
+def _create_approved_memory(store: Store, proposal: dict, actor: A.Actor) -> dict:
+    """Publish the exact approved shared-memory proposal.
+
+    `proposal` came from the approval's argument binding, not a fresh
+    payload -- the same substitution-gap closing `_create_approved_agent`
+    and `_create_approved_skill` already rely on. This is the only path by
+    which an agent-authored fact ever reaches `shared_user`.
+    """
+    row = memory.plan_write(proposal, K.user_pk(store.owner_id), scope="shared_user",
+                            source="agent", author=proposal.get("proposedBy", ""),
+                            status="published")
+    return store.put(row)
+
+
+def _create_approved_skill(store: Store, proposal: dict, actor: A.Actor) -> dict:
+    """Create the exact approved skill proposal, atomically (META + v1).
+
+    Mirrors `_create_approved_agent`: the proposal came from the approval's
+    argument binding, not a fresh payload, so an agent cannot widen what it
+    proposed between the request and the decision.
+    """
+    meta, version = skills.plan_create(proposal, created_by=actor.user_id,
+                                       proposed_by=proposal.get("proposedBy"))
+    meta["status"] = "active"
+    version["approvedBy"] = actor.user_id
+    written = store.transact_put([meta, version])
+    return written[0]
 
 
 def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict:

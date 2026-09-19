@@ -40,6 +40,8 @@ L4  Evidence, approvals, audit history, notifications
 | 13 | [AWS service decisions](13-aws-service-decisions.md) | — | Deliverable 7 |
 | 14 | [Hard problems](14-hard-problems.md) | — | Deliverable 8 |
 | 15 | [Open decisions](15-open-decisions.md) | — | **Everything awaiting your call** |
+| 16 | [GrokBot UX alignment](16-grokbot-ux-alignment.md) | L2 | Free agent CRUD, open rooms, tiered memory, shared skills |
+| 17 | [Message and memory authorization](17-message-and-memory-authorization.md) | L2 | The authorization contract 16 left open: messaging bounds, memory governance, skill versioning, creation inheritance |
 
 ## What changed from the earlier build plan
 

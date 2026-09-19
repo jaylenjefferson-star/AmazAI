@@ -92,6 +92,27 @@ def channel_pk(channel_type: str, external_id: str) -> str:
     return f"CHANNEL#{channel_type}#{external_id}"
 
 
+def skill_pk(skill_id: str) -> str:
+    return f"SKILL#{skill_id}"
+
+
+def skill_version_sk(version: int) -> str:
+    # Zero-padded for the same reason as run_event_sk: lexicographic order
+    # must match numeric order so the latest version is a stable range query.
+    return f"V#{version:06d}"
+
+
+def task_pk(task_id: str) -> str:
+    """Task-scoped memory's own partition, independent of the RUN# row.
+
+    A message-spawned run for a recipient agent carries its `taskId` in
+    `trigger`, not a fresh runId, so this key has to be addressable by that
+    logical task id rather than by any one run's pk -- see
+    docs/architecture/17-message-and-memory-authorization.md §2.
+    """
+    return f"TASK#{task_id}"
+
+
 def connection_pk(connection_id: str) -> str:
     return f"CONN#{connection_id}"
 

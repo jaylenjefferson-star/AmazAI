@@ -20,8 +20,8 @@ import traceback
 
 import boto3
 
-from amazai import (agentcore, agents as A, approvals, connectors, keys as K, policy,
-                    redact, router, runs)
+from amazai import (agentcore, agents as A, approvals, collab, connectors, cost,
+                    keys as K, memory, policy, redact, router, runs, skills)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
@@ -122,7 +122,21 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     thread = store.get(K.thread_pk(run["threadId"]), "META")
     history = store.query(K.thread_pk(run["threadId"]), sk_prefix="MSG#",
                           limit=MAX_HISTORY, ascending=True)[-MAX_HISTORY:]
-    memories = store.query(K.agent_pk(run["agentId"]), sk_prefix="MEM#", limit=50)
+    memories = memory.visible(store.query(K.agent_pk(run["agentId"]), sk_prefix="MEM#", limit=50))
+    # Shared user memory (name, timezone, standing preferences) is visible to
+    # every agent's context alongside its own, on by default -- see
+    # docs/architecture/16-grokbot-ux-alignment.md §4 and open question 1.
+    # `memory.visible` drops anything revoked/expired/still-proposed so a
+    # publish approval or a revoke takes effect on the very next turn.
+    memories += memory.visible(store.query(K.user_pk(store.owner_id), sk_prefix="MEM#", limit=50))
+    # Task-scoped memory only exists for a run that is actually part of that
+    # task: its own runId, or the taskId a priority message spawned it under
+    # (`trigger.taskId`, set only by an already-authorized send -- see
+    # collab.send). A run outside that task never queries this partition, so
+    # task memory cannot cross a task boundary by construction.
+    effective_task_id = (run.get("trigger") or {}).get("taskId") or run["runId"]
+    memories += memory.visible(store.query(K.task_pk(effective_task_id), sk_prefix="MEM#", limit=50))
+    assigned_skills = skills.assigned_active_skills(store, run["agentId"])
 
     messages = agentcore.build_messages(history, room=thread.get("kind") == "room")
     if event.get("resume") and event.get("resumeNote"):
@@ -131,7 +145,8 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
         # state machine either way.
         messages.append({"role": "user", "content": [{"text": event["resumeNote"]}]})
 
-    system_prompt = agentcore.build_system_prompt(agent, memories)
+    system_prompt = agentcore.build_system_prompt(agent, memories, skills=assigned_skills)
+
 
     run = runs.advance(store, run, RunState.PLANNING) if run["state"] == RunState.QUEUED.value else run
     run = runs.advance(store, run, RunState.EXECUTING) if run["state"] == RunState.PLANNING.value else run
@@ -300,6 +315,86 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
         push.handoff(run["runId"], run["threadId"], handoff)
         return {"pause": False}
 
+    if name == "message_agent":
+        try:
+            result = _message_agent(store, run, agent, args)
+        except collab.MessagingError as exc:
+            ev.error(seq, "terminal", str(exc))
+            push.tool(run["runId"], run["threadId"], "message_agent", f"blocked: {exc}")
+            return {"pause": False}
+        ev.action(seq, "message_agent", f"to {args.get('to')}"
+                 f" ({'priority' if result['priorityGranted'] else 'deferred'})",
+                 messageId=result["message"]["messageId"])
+        push.tool(run["runId"], run["threadId"], "message_agent",
+                 f"-> {args.get('to')}: {args.get('text','')[:120]}")
+        return {"pause": False}
+
+    if name == "remember":
+        # Direct write, no approval: scope is limited to this agent's own
+        # namespace or the current task's own partition -- never every agent.
+        scope = args.get("scope", "agent")
+        try:
+            if scope == "agent":
+                pk = K.agent_pk(agent["agentId"])
+            elif scope == "task":
+                task_id = args.get("task_id") or (run.get("trigger") or {}).get("taskId") or run["runId"]
+                pk = K.task_pk(task_id)
+            else:
+                raise memory.ValidationError(
+                    f"remember only writes scope=agent or scope=task, got {scope!r}; "
+                    "use propose_shared_memory to reach every agent")
+            row = memory.plan_write(args, pk, scope=scope, source="agent", author=agent["agentId"])
+        except memory.ValidationError as exc:
+            ev.error(seq, "terminal", str(exc))
+            return {"pause": False}
+        store.put(row)
+        ev.action(seq, "remember", f"{scope} memory saved", memId=row["memId"])
+        return {"pause": False}
+
+    if name == "propose_shared_memory":
+        # Same pattern as propose_agent/propose_skill: the model nominates, a
+        # person decides. Nothing here reaches shared_user until _decide
+        # approves it -- see memory.plan_write's status="proposed" default.
+        try:
+            fields = memory.validate(args, scope="shared_user")
+        except memory.ValidationError as exc:
+            ev.error(seq, "terminal", str(exc))
+            return {"pause": False}
+        proposal = {**fields, "proposedBy": agent["agentId"]}
+        policy.evaluate("memory.publish", Capability.WRITE)
+        approval = approvals.request(
+            store, run,
+            action="memory.publish", arguments=proposal,
+            why=args.get("why", "The operator should know this."),
+            capability=Capability.WRITE,
+            tool_use_id=parsed.tool_use_id,
+            reversible=True,
+        )
+        ev.action(seq, "memory.publish", "shared memory proposed", approvalId=approval["approvalId"])
+        return {"pause": True, "approval": approval}
+
+    if name == "propose_skill":
+        # Same pattern as propose_agent: the model nominates, a person
+        # decides. A proposed skill is excluded from every agent's context
+        # until approved and assigned -- see skills.assigned_active_skills.
+        try:
+            proposal = skills.validate_skill(args)
+        except skills.ValidationError as exc:
+            ev.error(seq, "terminal", str(exc))
+            return {"pause": False}
+        proposal["proposedBy"] = agent["agentId"]
+        policy.evaluate("skill.create", Capability.ADMIN)
+        approval = approvals.request(
+            store, run,
+            action="skill.create", arguments=proposal,
+            why=args.get("why", "A reusable skill would help future runs."),
+            capability=Capability.ADMIN,
+            tool_use_id=parsed.tool_use_id,
+            reversible=True,
+        )
+        ev.action(seq, "skill.create", "skill proposed", approvalId=approval["approvalId"])
+        return {"pause": True, "approval": approval}
+
     # In-harness tool (shell, browser, gateway target). We observe, not execute.
     if not router.may_call(name, resolution):
         # Should be unreachable: unresolved tools are absent from the schema.
@@ -426,6 +521,63 @@ def _record_handoff(store: Store, run: dict, args: dict) -> dict:
     })
 
 
+def _message_agent(store: Store, run: dict, agent: dict, args: dict) -> dict:
+    """Task/context-bound agent-to-agent messaging.
+
+    `collab.send` is the authorization boundary: it requires task_id or
+    collaboration_context_id, checks both agents are participants (or an
+    org escalation policy applies), and enforces hop depth / per-task
+    message ceilings by raising `collab.MessagingError`. `priority` only
+    ever *requests* an expedited wake; `collab.may_wake_now` still has to
+    clear concurrency and budget before a run is actually spawned for the
+    recipient -- exactly the same gates any other trigger goes through in
+    `_drive`.
+    """
+    to_agent_id = (args.get("to") or "").strip()
+    if not to_agent_id:
+        raise collab.MessagingError("message_agent requires 'to'")
+    if to_agent_id == agent["agentId"]:
+        raise collab.MessagingError("an agent cannot message itself")
+
+    to_agent = store.try_get(K.agent_pk(to_agent_id), "META")
+    if to_agent is None or to_agent.get("status") not in A.RUNNABLE:
+        raise collab.MessagingError(f"no such active recipient {to_agent_id!r}")
+
+    outcome = collab.send(store, sender_agent_id=agent["agentId"],
+                          recipient_agent_id=to_agent_id, args=args)
+    context = outcome["context"]
+    message = outcome["message"]
+
+    woke = False
+    if outcome["priority_granted"]:
+        limits = collab.limits_for_org(store)
+        allowed, _reason = collab.may_wake_now(store, to_agent, limits)
+        if allowed:
+            new_run = runs.create(store, agent_id=to_agent_id, thread_id=context.thread_id,
+                                  goal=message["text"],
+                                  trigger={"type": "agent", "fromAgentId": agent["agentId"],
+                                          "taskId": message.get("taskId"),
+                                          "collaborationContextId": message.get("collaborationContextId"),
+                                          "traceId": message["traceId"]})
+            _invoke_orchestrator_async(new_run["runId"], store.owner_id)
+            woke = True
+
+    return {"message": message, "priorityGranted": outcome["priority_granted"], "woke": woke}
+
+
+def _invoke_orchestrator_async(run_id: str, owner_id: str) -> None:
+    """Wake the recipient's own run. Same fire-and-forget invoke api.py uses
+    for a resume; duplicated rather than imported to avoid a handler-to-
+    handler import."""
+    fn = os.environ.get("ORCHESTRATOR_FN_ARN")
+    if not fn:
+        return
+    boto3.client("lambda").invoke(
+        FunctionName=fn, InvocationType="Event",
+        Payload=json.dumps({"runId": run_id, "ownerId": owner_id}).encode(),
+    )
+
+
 def _persist_message(store: Store, run: dict, agent: dict, text: str, cost: RunCost) -> None:
     store.put({
         "pk": K.thread_pk(run["threadId"]),
@@ -448,19 +600,11 @@ def _write_cost(store: Store, run: dict, agent: dict, cost: RunCost) -> None:
 
 
 def _spent_this_month(store: Store, agent_id: str) -> float:
-    month = now_iso()[:7]
-    rows = store.query(K.cost_pk(agent_id, month), limit=500)
-    return sum(float(r.get("totalUsd", 0.0)) for r in rows)
+    return cost.spent_this_month(store, agent_id)
 
 
 def _budget_for(agent: dict) -> Budget:
-    b = agent.get("budget", {}) or {}
-    return Budget(
-        per_run_usd=float(b.get("perRunUsd", 2.0)),
-        per_month_usd=float(b.get("perMonthUsd", 40.0)),
-        on_ceiling=b.get("onCeiling", "hard_stop"),
-        max_tool_calls_per_run=int(b.get("maxToolCallsPerRun", 60)),
-    )
+    return cost.budget_for_agent(agent)
 
 
 def _finish(store: Store, run: dict, state: RunState, summary: str, push: Push,
