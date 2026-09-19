@@ -216,6 +216,10 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         agent["grants"] = store.query(K.agent_pk(p[0]), sk_prefix="GRANT#")
         agent["audit"] = store.query(K.agent_pk(p[0]), sk_prefix="AUDIT#",
                                      limit=50, ascending=False)
+        # Raw assignment rows, not `skills.assigned_active_skills` -- the
+        # profile needs to show a skill pending approval or disabled too,
+        # not only what the prompt is currently allowed to see.
+        agent["skillAssignments"] = store.query(K.agent_pk(p[0]), sk_prefix="SKILLASSIGN#")
         return _resp(200, agent)
 
     if (p := _match(path, "/agents/{id}")) and method == "PATCH":
@@ -426,6 +430,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     if path == "/threads" and method == "POST":
         thread_id = new_id("th_")
+        actor = _actor(event)
         return _resp(201, store.put({
             "pk": K.thread_pk(thread_id), "sk": "META",
             "entity": "Thread", "threadId": thread_id,
@@ -435,11 +440,22 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
             "agentIds": body.get("agentIds", []),
             "sessionId": K.session_id(thread_id),
             "lastActivity": now_iso(),
+            # A room is task-bound from creation: the human who opened it is
+            # its owner of record, and it starts "active" so the Rooms list
+            # never has to guess a status for a room with no runs yet.
+            "createdBy": actor.user_id,
+            "status": body.get("status", "active"),
         }))
 
     if (p := _match(path, "/threads/{id}")) and method == "GET":
         thread = store.get(K.thread_pk(p[0]), "META")
-        thread["messages"] = store.query(K.thread_pk(p[0]), sk_prefix="MSG#", limit=200)
+        # Agent-to-agent traffic (`AgentMessage`) is a coordination event, not
+        # a chat turn -- see /threads/{id}/coordination. Mixing it into
+        # `messages` would render it as an ordinary bubble in the room the
+        # owner reads, which is exactly the "looks like a shared DM" framing
+        # this route must not produce.
+        rows = store.query(K.thread_pk(p[0]), sk_prefix="MSG#", limit=200)
+        thread["messages"] = [r for r in rows if r.get("entity") != "AgentMessage"]
         return _resp(200, thread)
 
     if (p := _match(path, "/threads/{id}/messages")) and method == "POST":
@@ -447,6 +463,38 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     if (p := _match(path, "/threads/{id}/exec")) and method == "POST":
         return _exec(store, p[0], body)
+
+    # --- coordination (read-only) -------------------------------------
+    # The owner's view onto agent<->agent traffic bound to this thread:
+    # handoffs proposed on any run this thread has driven, plus the
+    # AgentMessage rows `collab.send` wrote here (room or task context --
+    # both land on this same thread pk; see collab._context_pk). Never a
+    # write path: sender/recipient are the only agents who may address one
+    # another here, and the owner is a reader, not a third participant.
+    if (p := _match(path, "/threads/{id}/coordination")) and method == "GET":
+        store.get(K.thread_pk(p[0]), "META")   # 404 if the thread is not ours
+        agent_messages = [r for r in store.query(K.thread_pk(p[0]), sk_prefix="MSG#", limit=200)
+                          if r.get("entity") == "AgentMessage"]
+        thread_runs = [r for r in store.query_index("gsi1", "gsi1pk", "RUNS", limit=500)
+                      if r.get("threadId") == p[0]]
+        handoffs = [(r, h) for r in thread_runs
+                   for h in store.query(r["pk"], sk_prefix="HOFF#", limit=200)]
+        items = [
+            *({"kind": "message", "at": m.get("at") or m.get("createdAt"),
+               "fromAgentId": m.get("senderAgentId"), "toAgentId": m.get("recipientAgentId"),
+               "status": "delivered", "priority": _priority_label(m),
+               "summary": m.get("text", "")[:200],
+               "taskId": m.get("taskId"), "collaborationContextId": m.get("collaborationContextId"),
+              } for m in agent_messages),
+            *({"kind": "handoff", "at": h.get("createdAt"),
+               "fromAgentId": h.get("fromAgentId"), "toAgentId": h.get("toAgentId"),
+               "status": h.get("status", "proposed"), "priority": None,
+               "summary": h.get("goal", ""), "taskId": r["runId"],
+               "collaborationContextId": None,
+              } for r, h in handoffs),
+        ]
+        items.sort(key=lambda i: i.get("at") or "")
+        return _resp(200, {"coordination": items})
 
     # --- runs --------------------------------------------------------------
     if (p := _match(path, "/runs/{id}")) and method == "GET":
@@ -466,6 +514,17 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         return _resp(202, runs.advance(store, run, RunState.CANCELLING))
 
     # --- approvals ---------------------------------------------------------
+    # Global, across every run -- what the Home inbox needs. The per-run
+    # route above stays the source of truth for one run's own approvals;
+    # this is a read-only index scan of the same rows, never a second
+    # decision path.
+    if path == "/approvals" and method == "GET":
+        qs = event.get("queryStringParameters") or {}
+        wanted = qs.get("status", approvals.PENDING)
+        rows = store.query_index("gsi1", "gsi1pk", "APPROVALS", limit=500)
+        matched = [a for a in rows if a.get("status") == wanted] if wanted else rows
+        return _resp(200, {"approvals": [approvals.to_card(a) for a in matched]})
+
     if (p := _match(path, "/approvals/{runId}/{apvId}")) and method == "POST":
         return _decide(store, p[0], p[1], body, _actor(event))
 
@@ -604,6 +663,18 @@ def _provision_harness(store: Store, agent: dict) -> dict:
         "status": "active",
         "state": "active",
     })
+
+
+def _priority_label(agent_message: dict) -> str:
+    """`collab.send`'s two outcomes for `priority: true`, in the words the
+    console must show -- see docs/architecture/17 §1: a priority request
+    only ever asks for an expedited wake, so a request that did not clear
+    the rate/concurrency/budget gate is still delivered, just not now."""
+    if agent_message.get("priorityGranted"):
+        return "Priority — recipient awakened"
+    if agent_message.get("priorityRequested"):
+        return "Deferred — delivered on next turn"
+    return "Deferred — delivered on next turn"
 
 
 def _post_message(store: Store, thread_id: str, body: dict):

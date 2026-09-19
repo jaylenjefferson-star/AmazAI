@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import ApprovalCard from './ApprovalCard';
 import Handoff from './Handoff';
+import TypingIndicator from './TypingIndicator';
 
 function ToolChip({ chip }) {
   const [open, setOpen] = useState(false);
@@ -23,13 +24,13 @@ function ToolChip({ chip }) {
  * Chat and execution timeline are one column, not two. A tool call is a turn
  * in the conversation, because that is what it actually is.
  */
-export default function Timeline({ items, streaming, approvals, agents, onDecide }) {
+export default function Timeline({ items, streaming, typing, approvals, agents, onDecide }) {
   const endRef = useRef(null);
   const [stuck, setStuck] = useState(true);
 
   useEffect(() => {
     if (stuck) endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [items, streaming, stuck]);
+  }, [items, streaming, typing, stuck]);
 
   function onScroll(e) {
     const el = e.currentTarget;
@@ -38,7 +39,7 @@ export default function Timeline({ items, streaming, approvals, agents, onDecide
 
   return (
     <div className="timeline" onScroll={onScroll}>
-      {items.length === 0 && !streaming && (
+      {items.length === 0 && !streaming && !typing && (
         <div className="empty">
           <span className="title">Nothing here yet</span>
           <span>Describe a task below. You will be asked before anything risky runs.</span>
@@ -72,6 +73,10 @@ export default function Timeline({ items, streaming, approvals, agents, onDecide
           <div className="who">{streaming.author || 'agent'}</div>
           <div className="body">{streaming.text}<span className="cursor" /></div>
         </div>
+      )}
+
+      {streaming == null && typing != null && (
+        <TypingIndicator name={typing.name} verb={typing.verb} />
       )}
 
       <div ref={endRef} />

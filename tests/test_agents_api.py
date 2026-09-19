@@ -227,3 +227,112 @@ class TestTenantIsolation:
         assert call("DELETE", "/agents/cloud-operations", sub="owner-b")[0] == 404
 
         assert call("GET", "/agents/cloud-operations")[1]["status"] == "active"
+
+
+class TestConsoleReadModel:
+    """Additive routes the console needs to render real state instead of
+    fixtures: an agent's skill assignments on its own profile, a room's
+    owner/status at creation, and one global pending-approvals index for the
+    Home inbox."""
+
+    def test_agent_detail_includes_its_skill_assignments(self, api_table):
+        from amazai import skills
+        from amazai.store import Store
+
+        call("POST", "/agents", NEW_AGENT)
+        store = Store("owner-a", table=api_table)
+        skills.create(
+            store, {"name": "Amplify verify", "description": "Verify a rollout",
+                    "owner": "cloud-operations"},
+            created_by="owner-a")
+        skills.assign(store, skill_id="amplify-verify", agent_id="cloud-operations",
+                      version=1, assigned_by="owner-a")
+
+        _, agent = call("GET", "/agents/cloud-operations")
+        assert [a["skillId"] for a in agent["skillAssignments"]] == ["amplify-verify"]
+
+    def test_a_room_thread_records_its_owner_and_starts_active(self, api_table):
+        status, room = call("POST", "/threads",
+                            {"kind": "room", "title": "Launch room",
+                             "agentIds": ["cloud-operations"]})
+        assert status == 201
+        assert room["createdBy"] == "owner-a"
+        assert room["status"] == "active"
+        assert room["kind"] == "room"
+
+    def test_global_approvals_route_lists_pending_across_runs(self, api_table):
+        from amazai import approvals
+        from amazai.policy import Capability
+        from amazai.store import Store
+
+        store = Store("owner-a", table=api_table)
+        run = {"pk": K.run_pk("run-1"), "runId": "run-1", "threadId": "th-1",
+              "agentId": "cloud-operations"}
+        approvals.request(store, run, action="aws.restart_service",
+                          arguments={"service": "web"}, why="rollout stuck",
+                          capability=Capability.DESTRUCTIVE)
+
+        status, body = call("GET", "/approvals")
+        assert status == 200
+        assert len(body["approvals"]) == 1
+        assert body["approvals"][0]["action"] == "aws.restart_service"
+        assert body["approvals"][0]["status"] == "pending"
+
+    def test_global_approvals_route_is_tenant_scoped(self, api_table):
+        from amazai import approvals
+        from amazai.policy import Capability
+        from amazai.store import Store
+
+        store = Store("owner-a", table=api_table)
+        run = {"pk": K.run_pk("run-1"), "runId": "run-1", "threadId": "th-1",
+              "agentId": "cloud-operations"}
+        approvals.request(store, run, action="aws.restart_service",
+                          arguments={}, why="x", capability=Capability.DESTRUCTIVE)
+
+        assert call("GET", "/approvals", sub="owner-b")[1]["approvals"] == []
+
+    def test_agent_to_agent_messages_are_excluded_from_plain_thread_messages(self, api_table):
+        """collab.send writes to the same thread pk a room lives on, but a
+        room's plaintext chat must never quietly include agent<->agent
+        traffic as if it were a bubble in the conversation with the owner."""
+        from amazai import collab
+        from amazai.store import Store
+
+        store = Store("owner-a", table=api_table)
+        store.put({"pk": K.agent_pk("eng"), "sk": "META", "entity": "Agent", "agentId": "eng"})
+        store.put({"pk": K.agent_pk("ops"), "sk": "META", "entity": "Agent", "agentId": "ops"})
+        call("POST", "/threads", {"kind": "room", "title": "Launch room",
+                                  "agentIds": ["eng", "ops"]})
+        threads = call("GET", "/threads")[1]["threads"]
+        room_id = next(t["threadId"] for t in threads if t["title"] == "Launch room")
+
+        collab.send(store, sender_agent_id="eng", recipient_agent_id="ops",
+                   args={"text": "handing you the alarm", "collaboration_context_id": room_id})
+
+        thread = call("GET", f"/threads/{room_id}")[1]
+        assert thread["messages"] == []
+
+        coord = call("GET", f"/threads/{room_id}/coordination")[1]["coordination"]
+        assert len(coord) == 1
+        assert coord[0]["kind"] == "message"
+        assert coord[0]["fromAgentId"] == "eng"
+        assert coord[0]["toAgentId"] == "ops"
+        assert coord[0]["priority"] == "Deferred — delivered on next turn"
+
+    def test_coordination_feed_includes_handoffs_for_the_threads_runs(self, api_table):
+        from amazai import keys as K2, runs
+        from amazai.store import Store
+
+        store = Store("owner-a", table=api_table)
+        call("POST", "/threads", {"kind": "room", "title": "Ops room", "agentIds": ["eng"]})
+        room_id = next(t["threadId"] for t in call("GET", "/threads")[1]["threads"]
+                      if t["title"] == "Ops room")
+        run = runs.create(store, agent_id="eng", thread_id=room_id, goal="investigate 5xx")
+        store.put({"pk": run["pk"], "sk": K2.handoff_sk("hoff-1"), "entity": "Handoff",
+                  "handoffId": "hoff-1", "fromAgentId": "eng", "toAgentId": "ops",
+                  "goal": "confirm the fix held", "status": "proposed"})
+
+        coord = call("GET", f"/threads/{room_id}/coordination")[1]["coordination"]
+        assert [c["kind"] for c in coord] == ["handoff"]
+        assert coord[0]["status"] == "proposed"
+        assert coord[0]["taskId"] == run["runId"]

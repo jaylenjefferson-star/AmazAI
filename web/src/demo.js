@@ -139,8 +139,17 @@ export const demoApi = {
 
   threads: async () => (await wait(120), { threads: THREADS }),
   thread: async (id) => (await wait(80), { threadId: id, messages: MESSAGES[id] || [] }),
-  createThread: async () => ({}),
+  createThread: async (t) => {
+    const threadId = `room-${Math.random().toString(36).slice(2, 8)}`;
+    const thread = { threadId, kind: t?.kind || 'room', title: t?.title || 'New room',
+                      agentIds: t?.agentIds || [], status: 'active', createdBy: 'you',
+                      lastActivity: new Date().toISOString() };
+    THREADS.push(thread);
+    MESSAGES[threadId] = [];
+    return thread;
+  },
   send: async () => (await wait(200), { runId: 'run-9a22' }),
+  coordination: async () => (await wait(80), { coordination: [] }),
   exec: async (_id, command) => (await wait(260), {
     stdout: command.startsWith('ls')
       ? 'dist/\nindex.html\nassets/\npackage.json'
@@ -148,9 +157,15 @@ export const demoApi = {
     stderr: '',
   }),
 
-  run: async () => ({}),
+  run: async () => (await wait(120), { state: 'completed', approvals: [] }),
   cancel: async () => ({}),
   decide: async () => (await wait(200), {}),
+  approvals: async () => (await wait(80), { approvals: [APPROVAL] }),
+
+  skills: async () => (await wait(80), { skills: [] }),
+  skillVersions: async () => (await wait(60), { versions: [] }),
+  assignSkill: async () => ({}),
+  unassignSkill: async () => ({}),
 
   usage: async (agentId) => ({
     agentId, month: iso().slice(0, 7),

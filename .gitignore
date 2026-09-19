@@ -6,3 +6,5 @@ cdk.out/
 node_modules/
 .DS_Store
 .env
+layer/python/*
+!layer/python/.gitkeep

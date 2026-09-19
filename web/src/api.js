@@ -49,11 +49,26 @@ const live = {
   createThread: (t) => call('POST', '/threads', t),
   send: (id, text) => call('POST', `/threads/${id}/messages`, { text }),
   exec: (id, command) => call('POST', `/threads/${id}/exec`, { command }),
+  // Read-only: agent<->agent handoffs and messages bound to this thread.
+  // Never a write path — sender/recipient are the only agents who may
+  // address one another here.
+  coordination: (id) => call('GET', `/threads/${id}/coordination`),
 
   run: (id) => call('GET', `/runs/${id}`),
   cancel: (id) => call('POST', `/runs/${id}/cancel`, {}),
   decide: (runId, apvId, approve, note) =>
     call('POST', `/approvals/${runId}/${apvId}`, { approve, note }),
+  // Every pending approval, across every run — what the Home inbox and
+  // Rooms need without polling each run individually.
+  approvals: (status = 'pending') =>
+    call('GET', `/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+
+  skills: () => call('GET', '/skills'),
+  skillVersions: (id) => call('GET', `/skills/${id}/versions`),
+  assignSkill: (skillId, agentId, version) =>
+    call('POST', `/skills/${skillId}/assignments`, { agentId, version }),
+  unassignSkill: (skillId, agentId) =>
+    call('DELETE', `/skills/${skillId}/assignments/${agentId}`),
 
   usage: (agentId, month) =>
     call('GET', `/usage?agentId=${encodeURIComponent(agentId)}${month ? `&month=${month}` : ''}`),

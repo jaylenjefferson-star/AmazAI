@@ -1,11 +1,10 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Companion, { STATES } from '../characters/Companion';
 import { ARCHETYPES } from '../characters/archetypes';
-import {
-  fixtureAgents, fixtureArtifacts, fixtureRooms, fixtureRoutines,
-} from '../fixtures';
+import { fixtureAgents, fixtureArtifacts, fixtureRoutines } from '../fixtures';
 import { useAgents } from '../hooks/useAgents';
+import { api } from '../api';
 import CreateAgent from '../components/CreateAgent';
 
 function Page({ title, sub, children, action }) {
@@ -58,25 +57,92 @@ export function Agents() {
   );
 }
 
+function timeAgo(iso) {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(ms / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
 export function Rooms() {
-  const rooms = fixtureRooms();
-  const byId = Object.fromEntries(fixtureAgents().map((a) => [a.agentId, a]));
+  const { agents } = useAgents();
+  const [rooms, setRooms] = useState([]);
+  const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [title, setTitle] = useState('');
+  const [picked, setPicked] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const navigate = useNavigate();
+  const byId = Object.fromEntries(agents.map((a) => [a.agentId, a]));
+
+  function reload() {
+    api.threads().then((r) => setRooms((r.threads || []).filter((t) => t.kind === 'room')))
+      .catch((e) => setError(e.message));
+  }
+  useEffect(reload, []);
+
+  async function createRoom(e) {
+    e.preventDefault();
+    if (!title.trim() || picked.length === 0) return;
+    setBusy(true);
+    try {
+      const room = await api.createThread({ kind: 'room', title: title.trim(), agentIds: picked });
+      navigate(`/rooms/${room.threadId}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <Page title="Rooms" sub="Several companions on one thread. Handoffs happen here.">
+    <Page title="Rooms" sub="Task-bound threads with several companions. Handoffs between them show as read-only activity, not chat you can steer here."
+          action={<button className="btn-link primary" onClick={() => setCreating((v) => !v)}>New room</button>}>
+      {creating && (
+        <form className="row-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }} onSubmit={createRoom}>
+          <input placeholder="What is this room for?" value={title}
+                 onChange={(e) => setTitle(e.target.value)} />
+          <div className="picker-grid">
+            {agents.map((a) => (
+              <label key={a.agentId} className={`pick-chip ${picked.includes(a.agentId) ? 'on' : ''}`}>
+                <input type="checkbox" checked={picked.includes(a.agentId)}
+                       onChange={(e) => setPicked((p) => (e.target.checked
+                         ? [...p, a.agentId] : p.filter((id) => id !== a.agentId)))} />
+                {a.name}
+              </label>
+            ))}
+          </div>
+          <button className="primary" disabled={busy || !title.trim() || picked.length === 0}>
+            Create room
+          </button>
+        </form>
+      )}
+      {error && <div className="empty"><strong>Rooms unavailable</strong><span>{error}</span></div>}
+      {!error && rooms.length === 0 && (
+        <div className="empty"><strong>No rooms yet</strong><span>Create one to coordinate several companions on the same task.</span></div>
+      )}
       <div className="row-list">
         {rooms.map((r) => (
-          <article key={r.id} className="row-card">
+          <Link key={r.threadId} to={`/rooms/${r.threadId}`} className="row-card">
             <div className="participants">
-              {r.members.map((m) => (
+              {(r.agentIds || []).map((m) => (
                 <Companion key={m} archetype={byId[m]?.archetype} color={byId[m]?.color}
-                           state={byId[m]?.state} size={30} name={byId[m]?.name} />
+                           state={byId[m]?.state || 'idle'} size={30} name={byId[m]?.name} />
               ))}
             </div>
             <div className="row-body">
-              <strong>{r.name}</strong>
-              <span>{r.last}</span>
+              <strong>{r.title}</strong>
+              <span>{(r.agentIds || []).map((m) => byId[m]?.name || m).join(', ')} · last activity {timeAgo(r.lastActivity)}</span>
             </div>
-          </article>
+            <span className={`state-chip cc-tone-${r.status === 'active' ? 'ok' : 'neutral'}`}>
+              <i className="cc-dot" aria-hidden="true" />
+              {r.status || 'active'}
+            </span>
+          </Link>
         ))}
       </div>
     </Page>
