@@ -22,6 +22,12 @@ def _clean(value: str) -> str:
 
 # --- entity keys ------------------------------------------------------------
 
+def user_pk(subject: str) -> str:
+    """Keyed on the Auth0 subject, which is the only identifier that cannot
+    be re-registered by someone else."""
+    return f"USER#{subject}"
+
+
 def agent_pk(agent_id: str) -> str:
     return f"AGENT#{agent_id}"
 
@@ -62,6 +68,16 @@ def approval_sk(approval_id: str) -> str:
 
 def handoff_sk(handoff_id: str) -> str:
     return f"HOFF#{handoff_id}"
+
+
+def usage_pk(year_month: str) -> str:
+    """One partition per month.
+
+    Deliberately not per-agent: the question the budget gate asks most often
+    is "what has this workspace spent this month", and a per-agent partition
+    would make that a fan-out over every agent on every model call.
+    """
+    return f"USAGE#{year_month}"
 
 
 def cost_pk(agent_id: str, year_month: str) -> str:

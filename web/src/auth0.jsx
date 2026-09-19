@@ -71,10 +71,15 @@ export function AmazAIAuthProvider({ children }) {
       // console has to survive a refresh on a phone.
       useRefreshTokens
       cacheLocation="localstorage"
-      onRedirectCallback={() => {
-        // Drop Auth0's ?code= and &state= without adding a history entry, so
-        // Back does not return to a spent authorization code.
-        window.history.replaceState({}, document.title, window.location.pathname);
+      onRedirectCallback={(appState) => {
+        // Return people to what they were opening, then drop Auth0's ?code=
+        // and &state= without adding a history entry — Back must not return
+        // to a spent authorization code.
+        const target = appState?.returnTo || window.location.pathname;
+        window.history.replaceState({}, document.title, target);
+        // The router reads location on mount; a popstate makes it re-read
+        // without a reload.
+        window.dispatchEvent(new PopStateEvent('popstate'));
       }}
     >
       {children}
@@ -83,3 +88,23 @@ export function AmazAIAuthProvider({ children }) {
 }
 
 export { useAuth0 };
+
+
+/**
+ * Start Universal Login.
+ *
+ * `screen_hint: 'signup'` asks Auth0 to open its own signup screen rather
+ * than AmazAI pretending to own a registration form. AmazAI never sees a
+ * password, and building a form that looks like it might is worse than not
+ * building one.
+ */
+export function startLogin(loginWithRedirect, { signup = false, returnTo } = {}) {
+  return loginWithRedirect({
+    appState: { returnTo: returnTo || window.location.pathname },
+    authorizationParams: signup ? { screen_hint: 'signup' } : {},
+  });
+}
+
+export function startLogout(logout) {
+  return logout({ logoutParams: { returnTo: window.location.origin } });
+}

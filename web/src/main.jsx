@@ -1,46 +1,106 @@
-import { StrictMode, useEffect, useState } from 'react';
+import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App';
-import Login from './components/Login';
-import { isSignedIn, configured } from './auth';
-import { DEMO } from './demo';
-import Logo from './components/Logo';
+import {
+  BrowserRouter, Navigate, Route, Routes, useLocation,
+} from 'react-router-dom';
+
 import './styles.css';
+import './characters/characters.css';
 
-function Root() {
-  const [state, setState] = useState('checking');
+import { AmazAIAuthProvider, configured, useAuth0 } from './auth0';
+import AuthGate from './components/AuthGate';
+import Shell from './app/Shell';
 
-  useEffect(() => {
-    if (DEMO) return setState('in');
-    isSignedIn().then((ok) => setState(ok ? 'in' : 'out'));
-  }, []);
+import Landing from './screens/Landing';
+import Onboarding, { hasOnboarded } from './screens/Onboarding';
+import Home from './screens/Home';
+import { Agents, Artifacts, Rooms, Routines } from './screens/Sections';
+import Settings from './screens/Settings';
+import Usage from './screens/Usage';
+import Gallery from './screens/Gallery';
 
-  // A console served with an unfilled .env would otherwise present a sign-in
-  // form that cannot succeed, and fail on submit rather than on sight.
-  if (!DEMO && !configured) {
-    return (
-      <div className="login">
-        <div className="empty" style={{ maxWidth: 440 }}>
-          <Logo size={40} title="AmazAI" />
-          <span className="title" style={{ marginTop: 6 }}>
-            This console is not wired up yet
-          </span>
-          <span>
-            It was built without the Cognito pool from the stack outputs, so
-            there is nothing to sign in to.
-          </span>
-          <code>cp web/.env.example web/.env</code>
-          <span>Fill it from <code>npx cdk deploy</code> outputs, then rebuild.</span>
-        </div>
-      </div>
-    );
+/**
+ * Routing.
+ *
+ * Three tiers, and the boundary between them is the point:
+ *
+ *   public    — the landing page, and the character gallery
+ *   gated     — everything behind AuthGate
+ *   first-run — gated, but redirected to onboarding until it is done
+ *
+ * The gallery is public on purpose: it is a design surface with no data on
+ * it, and needing to sign in to check whether an animation reads correctly
+ * would mean checking it less often.
+ */
+
+function Protected({ children }) {
+  return <AuthGate>{children}</AuthGate>;
+}
+
+/** Send a signed-in visitor who has never set up to onboarding first. */
+function FirstRunGuard({ children }) {
+  const location = useLocation();
+  if (!hasOnboarded() && location.pathname !== '/welcome') {
+    return <Navigate to="/welcome" replace />;
   }
+  return children;
+}
 
-  if (state === 'checking') return null;
-  if (state === 'out') return <Login onDone={() => setState('in')} />;
-  return <App />;
+function PublicOnly({ children }) {
+  const { isAuthenticated, isLoading } = useAuth0();
+  if (isLoading) return null;
+  if (isAuthenticated) return <Navigate to="/" replace />;
+  return children;
+}
+
+function Router() {
+  return (
+    <Routes>
+      {/* Public */}
+      <Route path="/welcome-to-amazai" element={<PublicOnly><Landing /></PublicOnly>} />
+      <Route path="/characters" element={<Gallery />} />
+
+      {/* First run */}
+      <Route path="/welcome" element={<Protected><Onboarding /></Protected>} />
+
+      {/* The application */}
+      <Route element={<Protected><FirstRunGuard><Shell /></FirstRunGuard></Protected>}>
+        <Route path="/" element={<Home />} />
+        <Route path="/agents" element={<Agents />} />
+        <Route path="/agents/new" element={<Agents />} />
+        <Route path="/rooms" element={<Rooms />} />
+        <Route path="/routines" element={<Routines />} />
+        <Route path="/artifacts" element={<Artifacts />} />
+        <Route path="/settings" element={<Settings />} />
+        <Route path="/usage" element={<Usage />} />
+      </Route>
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+
+/** Signed-out visitors land on the marketing page rather than a bare gate. */
+function Entry() {
+  const { isAuthenticated, isLoading } = useAuth0();
+  const location = useLocation();
+
+  if (!configured) return <Router />;
+  if (isLoading) return null;
+
+  const isPublicPath = location.pathname === '/characters'
+    || location.pathname === '/welcome-to-amazai';
+
+  if (!isAuthenticated && !isPublicPath) return <Landing />;
+  return <Router />;
 }
 
 createRoot(document.getElementById('root')).render(
-  <StrictMode><Root /></StrictMode>,
+  <StrictMode>
+    <BrowserRouter>
+      <AmazAIAuthProvider>
+        <Entry />
+      </AmazAIAuthProvider>
+    </BrowserRouter>
+  </StrictMode>,
 );
