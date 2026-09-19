@@ -27,7 +27,7 @@ new AmazaiStack(app, 'AmazaiStack', {
   // Lambda; this stack verifies the tokens the SPA obtains through PKCE.
   auth0Domain: process.env.AMAZAI_AUTH0_DOMAIN ?? 'dev-msijboy7a85k3chd.us.auth0.com',
   auth0Audience: process.env.AMAZAI_AUTH0_AUDIENCE ?? 'https://api.amazai.co',
-  pipedreamProjectId: process.env.PIPEDREAM_PROJECT_ID ?? 'proj_W7sA34l',
+  pipedreamProjectId: process.env.PIPEDREAM_PROJECT_ID ?? 'proj_lgsY62m',
   // Left at development unless the deploy says otherwise, so an unconfigured
   // stack cannot reach real connected accounts.
   pipedreamEnvironment: process.env.PIPEDREAM_ENVIRONMENT ?? 'development',
