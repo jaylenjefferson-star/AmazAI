@@ -1295,17 +1295,133 @@ button.lg { min-height: 46px; padding: 0 24px; font-size: 14.5px; }
 .landing-step h2 { margin: 0; font-size: 16px; letter-spacing: -.015em; }
 .landing-step p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.55; }
 
-.landing-foot {
-  margin-top: auto; padding: 20px;
-  display: flex; align-items: center; justify-content: center; gap: 10px;
-  border-top: 1px solid var(--hairline); color: var(--faint); font-size: 12px;
+.landing-nav-links { display: flex; gap: 18px; margin-left: 22px; }
+.landing-nav-links a {
+  color: var(--dim); font-size: 13.5px; text-decoration: none;
 }
+.landing-nav-links a:hover { color: var(--text); }
 
 @media (max-width: 620px) {
   .landing-hero { padding: 28px 18px 36px; }
   .landing-hero h1 { font-size: 27px; }
   .landing-cast { gap: 10px; }
   .landing-cta button { flex: 1 1 100%; }
+  .landing-nav-links { display: none; }
+}
+
+/* --------------------------------------------------------------- public */
+/* Shared chrome for logged-out marketing pages: About and the five legal
+   documents. Landing renders its own hero and nav, but shares this footer. */
+
+.public { min-height: 100%; display: flex; flex-direction: column; }
+.public-nav {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px; border-bottom: 1px solid var(--hairline);
+}
+.public-nav-brand { display: flex; text-decoration: none; }
+.public-nav-links { display: flex; gap: 18px; margin-left: 22px; }
+.public-nav-links a { color: var(--dim); font-size: 13.5px; text-decoration: none; }
+.public-nav-links a:hover { color: var(--text); }
+.public-main {
+  flex: 1; width: 100%; max-width: 720px; margin: 0 auto;
+  padding: 48px 20px 64px;
+}
+.public-main.wide { max-width: 880px; }
+
+.public-foot {
+  margin-top: auto; border-top: 1px solid var(--hairline);
+  padding: 36px 20px 20px;
+}
+.public-foot-top {
+  display: grid; gap: 28px; max-width: 980px; margin: 0 auto;
+  grid-template-columns: 1.4fr repeat(3, 1fr);
+}
+.public-foot-brand { display: flex; flex-direction: column; gap: 10px; max-width: 26ch; }
+.public-foot-brand p { margin: 0; color: var(--faint); font-size: 12.5px; line-height: 1.5; }
+.public-foot-col { display: flex; flex-direction: column; gap: 9px; }
+.public-foot-col h3 {
+  margin: 0 0 2px; font-size: 11px; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--faint); font-weight: 600;
+}
+.public-foot-col a { color: var(--dim); font-size: 13px; text-decoration: none; }
+.public-foot-col a:hover { color: var(--text); }
+.public-foot-bottom {
+  max-width: 980px; margin: 28px auto 0; padding-top: 16px;
+  border-top: 1px solid var(--hairline); color: var(--faint); font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .public-foot-top { grid-template-columns: 1fr 1fr; }
+  .public-nav-links { display: none; }
+}
+
+/* ---------------------------------------------------------------- about */
+
+.about-hero { text-align: center; margin-bottom: 40px; }
+.about-hero h1 {
+  margin: 0 0 14px; font-size: 30px; line-height: 1.2; letter-spacing: -.03em;
+}
+.about-hero p { margin: 0 auto; color: var(--dim); font-size: 15px; max-width: 58ch; }
+
+.about-grid {
+  display: grid; gap: 16px; margin-bottom: 44px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.about-card {
+  padding: 22px 20px; border: 1px solid var(--hairline);
+  border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--lift);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.about-card h2 { margin: 6px 0 0; font-size: 15.5px; letter-spacing: -.01em; }
+.about-card p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.55; }
+
+.about-contact {
+  padding: 22px 20px; border: 1px solid var(--hairline);
+  border-radius: var(--r-lg); background: var(--raised);
+}
+.about-contact h2 { margin: 0 0 10px; font-size: 15px; }
+.about-contact p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.9; }
+.about-contact a { color: var(--accent); text-decoration: none; }
+
+/* --------------------------------------------------------------- policy */
+
+.policy-meta { margin: 0 0 8px; color: var(--faint); font-size: 12.5px; }
+.policy h1 {
+  font-size: 26px; letter-spacing: -.03em; margin: 0 0 18px; line-height: 1.25;
+}
+.policy h2 {
+  font-size: 17px; letter-spacing: -.01em; margin: 32px 0 10px;
+  padding-top: 14px; border-top: 1px solid var(--hairline);
+}
+.policy h2:first-of-type { border-top: none; padding-top: 0; }
+.policy h3 { font-size: 14.5px; margin: 20px 0 8px; }
+.policy p { margin: 0 0 14px; color: var(--dim); font-size: 14px; line-height: 1.7; }
+.policy strong { color: var(--text); }
+.policy ul, .policy ol { margin: 0 0 14px; padding-left: 22px; color: var(--dim); }
+.policy li { margin-bottom: 6px; font-size: 14px; line-height: 1.65; }
+.policy a { color: var(--accent); text-decoration: none; }
+.policy a:hover { text-decoration: underline; }
+.policy code {
+  font-family: var(--mono); font-size: 12.5px; background: var(--raised);
+  border-radius: 4px; padding: 1px 5px;
+}
+.policy table {
+  width: 100%; border-collapse: collapse; margin: 0 0 18px; font-size: 13px;
+}
+.policy th, .policy td {
+  border: 1px solid var(--hairline); padding: 8px 10px; text-align: left;
+  color: var(--dim); vertical-align: top;
+}
+.policy th { color: var(--text); background: var(--raised); font-weight: 600; }
+.policy blockquote {
+  margin: 0 0 14px; padding: 10px 16px; border-left: 3px solid var(--accent-dim);
+  background: var(--raised); color: var(--dim); border-radius: 0 8px 8px 0;
+}
+
+@media (max-width: 620px) {
+  .public-main { padding: 32px 16px 48px; }
+  .about-hero h1 { font-size: 24px; }
+  .policy table, .policy table thead, .policy table tbody { display: block; overflow-x: auto; }
 }
 
 /* ------------------------------------------------------------ onboarding */
