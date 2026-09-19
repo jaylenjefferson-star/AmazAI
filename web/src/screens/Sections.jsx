@@ -27,7 +27,7 @@ export function Agents() {
           action={<Link className="btn-link primary" to="/agents/new">New companion</Link>}>
       <div className="row-list">
         {agents.map((a) => (
-          <article key={a.agentId} className="row-card">
+          <Link key={a.agentId} to={`/agents/${a.agentId}`} className="row-card">
             <Companion archetype={a.archetype} color={a.color} state={a.state}
                        size={46} name={a.name} />
             <div className="row-body">
@@ -38,7 +38,7 @@ export function Agents() {
               <i className="cc-dot" aria-hidden="true" />
               {STATES[a.state].label}
             </span>
-          </article>
+          </Link>
         ))}
       </div>
     </Page>

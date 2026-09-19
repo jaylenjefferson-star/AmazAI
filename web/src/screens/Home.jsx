@@ -44,7 +44,7 @@ export default function Home() {
               <strong>{item.title}</strong>
               <span>{item.detail}</span>
             </div>
-            <Link className="inbox-go" to="/agents">Review</Link>
+            <Link className="inbox-go" to="/agents/ops">Review</Link>
           </article>
         ))}
       </section>
@@ -53,7 +53,7 @@ export default function Home() {
         <h2 className="section-title">Your cast</h2>
         <div className="cast-grid">
           {agents.map((a) => (
-            <Link key={a.agentId} to="/agents" className="cast-card">
+            <Link key={a.agentId} to={`/agents/${a.agentId}`} className="cast-card">
               <Companion archetype={a.archetype} color={a.color} state={a.state}
                          size={54} name={a.name} showLabel />
               <strong>{a.name}</strong>

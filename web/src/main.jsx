@@ -16,6 +16,7 @@ import Onboarding, { hasOnboarded } from './screens/Onboarding';
 import Home from './screens/Home';
 import { Agents, Artifacts, Rooms, Routines } from './screens/Sections';
 import Settings from './screens/Settings';
+import Task from './screens/Task';
 import Usage from './screens/Usage';
 import Gallery from './screens/Gallery';
 
@@ -68,6 +69,7 @@ function Router() {
         <Route path="/" element={<Home />} />
         <Route path="/agents" element={<Agents />} />
         <Route path="/agents/new" element={<Agents />} />
+        <Route path="/agents/:agentId" element={<Task />} />
         <Route path="/rooms" element={<Rooms />} />
         <Route path="/routines" element={<Routines />} />
         <Route path="/artifacts" element={<Artifacts />} />

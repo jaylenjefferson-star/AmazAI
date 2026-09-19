@@ -1343,3 +1343,26 @@ button.lg { min-height: 46px; padding: 0 24px; font-size: 14.5px; }
   .onboard-card { width: 100%; border: none; border-radius: 0; box-shadow: none; min-height: 100%; }
   .onboard-foot button { flex: 1; }
 }
+
+/* ----------------------------------------------------------------- task */
+
+.task { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.task-head {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 16px; border-bottom: 1px solid var(--hairline);
+  flex: 0 0 auto;
+}
+.task-back {
+  font-size: 22px; line-height: 1; color: var(--dim); text-decoration: none;
+  width: 30px; height: 30px; display: grid; place-items: center;
+  border-radius: var(--r-sm); flex: 0 0 auto;
+}
+.task-back:hover { background: var(--hover); color: var(--text); }
+.task-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.task-who strong { font-size: 14.5px; }
+.task-who span { font-size: 12px; color: var(--dim); }
+.task .timeline { flex: 1; min-height: 0; }
+a.row-card { text-decoration: none; color: inherit; }
+a.row-card:hover { border-color: var(--btn-line); }
+
+@media (min-width: 900px) { .task-back { display: none; } }

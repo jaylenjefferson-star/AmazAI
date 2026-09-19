@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
-import AgentAvatar from './AgentAvatar';
+import Companion from '../characters/Companion';
+import { ARCHETYPES, ARCHETYPE_KEYS } from '../characters/archetypes';
 
 /**
  * Create a bot.
@@ -24,7 +25,7 @@ export default function CreateAgent({ onClose, onCreated }) {
   const [role, setRole] = useState('');
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
-  const [shape, setShape] = useState('circle');
+  const [shape, setShape] = useState('pebble');
   const [color, setColor] = useState('#2f6fe4');
   const [tier, setTier] = useState('balanced');
   const [style, setStyle] = useState('collaborative');
@@ -128,24 +129,29 @@ export default function CreateAgent({ onClose, onCreated }) {
           <form onSubmit={submit}>
             <div className="modal-body">
               <div className="avatar-stage">
-                <AgentAvatar shape={shape} color={color} size={96}
-                             name={name || 'your agent'} />
+                <Companion archetype={shape} color={color} state="idle" size={96}
+                           name={name || 'your companion'} />
               </div>
 
               <input className="big" placeholder="Name your agent" value={name}
                      ref={nameRef} maxLength={60}
                      onChange={(e) => setName(e.target.value)} />
 
-              <div className="picker" role="radiogroup" aria-label="Shape">
-                {options.shapes.map((s) => (
-                  <button key={s} type="button" role="radio" aria-checked={shape === s}
-                          aria-label={s} title={s}
-                          className={`swatch ${shape === s ? 'on' : ''}`}
-                          onClick={() => setShape(s)}>
-                    <AgentAvatar shape={s} color={color} size={26} title={s} />
+              {/* Archetypes, not abstract shapes: the picker should show the
+                  thing you will actually recognise in a list. */}
+              <div className="picker" role="radiogroup" aria-label="Character">
+                {ARCHETYPE_KEYS.map((k) => (
+                  <button key={k} type="button" role="radio" aria-checked={shape === k}
+                          aria-label={ARCHETYPES[k].name} title={ARCHETYPES[k].name}
+                          className={`swatch lg ${shape === k ? 'on' : ''}`}
+                          onClick={() => setShape(k)}>
+                    <Companion archetype={k} color={color} state="idle" size={34} />
                   </button>
                 ))}
               </div>
+              <p className="hint-text" style={{ textAlign: 'center', marginTop: 0 }}>
+                {ARCHETYPES[shape].name} — {ARCHETYPES[shape].blurb}
+              </p>
 
               <div className="picker" role="radiogroup" aria-label="Colour">
                 {options.colors.map((c) => (
