@@ -17,7 +17,7 @@ import traceback
 
 import boto3
 
-from amazai import agentcore, agents as A, approvals, keys as K, runs
+from amazai import agentcore, agents as A, approvals, keys as K, models, runs
 from amazai.policy import Capability
 from amazai.states import RunState
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso
@@ -142,6 +142,35 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     if path == "/agents" and method == "POST":
         return _create_agent(store, body, event)
+
+    if path == "/agents/options" and method == "GET":
+        # The vocabulary the Create-a-Bot form offers, served from the same
+        # constants the validator enforces. A second copy in the console would
+        # drift, and the first sign of the drift would be a form that offers a
+        # colour the API refuses.
+        return _resp(200, {
+            "shapes": list(A.AVATAR_SHAPES),
+            "colors": list(A.AVATAR_COLORS),
+            "workingStyles": list(A.WORKING_STYLES),
+            "modelTiers": [
+                {"key": tier, "ladder": ladder,
+                 "maxTokens": models.TIER_MAX_TOKENS[tier],
+                 "effort": models.TIER_EFFORT[tier]}
+                for tier, ladder in models.TIERS.items()
+            ],
+            "defaultModelTier": models.DEFAULT_TIER,
+            "limits": {
+                "maxAgents": int(os.environ.get("MAX_AGENTS", A.DEFAULT_MAX_AGENTS)),
+                "maxConcurrentRuns": A.MAX_CONCURRENT_RUNS_CEILING,
+                "maxMonthlyUsd": A.MAX_MONTHLY_USD_CEILING,
+            },
+            "connectors": [
+                {"connectorId": c.connector_id,
+                 "capability": c.capability.value,
+                 "allowedTools": sorted(c.allowed_tools)}
+                for c in _org_connectors(store).values()
+            ],
+        })
 
     if (p := _match(path, "/agents/{id}")) and method == "GET":
         agent = store.get(K.agent_pk(p[0]), "META")

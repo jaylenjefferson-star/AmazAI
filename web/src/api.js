@@ -3,11 +3,13 @@ import { DEMO, demoApi } from './demo';
 
 const BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, '') ?? '';
 
-async function call(method, path, body) {
+async function call(method, path, body, extraHeaders) {
   const token = await idToken();
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: { authorization: token, 'content-type': 'application/json' },
+    headers: {
+      authorization: token, 'content-type': 'application/json', ...extraHeaders,
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 204) return null;
@@ -22,6 +24,12 @@ async function call(method, path, body) {
 
 const live = {
   agents: () => call('GET', '/agents'),
+  agentOptions: () => call('GET', '/agents/options'),
+  // The key travels with the request so a retry after a timeout resolves to
+  // the agent the first attempt created, rather than a second one.
+  createAgent: (agent, idempotencyKey) =>
+    call('POST', '/agents', agent, { 'idempotency-key': idempotencyKey }),
+  archiveAgent: (id) => call('DELETE', `/agents/${id}`),
   agent: (id) => call('GET', `/agents/${id}`),
   updateAgent: (id, changes) => call('PATCH', `/agents/${id}`, changes),
   addMemory: (id, entry) => call('POST', `/agents/${id}/memory`, entry),

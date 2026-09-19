@@ -135,6 +135,45 @@ class TestCreate:
         assert call("GET", "/agents")[1]["agents"] == []
 
 
+class TestOptions:
+    """The Create-a-Bot form is built from this response, so a drift between
+    it and the validator shows up as a form offering something the API
+    refuses."""
+
+    def test_every_offered_shape_and_colour_is_actually_accepted(self, api_table):
+        _, options = call("GET", "/agents/options")
+
+        for shape in options["shapes"]:
+            body = dict(NEW_AGENT, name=f"Agent {shape}",
+                        avatar={"shape": shape, "color": options["colors"][0]})
+            assert call("POST", "/agents", body)[0] == 201, shape
+
+    def test_every_offered_tier_is_accepted(self, api_table):
+        _, options = call("GET", "/agents/options")
+
+        for tier in [t["key"] for t in options["modelTiers"]]:
+            body = dict(NEW_AGENT, name=f"Agent {tier}", modelTier=tier)
+            assert call("POST", "/agents", body)[0] == 201, tier
+
+    def test_every_offered_working_style_is_accepted(self, api_table):
+        _, options = call("GET", "/agents/options")
+
+        for style in options["workingStyles"]:
+            body = dict(NEW_AGENT, name=f"Agent {style}", workingStyle=style)
+            assert call("POST", "/agents", body)[0] == 201, style
+
+    def test_a_fresh_organization_offers_no_connectors(self, api_table):
+        """Nothing installed means nothing grantable, which is why the form
+        shows an explanation rather than an empty list."""
+        _, options = call("GET", "/agents/options")
+        assert options["connectors"] == []
+
+    def test_options_is_not_mistaken_for_an_agent_id(self, api_table):
+        """`/agents/options` has to be matched before `/agents/{id}`, or it
+        resolves to a 404 for an agent named "options"."""
+        assert call("GET", "/agents/options")[0] == 200
+
+
 class TestUpdateAndArchive:
     def test_archiving_hides_the_agent_without_deleting_it(self, api_table):
         call("POST", "/agents", NEW_AGENT)

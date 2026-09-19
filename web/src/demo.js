@@ -90,8 +90,48 @@ const APPROVAL = {
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/* The vocabulary the real API serves from services/amazai/agents.py. Kept
+   here only so the form can be driven without a deployed control plane; the
+   shipped console reads it from GET /agents/options. */
+const OPTIONS = {
+  shapes: ['circle', 'squircle', 'square', 'pill', 'triangle', 'hex', 'cloud', 'drop'],
+  colors: ['#e5484d', '#e8833a', '#f0a93b', '#3dc98a', '#12a594',
+           '#2f6fe4', '#8b5cf6', '#e93d82', '#8b6c4e', '#8a909c'],
+  workingStyles: ['autonomous', 'collaborative', 'advisory'],
+  modelTiers: [
+    { key: 'frontier', ladder: ['claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5'],
+      maxTokens: 32000, effort: 'high' },
+    { key: 'balanced', ladder: ['claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5'],
+      maxTokens: 16000, effort: 'medium' },
+    { key: 'fast', ladder: ['claude-haiku-4-5', 'claude-sonnet-5'],
+      maxTokens: 8000, effort: 'low' },
+  ],
+  defaultModelTier: 'balanced',
+  limits: { maxAgents: 25, maxConcurrentRuns: 8, maxMonthlyUsd: 500 },
+  // Empty, exactly as a fresh organization is: no connector installed means
+  // no grant is offerable, which is the state the safe default comes from.
+  connectors: [],
+};
+
 export const demoApi = {
   agents: async () => (await wait(120), { agents: AGENTS }),
+  agentOptions: async () => (await wait(90), OPTIONS),
+  createAgent: async (agent) => {
+    await wait(400);
+    const agentId = agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const created = {
+      ...agent, agentId, status: 'active', state: 'active',
+      accent: agent.avatar.color,
+      workspace: { mode: 'ephemeral', sessionBytes: 0 },
+      grants: [], memory: [],
+    };
+    AGENTS.push(created);
+    THREADS.push({ threadId: `dm-${agentId}`, title: agent.name,
+                   kind: 'dm', agentIds: [agentId] });
+    MESSAGES[`dm-${agentId}`] = [];
+    return created;
+  },
+  archiveAgent: async () => ({}),
   agent: async (id) => (await wait(80), AGENTS.find((a) => a.agentId === id) || AGENTS[0]),
   updateAgent: async () => ({}),
   addMemory: async () => ({}),

@@ -12,16 +12,31 @@
  * receiving agent runs under its own grants and its own budget. Saying so on
  * the card means nobody has to remember it.
  */
+import AgentAvatar from './AgentAvatar';
+
 export default function Handoff({ handoff, agents = [] }) {
-  const name = (id) => agents.find((a) => a.agentId === id)?.name || id;
+  const of = (id) => agents.find((a) => a.agentId === id);
+  const name = (id) => of(id)?.name || id;
   const constraints = handoff.constraints || [];
 
   return (
     <div className="handoff enter">
       <div className="handoff-head">
-        <span className="who-chip">{name(handoff.fromAgentId)}</span>
+        <span className="who-chip">
+          <AgentAvatar shape={of(handoff.fromAgentId)?.avatar?.shape}
+                       color={of(handoff.fromAgentId)?.avatar?.color
+                              || of(handoff.fromAgentId)?.accent}
+                       size={16} name={name(handoff.fromAgentId)} />
+          {name(handoff.fromAgentId)}
+        </span>
         <span className="arrow" aria-hidden="true">→</span>
-        <span className="who-chip to">{name(handoff.toAgentId)}</span>
+        <span className="who-chip to">
+          <AgentAvatar shape={of(handoff.toAgentId)?.avatar?.shape}
+                       color={of(handoff.toAgentId)?.avatar?.color
+                              || of(handoff.toAgentId)?.accent}
+                       size={16} name={name(handoff.toAgentId)} />
+          {name(handoff.toAgentId)}
+        </span>
         <span className="status">{handoff.status || 'proposed'}</span>
       </div>
 

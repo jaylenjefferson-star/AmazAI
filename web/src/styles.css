@@ -745,3 +745,138 @@ input:focus, textarea:focus {
 @media (max-width: 760px) {
   .handoff, .collab { margin-left: 0; }
 }
+
+/* ---------------------------------------------------------------- avatars */
+
+.avatar { flex: 0 0 auto; display: block; }
+
+.section-label .add {
+  margin-left: auto; width: 20px; height: 20px; padding: 0;
+  display: grid; place-items: center; font-size: 15px; line-height: 1;
+}
+.section-label .add + .count { margin-left: 0; }
+
+/* ----------------------------------------------------------------- modal */
+
+.modal-scrim {
+  position: fixed; inset: 0; z-index: 60;
+  background: var(--scrim);
+  display: grid; place-items: center;
+  padding: 24px 16px;
+  animation: enter .14s ease-out both;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--pop);
+  width: 460px; max-width: 100%;
+  max-height: 100%;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+.modal-head h2 { margin: 0; font-size: 15px; font-weight: 620; }
+.modal-head .ghost { width: 28px; height: 28px; padding: 0; }
+
+.modal form { display: contents; }
+.modal-body { overflow-y: auto; padding: 18px 20px 6px; }
+
+.modal-foot {
+  display: flex; justify-content: flex-end; gap: 9px;
+  padding: 13px 20px; border-top: 1px solid var(--hairline);
+  background: var(--panel);
+}
+
+.avatar-stage {
+  display: grid; place-items: center;
+  padding: 10px 0 18px;
+}
+
+.modal input.big {
+  font-size: 17px; text-align: center; padding: 11px;
+  border-radius: var(--r);
+}
+
+/* The two pickers are the part people actually play with, so they get room. */
+.picker {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  justify-content: center; margin: 14px 0;
+}
+.swatch {
+  width: 40px; height: 40px; padding: 0;
+  display: grid; place-items: center;
+  background: none; border: 1.5px solid transparent; border-radius: var(--r);
+}
+.swatch:hover { background: var(--hover); }
+.swatch.on { border-color: var(--accent); background: var(--accent-wash); }
+
+.dot-swatch {
+  width: 26px; height: 26px; padding: 0; border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px var(--line) inset;
+}
+.dot-swatch.on { border-color: var(--text); }
+.dot-swatch:hover { transform: scale(1.08); }
+
+.field { display: block; margin: 16px 0; }
+.field > span {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 12px; font-weight: 560; color: var(--dim); margin-bottom: 6px;
+}
+.field > span em { font-style: normal; color: var(--faint); font-weight: 400; }
+
+.hint-text { margin: 7px 0 0; font-size: 11.5px; color: var(--faint); line-height: 1.5; }
+
+/* Segmented control: three or four mutually exclusive words. A <select>
+   would hide the alternatives, which are the interesting part. */
+.seg { display: flex; gap: 0; border: 1px solid var(--btn-line); border-radius: var(--r-sm); overflow: hidden; }
+.seg button {
+  flex: 1; border: none; border-radius: 0; background: var(--btn);
+  padding: 8px 6px; font-size: 12.5px; color: var(--dim);
+  border-left: 1px solid var(--btn-line);
+}
+.seg button:first-child { border-left: none; }
+.seg button.on { background: var(--accent); color: var(--accent-ink); font-weight: 560; }
+.seg button.on:hover { filter: brightness(1.06); }
+
+.checks { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.check { display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; }
+.check input { width: auto; }
+
+.budget-row { display: flex; gap: 12px; }
+.budget-row label { flex: 1; display: block; }
+.budget-row em {
+  font-style: normal; font-size: 11px; color: var(--faint);
+  display: block; margin-bottom: 4px;
+}
+
+.connector {
+  border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  padding: 10px 11px; margin-bottom: 8px;
+}
+.connector-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 7px; }
+.connector-head strong { font-size: 13px; }
+.connector-head .cap {
+  font: 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .07em;
+  color: var(--dim); border: 1px solid var(--line);
+  border-radius: 4px; padding: 3px 5px;
+}
+
+.who-chip { display: inline-flex; align-items: center; gap: 6px; }
+
+@media (max-width: 760px) {
+  .modal-scrim { padding: 0; place-items: stretch; }
+  .modal { width: 100%; max-width: none; border-radius: 0; border: none; }
+  .modal-body { padding: 16px 16px 6px; }
+  .seg button { padding: 12px 6px; }
+  .swatch { width: 44px; height: 44px; }
+  .dot-swatch { width: 32px; height: 32px; }
+  .modal-foot button { min-height: 44px; flex: 1; }
+}

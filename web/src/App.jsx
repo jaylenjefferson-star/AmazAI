@@ -6,6 +6,7 @@ import Topbar from './components/Topbar';
 import Sidebar from './components/Sidebar';
 import Timeline from './components/Timeline';
 import RightPanel from './components/RightPanel';
+import CreateAgent from './components/CreateAgent';
 
 const REGION = import.meta.env.VITE_REGION || 'us-west-2';
 
@@ -24,6 +25,7 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [runCost, setRunCost] = useState(0);
   const [spend, setSpend] = useState(0);
+  const [creating, setCreating] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const threadIdRef = useRef(null);
@@ -217,6 +219,7 @@ export default function App() {
           const run = activeRuns.find((r) => r.runId === a.runId);
           if (run) setThreadId(run.threadId);
         }}
+        onCreate={() => { setCreating(true); setNavOpen(false); }}
         open={navOpen} onClose={() => setNavOpen(false)}
       />
 
@@ -261,6 +264,26 @@ export default function App() {
           </div>
         </form>
       </main>
+
+      {creating && (
+        <CreateAgent
+          onClose={() => setCreating(false)}
+          onCreated={async (agent) => {
+            setCreating(false);
+            // Re-read rather than splice the response in: the server decides
+            // the final id and status, and a created agent brings a thread
+            // with it.
+            try {
+              const [a, t] = await Promise.all([api.agents(), api.threads()]);
+              setAgents(a.agents || []);
+              setThreads(t.threads || []);
+              const dm = (t.threads || []).find(
+                (x) => (x.agentIds || []).includes(agent.agentId));
+              if (dm) setThreadId(dm.threadId);
+            } catch (e) { setError(e.message); }
+          }}
+        />
+      )}
 
       {(navOpen || panelOpen) && (
         <div className="scrim" onClick={() => { setNavOpen(false); setPanelOpen(false); }} />

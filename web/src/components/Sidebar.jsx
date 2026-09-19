@@ -1,3 +1,5 @@
+import AgentAvatar from './AgentAvatar';
+
 const STATE = {
   running:  { color: 'var(--accent)', label: 'running' },
   waiting:  { color: 'var(--warn)',   label: 'needs you' },
@@ -12,7 +14,7 @@ function elapsed(startedAt) {
 
 export default function Sidebar({
   agents, threads, activeRuns, pending, selected, onSelect, onJumpToApproval,
-  open, onClose,
+  onCreate, open, onClose,
 }) {
   const agentState = (agent) => {
     if (agent.state !== 'active') return 'disabled';
@@ -37,13 +39,15 @@ export default function Sidebar({
 
       <div className="section-label">
         Agents <span className="count">{agents.length || ''}</span>
+        <button className="ghost sm add" onClick={onCreate}
+                title="New agent" aria-label="New agent">+</button>
       </div>
 
       {agents.length === 0 && (
         <div className="empty" style={{ padding: '16px 8px' }}>
           <span className="title">No agents yet</span>
-          <span>Seats are created once, after the stack deploys.</span>
-          <code>python3 scripts/provision_agents.py</code>
+          <span>Make the first one.</span>
+          <button className="primary sm" onClick={onCreate}>New agent</button>
         </div>
       )}
 
@@ -56,9 +60,11 @@ export default function Sidebar({
                   className={`row ${selected === thread?.threadId ? 'active' : ''}`}
                   title={`${a.name} — ${STATE[state].label}`}
                   onClick={() => { if (thread) { onSelect(thread.threadId); onClose?.(); } }}>
+            <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color || a.accent}
+                         size={18} name={a.name} />
+            <span className="name">{a.name}</span>
             <span className={`dot ${state === 'running' ? 'pulse' : ''}`}
                   style={{ background: STATE[state].color, color: STATE[state].color }} />
-            <span className="name">{a.name}</span>
             {run && <span className="meta">{elapsed(run.startedAt)}</span>}
             {state === 'waiting' && <span className="meta" style={{ color: 'var(--warn)' }}>⚠</span>}
           </button>
