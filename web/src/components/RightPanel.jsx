@@ -191,12 +191,13 @@ function Access({ agent }) {
 
 const TABS = ['Computer', 'Memory', 'Access', 'Usage'];
 
-export default function RightPanel({ threadId, agent, onRefreshAgent }) {
+export default function RightPanel({ threadId, agent, onRefreshAgent, open }) {
   const [tab, setTab] = useState('Computer');
-  if (!agent) return <aside className="rightpanel" />;
+  const cls = `rightpanel ${open ? 'open' : ''}`;
+  if (!agent) return <aside className={cls} />;
 
   return (
-    <aside className="rightpanel">
+    <aside className={cls}>
       <div className="tabs">
         {TABS.map((t) => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>{t}</button>

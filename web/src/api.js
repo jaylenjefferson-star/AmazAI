@@ -1,4 +1,5 @@
 import { idToken } from './auth';
+import { DEMO, demoApi } from './demo';
 
 const BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, '') ?? '';
 
@@ -19,7 +20,7 @@ async function call(method, path, body) {
   return data;
 }
 
-export const api = {
+const live = {
   agents: () => call('GET', '/agents'),
   agent: (id) => call('GET', `/agents/${id}`),
   updateAgent: (id, changes) => call('PATCH', `/agents/${id}`, changes),
@@ -40,3 +41,7 @@ export const api = {
   usage: (agentId, month) =>
     call('GET', `/usage?agentId=${encodeURIComponent(agentId)}${month ? `&month=${month}` : ''}`),
 };
+
+// In demo mode the console runs against fixtures instead of the control
+// plane. `import.meta.env.DEV` inside demo.js keeps this out of a prod build.
+export const api = DEMO ? demoApi : live;

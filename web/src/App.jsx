@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { connect } from './ws';
 import { signOut } from './auth';
+import Topbar from './components/Topbar';
 import Sidebar from './components/Sidebar';
 import Timeline from './components/Timeline';
 import RightPanel from './components/RightPanel';
+
+const REGION = import.meta.env.VITE_REGION || 'us-west-2';
 
 export default function App() {
   const [agents, setAgents] = useState([]);
@@ -20,9 +23,15 @@ export default function App() {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [runCost, setRunCost] = useState(0);
+  const [spend, setSpend] = useState(0);
+  const [navOpen, setNavOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const threadIdRef = useRef(null);
+  const agentsRef = useRef([]);
+  const streamRef = useRef(null);
 
   threadIdRef.current = threadId;
+  agentsRef.current = agents;
 
   // --- initial load ------------------------------------------------------
   useEffect(() => {
@@ -35,6 +44,27 @@ export default function App() {
       } catch (e) { setError(e.message); }
     })();
   }, []);
+
+  // Month-to-date spend is the sum of the per-agent ledgers; there is no
+  // account-wide rollup endpoint and inventing one would put a second source
+  // of truth next to the ledger. Refreshed whenever a run ends.
+  const loadSpend = useCallback(async () => {
+    const list = agentsRef.current;
+    if (!list.length) return;
+    try {
+      const rows = await Promise.all(
+        list.map((a) => api.usage(a.agentId).catch(() => null)),
+      );
+      setSpend(rows.reduce((sum, r) => sum + (r?.totalUsd || 0), 0));
+    } catch { /* the ledger is informational here; never block the console */ }
+  }, []);
+
+  useEffect(() => { loadSpend(); }, [agents, loadSpend]);
+
+  const budget = useMemo(
+    () => agents.reduce((sum, a) => sum + (a.budget?.perMonthUsd || 0), 0),
+    [agents],
+  );
 
   const currentThread = useMemo(
     () => threads.find((t) => t.threadId === threadId),
@@ -59,11 +89,32 @@ export default function App() {
       setItems((t.messages || []).map((m) => ({
         type: 'message', role: m.role, author: m.author, text: m.text,
       })));
+      streamRef.current = null;
       setStreaming(null);
     } catch (e) { setError(e.message); }
   }, []);
 
   useEffect(() => { loadThread(threadId); }, [threadId, loadThread]);
+
+  /**
+   * Commit whatever is mid-stream, then append `extra`.
+   *
+   * A tool call or an approval that arrives while the model is still talking
+   * has to land *after* the prose leading up to it. Streaming text is not an
+   * item until it is flushed, so appending straight to `items` would file the
+   * approval above the sentence explaining why it was asked for.
+   */
+  const flush = useCallback((extra) => {
+    const s = streamRef.current;
+    streamRef.current = null;
+    setStreaming(null);
+    setItems((i) => {
+      const base = s?.text
+        ? [...i, { type: 'message', role: 'assistant', author: s.author, text: s.text }]
+        : i;
+      return extra ? [...base, extra] : base;
+    });
+  }, []);
 
   // --- live socket -------------------------------------------------------
   useEffect(() => {
@@ -77,26 +128,33 @@ export default function App() {
       }
 
       switch (ev.type) {
-        case 'delta':
-          setStreaming((s) => ({ author: s?.author, text: (s?.text || '') + ev.text }));
+        case 'delta': {
+          const next = {
+            author: streamRef.current?.author || ev.author,
+            text: (streamRef.current?.text || '') + ev.text,
+          };
+          streamRef.current = next;
+          setStreaming(next);
           break;
+        }
         case 'tool':
-          setItems((i) => [...i, { type: 'tool', name: ev.name, summary: ev.summary }]);
+          flush({ type: 'tool', name: ev.name, summary: ev.summary });
+          break;
+        case 'handoff':
+          flush({ type: 'handoff', handoff: ev.handoff });
           break;
         case 'approval.requested':
           setApprovals((a) => [...a, ev.approval]);
-          setItems((i) => [...i, { type: 'approval', approval: ev.approval }]);
+          flush({ type: 'approval', approval: ev.approval });
           break;
         case 'run.state':
           setRunCost(ev.costUsd || 0);
           break;
         case 'run.end':
-          setStreaming((s) => {
-            if (s?.text) setItems((i) => [...i, { type: 'message', role: 'assistant', text: s.text }]);
-            return null;
-          });
+          flush();
           setRunCost(ev.costUsd || 0);
           setActiveRuns((r) => r.filter((x) => x.runId !== ev.runId));
+          loadSpend();
           break;
         case 'notification':
           setError(ev.message);
@@ -107,7 +165,7 @@ export default function App() {
     }, setWsStatus);
 
     return () => sock.close();
-  }, []);
+  }, [loadSpend, flush]);
 
   // --- actions -----------------------------------------------------------
   async function send(e) {
@@ -145,6 +203,13 @@ export default function App() {
 
   return (
     <div className="app">
+      <Topbar
+        region={REGION} spend={spend} budget={budget} wsStatus={wsStatus}
+        onSignOut={signOut}
+        onToggleSidebar={() => setNavOpen((o) => !o)}
+        onTogglePanel={() => setPanelOpen((o) => !o)}
+      />
+
       <Sidebar
         agents={agents} threads={threads} activeRuns={activeRuns}
         pending={pending} selected={threadId} onSelect={setThreadId}
@@ -152,29 +217,31 @@ export default function App() {
           const run = activeRuns.find((r) => r.runId === a.runId);
           if (run) setThreadId(run.threadId);
         }}
-        wsStatus={wsStatus}
+        open={navOpen} onClose={() => setNavOpen(false)}
       />
 
       <main className="main">
         <div className="threadbar">
           <h2>{currentThread?.title || 'AmazAI'}</h2>
-          <span className="meta">
-            {running ? '● running' : '○ idle'}
-            {runCost > 0 ? ` · $${runCost.toFixed(3)}` : ''}
+          <span className={`state-pill ${running ? 'running' : ''}`}>
+            <span className={`dot ${running ? 'pulse' : ''}`}
+                  style={{ background: running ? 'var(--accent)' : 'var(--faint)',
+                           color: 'var(--accent)' }} />
+            {running ? 'running' : 'idle'}
           </span>
+          {runCost > 0 && <span className="meta">${runCost.toFixed(3)} this run</span>}
           <span style={{ flex: 1 }} />
-          {running && <button onClick={cancel}>Cancel</button>}
-          <button onClick={signOut}>Sign out</button>
+          {running && <button className="sm" onClick={cancel}>Cancel run</button>}
         </div>
 
         {error && (
           <div className="err" style={{ margin: '12px 20px 0' }}>
-            {error} <button style={{ marginLeft: 8, padding: '1px 6px' }}
-                            onClick={() => setError('')}>dismiss</button>
+            <span className="msg-text">{error}</span>
+            <button className="ghost sm" onClick={() => setError('')}>Dismiss</button>
           </div>
         )}
 
-        <Timeline items={items} streaming={streaming}
+        <Timeline items={items} streaming={streaming} agents={agents}
                   approvals={approvals} onDecide={decide} />
 
         <form className="composer" onSubmit={send}>
@@ -186,13 +253,21 @@ export default function App() {
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
             }}
           />
-          <button className="primary" disabled={!draft.trim() || !threadId || sending}>
-            {sending ? '…' : 'Send'}
-          </button>
+          <div className="send">
+            <button className="primary" disabled={!draft.trim() || !threadId || sending}>
+              {sending ? '…' : 'Send'}
+            </button>
+            <span className="hint">⏎ send</span>
+          </div>
         </form>
       </main>
 
-      <RightPanel threadId={threadId} agent={agentDetail} onRefreshAgent={loadAgent} />
+      {(navOpen || panelOpen) && (
+        <div className="scrim" onClick={() => { setNavOpen(false); setPanelOpen(false); }} />
+      )}
+
+      <RightPanel threadId={threadId} agent={agentDetail} onRefreshAgent={loadAgent}
+                  open={panelOpen} />
     </div>
   );
 }

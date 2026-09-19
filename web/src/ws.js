@@ -1,4 +1,5 @@
 import { idToken } from './auth';
+import { DEMO, demoConnect } from './demo';
 
 const URL = import.meta.env.VITE_WS_URL;
 
@@ -8,6 +9,8 @@ const URL = import.meta.env.VITE_WS_URL;
  * console updates itself without polling.
  */
 export function connect(onEvent, onStatus) {
+  if (DEMO) return demoConnect(onEvent, onStatus);
+
   let socket = null;
   let attempt = 0;
   let closed = false;

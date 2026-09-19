@@ -1,8 +1,8 @@
-const STATE_COLOR = {
-  running: 'var(--accent)',
-  waiting: 'var(--warn)',
-  idle: 'var(--dim)',
-  disabled: '#4a5260',
+const STATE = {
+  running:  { color: 'var(--accent)', label: 'running' },
+  waiting:  { color: 'var(--warn)',   label: 'needs you' },
+  idle:     { color: 'var(--faint)',  label: 'idle' },
+  disabled: { color: '#3c434f',       label: 'disabled' },
 };
 
 function elapsed(startedAt) {
@@ -12,7 +12,7 @@ function elapsed(startedAt) {
 
 export default function Sidebar({
   agents, threads, activeRuns, pending, selected, onSelect, onJumpToApproval,
-  wsStatus,
+  open, onClose,
 }) {
   const agentState = (agent) => {
     if (agent.state !== 'active') return 'disabled';
@@ -21,58 +21,64 @@ export default function Sidebar({
     return 'idle';
   };
 
+  const tasks = threads.filter((t) => t.kind !== 'dm');
+
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${open ? 'open' : ''}`}>
       {pending.length > 0 && (
         <button className="needsyou" onClick={() => onJumpToApproval(pending[0])}>
-          <span>⚠</span>
-          <span style={{ flex: 1 }}>Needs you</span>
-          <span>{pending.length}</span>
+          <span aria-hidden="true">⚠</span>
+          <span style={{ flex: 1 }}>
+            {pending.length === 1 ? 'An agent needs you' : 'Agents need you'}
+          </span>
+          <span className="badge">{pending.length}</span>
         </button>
       )}
 
-      <div className="section-label">Agents</div>
-      {agents.length === 0 && <div className="empty">No agents yet.<br />Run provision_agents.py</div>}
+      <div className="section-label">
+        Agents <span className="count">{agents.length || ''}</span>
+      </div>
+
+      {agents.length === 0 && (
+        <div className="empty" style={{ padding: '16px 8px' }}>
+          <span className="title">No agents yet</span>
+          <span>Seats are created once, after the stack deploys.</span>
+          <code>python3 scripts/provision_agents.py</code>
+        </div>
+      )}
+
       {agents.map((a) => {
         const thread = threads.find((t) => (t.agentIds || []).includes(a.agentId));
+        const state = agentState(a);
+        const run = activeRuns.find((r) => r.agentId === a.agentId);
         return (
           <button key={a.agentId}
                   className={`row ${selected === thread?.threadId ? 'active' : ''}`}
-                  onClick={() => thread && onSelect(thread.threadId)}>
-            <span className="dot" style={{ background: STATE_COLOR[agentState(a)] }} />
+                  title={`${a.name} — ${STATE[state].label}`}
+                  onClick={() => { if (thread) { onSelect(thread.threadId); onClose?.(); } }}>
+            <span className={`dot ${state === 'running' ? 'pulse' : ''}`}
+                  style={{ background: STATE[state].color, color: STATE[state].color }} />
             <span className="name">{a.name}</span>
+            {run && <span className="meta">{elapsed(run.startedAt)}</span>}
+            {state === 'waiting' && <span className="meta" style={{ color: 'var(--warn)' }}>⚠</span>}
           </button>
         );
       })}
 
-      {activeRuns.length > 0 && (
+      {tasks.length > 0 && (
         <>
-          <div className="section-label">Active runs</div>
-          {activeRuns.map((r) => (
-            <button key={r.runId} className="row" onClick={() => onSelect(r.threadId)}>
-              <span className="name">{r.agentId}</span>
-              <span className="meta">{elapsed(r.startedAt)}</span>
+          <div className="section-label">
+            Tasks <span className="count">{tasks.length}</span>
+          </div>
+          {tasks.map((t) => (
+            <button key={t.threadId}
+                    className={`row ${selected === t.threadId ? 'active' : ''}`}
+                    onClick={() => { onSelect(t.threadId); onClose?.(); }}>
+              <span className="name">{t.title}</span>
             </button>
           ))}
         </>
       )}
-
-      <div className="section-label">Tasks</div>
-      {threads.filter((t) => t.kind !== 'dm').map((t) => (
-        <button key={t.threadId}
-                className={`row ${selected === t.threadId ? 'active' : ''}`}
-                onClick={() => onSelect(t.threadId)}>
-          <span className="name">{t.title}</span>
-        </button>
-      ))}
-
-      <div className="section-label">Connection</div>
-      <div className="row" style={{ cursor: 'default' }}>
-        <span className="dot" style={{
-          background: wsStatus === 'connected' ? 'var(--ok)' : 'var(--warn)',
-        }} />
-        <span className="meta">{wsStatus}</span>
-      </div>
     </aside>
   );
 }

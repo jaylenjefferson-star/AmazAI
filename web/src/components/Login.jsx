@@ -32,10 +32,13 @@ export default function Login({ onDone }) {
     <div className="login">
       {!mfa ? (
         <form onSubmit={submit}>
-          <h1>AmazAI</h1>
+          <div className="brand">
+            <span className="mark" aria-hidden="true">A</span>
+            <span>AmazAI</span>
+          </div>
           <p>Sign in to your control plane.</p>
-          {error && <div className="err">{error}</div>}
-          <input type="email" placeholder="Email" autoComplete="username"
+          {error && <div className="err"><span className="msg-text">{error}</span></div>}
+          <input type="email" placeholder="Email" autoComplete="username" autoFocus
                  value={email} onChange={(e) => setEmail(e.target.value)} required />
           <input type="password" placeholder="Password" autoComplete="current-password"
                  value={password} onChange={(e) => setPassword(e.target.value)} required />
@@ -45,10 +48,14 @@ export default function Login({ onDone }) {
         </form>
       ) : (
         <form onSubmit={submitCode}>
-          <h1>Verification</h1>
+          <div className="brand">
+            <span className="mark" aria-hidden="true">A</span>
+            <span>Verification</span>
+          </div>
           <p>Enter the 6-digit code from your authenticator app.</p>
-          {error && <div className="err">{error}</div>}
+          {error && <div className="err"><span className="msg-text">{error}</span></div>}
           <input inputMode="numeric" autoFocus placeholder="000000" maxLength={6}
+                 style={{ fontFamily: 'var(--mono)', letterSpacing: '.3em', textAlign: 'center' }}
                  value={code} onChange={(e) => setCode(e.target.value)} required />
           <button className="primary" disabled={busy || code.length < 6}>
             {busy ? 'Verifying…' : 'Verify'}

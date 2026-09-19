@@ -13,6 +13,8 @@ SHOW_ACCOUNT=0
 
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-west-2}}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/_python.sh
+. "$ROOT/scripts/_python.sh"
 
 pass() { printf '  [ok]   %s\n' "$*"; }
 fail() { printf '  [FAIL] %s\n' "$*"; }
@@ -24,20 +26,27 @@ echo "region: $REGION"
 
 # ------------------------------------------------------------------ tooling
 section "Tooling"
-for t in aws node npm python3 git; do
+for t in aws node npm git; do
   if command -v "$t" >/dev/null 2>&1; then
     case "$t" in
-      aws)     v=$(aws --version 2>&1 | head -1) ;;
-      node)    v=$(node --version 2>&1) ;;
-      npm)     v=$(npm --version 2>&1) ;;
-      python3) v=$(python3 --version 2>&1) ;;
-      git)     v=$(git --version 2>&1) ;;
+      aws)  v=$(aws --version 2>&1 | head -1) ;;
+      node) v=$(node --version 2>&1) ;;
+      npm)  v=$(npm --version 2>&1) ;;
+      git)  v=$(git --version 2>&1) ;;
     esac
     pass "$t  $v"
   else
     fail "$t not installed"
   fi
 done
+
+# Reported separately from the others because "installed" is not the question
+# for Python here — "new enough" is, and the default one on macOS is not.
+if resolve_python; then
+  pass "python  $PY_VERSION  ($PY)"
+else
+  fail "$(python_floor_message)"
+fi
 
 if [ -d /home/cloudshell-user ] || [[ "${AWS_EXECUTION_ENV:-}" == *CloudShell* ]]; then
   pass "running in AWS CloudShell"

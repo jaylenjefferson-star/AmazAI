@@ -9,6 +9,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/_python.sh
+. "$ROOT/scripts/_python.sh"
 REGION="${AWS_REGION:-us-west-2}"
 CHECK_ONLY="${1:-}"
 
@@ -26,9 +28,16 @@ IN_CLOUDSHELL=0
 [ -d /home/cloudshell-user ] && IN_CLOUDSHELL=1
 [ "$IN_CLOUDSHELL" = 1 ] && ok "running in AWS CloudShell"
 
-for tool in aws node npm python3; do
+for tool in aws node npm; do
   if command -v "$tool" >/dev/null 2>&1; then ok "$tool"; else bad "$tool not found"; fail=1; fi
 done
+
+if resolve_python; then
+  ok "python  $PY_VERSION"
+else
+  bad "$(python_floor_message)"
+  fail=1
+fi
 
 # CloudShell gives 1 GB of persistent home. node_modules for the CDK app and
 # the console together exceed that, so both are installed under /tmp, which is
@@ -53,7 +62,7 @@ fi
 
 # Model IDs must be real before any harness is created. Guessing one produces
 # a failure that presents as a permissions bug.
-if python3 - "$ROOT/scripts/seats.json" <<'PY'
+if "$PY" - "$ROOT/scripts/seats.json" <<'PY'
 import json, sys
 seats = json.load(open(sys.argv[1]))["seats"]
 missing = [s["key"] for s in seats if s.get("enabled") and not s.get("modelId")]
@@ -65,9 +74,9 @@ else
   bad "seats.json has enabled seats with modelId: null (decision D2)"
   echo
   echo "      Resolve them from what this account actually offers:"
-  echo "        python3 scripts/resolve_models.py --region $REGION            # preview"
-  echo "        python3 scripts/resolve_models.py --region $REGION --write    # apply"
-  echo "        python3 scripts/resolve_models.py --region $REGION --write --best"
+  echo "        $PY scripts/resolve_models.py --region $REGION            # preview"
+  echo "        $PY scripts/resolve_models.py --region $REGION --write    # apply"
+  echo "        $PY scripts/resolve_models.py --region $REGION --write --best"
   echo "            (--best uses the most capable model for every seat)"
   fail=1
 fi
@@ -80,7 +89,7 @@ fi
 
 # ------------------------------------------------------------------- build
 step "Running tests"
-(cd "$ROOT" && python3 -m pytest -q)
+(cd "$ROOT" && "$PY" -m pytest -q)
 
 step "Building the boto3 layer"
 "$ROOT/scripts/build_layer.sh"
@@ -109,7 +118,7 @@ npx cdk deploy --require-approval any-change --outputs-file "$ROOT/.cdk-outputs.
 
 # ----------------------------------------------------------------- wire up
 step "Reading stack outputs"
-eval "$(python3 - "$ROOT/.cdk-outputs.json" <<'PY'
+eval "$("$PY" - "$ROOT/.cdk-outputs.json" <<'PY'
 import json, sys
 out = json.load(open(sys.argv[1]))["AmazaiStack"]
 for key, var in [("ApiUrl","API_URL"), ("WsUrl","WS_URL"),
@@ -164,7 +173,7 @@ Two things left, both needing your input:
 
   2. Create the agent seats:
 
-       OWNER_ID=<the sub from above> python3 scripts/provision_agents.py
+       OWNER_ID=<the sub from above> $PY scripts/provision_agents.py
 
 Then open: $CONSOLE_URL
 You will be asked to enrol an authenticator app on first sign-in.

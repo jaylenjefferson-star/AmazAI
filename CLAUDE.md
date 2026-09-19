@@ -18,25 +18,37 @@ scheduled routines, and an approval gate on risky actions.
 Built and verified locally; **never deployed**. No AgentCore call has run
 against the live service.
 
+**Python 3.11+ is required** and macOS ships 3.9. `scripts/_python.sh` resolves
+a usable interpreter and both `doctor.sh` and `deploy.sh` source it; the floor
+exists because the code reads its own `...Z` timestamps with
+`datetime.fromisoformat`, which only accepts that suffix from 3.11.
+
 ```bash
-python3 -m pytest                          # 210 tests
-cd infra && npm install && npx cdk synth   # 76 resources
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest                 # 212 tests
+cd infra && npm install && npx cdk synth   # 75 resources
 cd web   && npm install && npm run build
+```
+
+The console renders against fixtures without any AWS at all:
+
+```bash
+cd web && npm run dev      # then open http://localhost:5173/?demo=1
 ```
 
 | Phase | State |
 |---|---|
 | 1 · Infrastructure (CDK) | written, `cdk synth` clean |
-| 3 · Enforcement core + store | written, 210 tests |
+| 3 · Enforcement core + store | written, 212 tests |
 | 4 · Handlers | written, never run against AWS |
-| 5 · Console | written, builds clean |
+| 5 · Console | designed, light + dark, builds clean |
 | 2 · Seat provisioning | needs a deploy first |
 
 ## To deploy
 
 ```bash
 ./scripts/doctor.sh                                # read-only diagnostic
-python3 scripts/resolve_models.py --write --best   # fills in real model IDs
+.venv/bin/python scripts/resolve_models.py --write --best   # real model IDs
 ./scripts/deploy.sh --check                        # read-only preflight
 ./scripts/deploy.sh                                # the whole thing
 ```
@@ -44,6 +56,24 @@ python3 scripts/resolve_models.py --write --best   # fills in real model IDs
 Needs AWS credentials for account owner `jaylen.jefferson@amazflow.com`,
 region `us-west-2`. Enable Bedrock model access in the console first — a fresh
 account has the models off and the failure looks like a permissions bug.
+
+## Console
+
+Light and dark, light by default and following the system unless
+`localStorage['amazai.theme']` says otherwise; `index.html` sets the attribute
+before first paint so a dark machine never flashes white. Tokens live in one
+block per theme in `styles.css` and the two dark blocks must stay in step —
+there is no way to share them in plain CSS.
+
+`src/demo.js` is a dev-only fixture backend behind `?demo=1`, guarded by
+`import.meta.env.DEV` so it is absent from a production bundle. It exists
+because the console is otherwise unreviewable until the stack is deployed.
+
+Three bugs fixed while wiring this up, all of which blanked the page:
+`global` undefined (Vite vs. `amazon-cognito-identity-js`, fixed by `define`),
+`CognitoUserPool` throwing at import when `.env` was unfilled (now lazy, with
+a real message), and an approval arriving mid-stream rendering above the
+sentence explaining it (now flushed in order).
 
 ## Layout
 

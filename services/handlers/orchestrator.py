@@ -274,8 +274,7 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
     if name == "handoff":
         handoff = _record_handoff(store, run, args)
         ev.action(seq, "handoff", f"to {args.get('to')}", handoffId=handoff["handoffId"])
-        push.tool(run["runId"], run["threadId"], "handoff",
-                  f"proposed to {args.get('to')}")
+        push.handoff(run["runId"], run["threadId"], handoff)
         return {"pause": False}
 
     # In-harness tool (shell, browser, gateway target). We observe, not execute.

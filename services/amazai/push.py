@@ -67,6 +67,17 @@ class Push:
         self.send({"type": "run.state", "runId": run_id, "threadId": thread_id,
                    "state": state, "costUsd": cost_usd})
 
+    def handoff(self, run_id: str, thread_id: str, handoff: dict) -> None:
+        """One agent delegating to another.
+
+        Sent as its own event rather than a `tool` frame, because the console
+        renders who is handing what to whom. A summary string cannot carry
+        that, and the alternative — the console re-fetching the run to find
+        out — puts a request on the path of something it was just told.
+        """
+        self.send({"type": "handoff", "runId": run_id, "threadId": thread_id,
+                   "handoff": handoff})
+
     def approval_requested(self, run_id: str, thread_id: str, approval: dict) -> None:
         self.send({"type": "approval.requested", "runId": run_id,
                    "threadId": thread_id, "approval": approval})

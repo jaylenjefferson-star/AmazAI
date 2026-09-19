@@ -6,12 +6,22 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/_python.sh
+. "$ROOT/scripts/_python.sh"
 TARGET="$ROOT/layer/python"
+
+# The wheels are selected by the --platform/--python-version flags below, not
+# by the interpreter running pip — but macOS's 3.9 ships a pip old enough to
+# handle that combination inconsistently, so resolve a modern one first.
+if ! resolve_python; then
+  echo "$(python_floor_message)" >&2
+  exit 1
+fi
 
 rm -rf "$TARGET"
 mkdir -p "$TARGET"
 
-python3 -m pip install \
+"$PY" -m pip install \
   --upgrade \
   --target "$TARGET" \
   --platform manylinux2014_aarch64 \
