@@ -36,6 +36,7 @@ const live = {
   deleteMemory: (id, memId) => call('DELETE', `/agents/${id}/memory/${memId}`),
 
   connectorCatalog: () => call('GET', '/connectors/catalog'),
+  connectorApps: (q, after) => call('GET', `/connectors/apps?limit=48${q ? `&q=${encodeURIComponent(q)}` : ''}${after ? `&after=${encodeURIComponent(after)}` : ''}`),
   connectors: () => call('GET', '/connectors'),
   connectorAccounts: (app) => call('GET', `/connectors/accounts${app ? `?app=${encodeURIComponent(app)}` : ''}`),
   connectToken: (connectorId) => call('POST', '/connectors/connect-token', { connectorId }),
