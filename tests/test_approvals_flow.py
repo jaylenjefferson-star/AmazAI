@@ -1,26 +1,13 @@
 """End-to-end approval and run lifecycle against a mocked DynamoDB."""
-import os
 from datetime import datetime, timedelta, timezone
 
-import boto3
 import pytest
-from moto import mock_aws
 
-os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
-os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
-os.environ.setdefault("AWS_DEFAULT_REGION", "us-west-2")
+from amazai import approvals, keys as K, runs
+from amazai.policy import Capability
+from amazai.states import RunState
 
-from amazai import approvals, keys as K, runs  # noqa: E402
-from amazai.policy import Capability  # noqa: E402
-from amazai.states import RunState  # noqa: E402
-from amazai.store import Store  # noqa: E402
-from tests.test_store import _make_table  # noqa: E402
-
-
-@pytest.fixture
-def store():
-    with mock_aws():
-        yield Store("owner-a", table=_make_table())
+# `store` comes from tests/conftest.py, which owns the one table definition.
 
 
 @pytest.fixture

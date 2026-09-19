@@ -52,23 +52,10 @@ def validate(seats: list[dict]) -> list[str]:
 def ensure_harness(control, seat: dict, role_arn: str, region: str) -> str:
     name = f"amazai-{seat['key']}"
 
-    tools = []
-    for tool in seat.get("tools", []):
-        if tool == "browser":
-            tools.append({"type": "agentcore_browser", "name": "browser"})
-        elif tool == "code_interpreter":
-            tools.append({"type": "agentcore_code_interpreter", "name": "code_interpreter"})
-
-    # shell and file_operations are on by default -- declaring them is an error.
-    from amazai.agentcore import INLINE_TOOLS
-    for fn_name, spec in INLINE_TOOLS.items():
-        tools.append({
-            "type": "inline_function", "name": fn_name,
-            "config": {"inlineFunction": {
-                "description": spec["description"],
-                "inputSchema": spec["inputSchema"],
-            }},
-        })
+    # Shared with the API's create path, so a seat provisioned from the CLI
+    # and an agent created from the console get identical harnesses.
+    from amazai.agentcore import harness_tools
+    tools = harness_tools(seat.get("tools", []))
 
     existing = None
     try:

@@ -17,7 +17,7 @@ import traceback
 
 import boto3
 
-from amazai import agentcore, approvals, keys as K, runs
+from amazai import agentcore, agents as A, approvals, keys as K, runs
 from amazai.policy import Capability
 from amazai.states import RunState
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso
@@ -34,10 +34,55 @@ def _resp(status: int, body) -> dict:
     return {"statusCode": status, "headers": CORS, "body": json.dumps(body, default=str)}
 
 
+def _claims(event) -> dict:
+    return (((event.get("requestContext") or {}).get("authorizer") or {})
+            .get("jwt") or {}).get("claims") or {}
+
+
 def _owner(event) -> str:
-    claims = (((event.get("requestContext") or {}).get("authorizer") or {})
-              .get("jwt") or {}).get("claims") or {}
-    return claims.get("sub") or os.environ.get("OWNER_ID", "owner")
+    return _claims(event).get("sub") or os.environ.get("OWNER_ID", "owner")
+
+
+def _actor(event) -> A.Actor:
+    """Who is asking.
+
+    `agent_id` is always None here, and that is a property of this entry
+    point rather than an omission: every route runs behind the Cognito
+    authorizer, so the caller is a person. `agents.Actor` carries the field
+    because the orchestrator calls the same validation functions on an agent's
+    behalf, where the answer is not None.
+    """
+    claims = _claims(event)
+    sub = _owner(event)
+    return A.Actor(user_id=sub, org_id=claims.get("custom:orgId") or sub)
+
+
+def _header(event, name: str) -> str:
+    headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+    return headers.get(name.lower(), "")
+
+
+def _org_connectors(store: Store) -> dict[str, A.OrgConnector]:
+    """Connectors the organization has installed, keyed by id.
+
+    The ceiling for every per-agent grant. Empty until a connector is
+    installed, which is why a grant request on a fresh org is refused rather
+    than quietly granted — there is nothing yet to grant from.
+    """
+    out: dict[str, A.OrgConnector] = {}
+    for row in store.query_index("gsi1", "gsi1pk", "CONNECTORS", limit=200):
+        if row.get("status") not in (None, "installed", "authorized"):
+            continue
+        try:
+            capability = Capability(row.get("capability", "read"))
+        except ValueError:
+            continue
+        out[row["connectorId"]] = A.OrgConnector(
+            connector_id=row["connectorId"],
+            allowed_tools=frozenset(row.get("allowedTools") or []),
+            capability=capability,
+        )
+    return out
 
 
 def handler(event, context):  # noqa: ARG001
@@ -56,6 +101,12 @@ def handler(event, context):  # noqa: ARG001
 
     try:
         return _route(store, method, path, body, event)
+    except A.ValidationError as exc:
+        return _resp(400, {"error": "invalid_request", "detail": str(exc)})
+    except A.Escalation as exc:
+        return _resp(403, {"error": "forbidden", "detail": str(exc)})
+    except A.QuotaExceeded as exc:
+        return _resp(409, {"error": "quota_exceeded", "detail": str(exc)})
     except NotFound as exc:
         return _resp(404, {"error": "not_found", "detail": str(exc)})
     except PermissionError as exc:
@@ -76,21 +127,48 @@ def _match(path: str, pattern: str) -> list[str] | None:
 def _route(store: Store, method: str, path: str, body: dict, event: dict):
     # --- agents ------------------------------------------------------------
     if path == "/agents" and method == "GET":
-        return _resp(200, {"agents": store.query_index("gsi1", "gsi1pk", "AGENTS")})
+        rows = store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
+        # Archived agents are excluded by default. They still exist, and their
+        # evidence still resolves; they are simply not part of the org you are
+        # operating today.
+        qs = event.get("queryStringParameters") or {}
+        wanted = qs.get("status")
+        if wanted:
+            rows = [r for r in rows if r.get("status", r.get("state")) == wanted]
+        else:
+            rows = [r for r in rows
+                    if r.get("status", r.get("state")) not in {"archived", "failed"}]
+        return _resp(200, {"agents": rows})
+
+    if path == "/agents" and method == "POST":
+        return _create_agent(store, body, event)
 
     if (p := _match(path, "/agents/{id}")) and method == "GET":
         agent = store.get(K.agent_pk(p[0]), "META")
         agent["memory"] = store.query(K.agent_pk(p[0]), sk_prefix="MEM#")
         agent["grants"] = store.query(K.agent_pk(p[0]), sk_prefix="GRANT#")
+        agent["audit"] = store.query(K.agent_pk(p[0]), sk_prefix="AUDIT#",
+                                     limit=50, ascending=False)
         return _resp(200, agent)
 
     if (p := _match(path, "/agents/{id}")) and method == "PATCH":
-        allowed = {"name", "role", "systemPrompt", "accent", "state",
-                   "allowedTools", "budget", "model", "workspace", "preapproved"}
-        changes = {k: v for k, v in body.items() if k in allowed}
-        if not changes:
-            return _resp(400, {"error": "no editable fields supplied"})
-        return _resp(200, store.update(K.agent_pk(p[0]), "META", changes))
+        existing = store.get(K.agent_pk(p[0]), "META")
+        changes, events = A.plan_update(existing, body, _actor(event))
+        updated = store.update(K.agent_pk(p[0]), "META", changes)
+        for ev in events:
+            store.put(ev)
+        return _resp(200, updated)
+
+    if (p := _match(path, "/agents/{id}")) and method == "DELETE":
+        # Deactivation, never deletion. An agent that produced evidence must
+        # remain something that evidence can point at.
+        existing = store.get(K.agent_pk(p[0]), "META")
+        changes, events = A.plan_update(existing, {"status": "archived"},
+                                        _actor(event))
+        updated = store.update(K.agent_pk(p[0]), "META", changes)
+        for ev in events:
+            store.put(ev)
+        return _resp(200, updated)
 
     # --- memory ------------------------------------------------------------
     if (p := _match(path, "/agents/{id}/memory")) and method == "POST":
@@ -169,6 +247,107 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
                            "totalUsd": round(total, 4), "runs": rows})
 
     return _resp(404, {"error": "no such route", "path": path, "method": method})
+
+
+def _create_agent(store: Store, body: dict, event: dict):
+    """Create one agent, atomically, or leave nothing behind.
+
+    Two phases, because one of the steps is not a database write:
+
+    1. Every row the agent consists of — identity, grants, memory namespace,
+       starter thread, audit entry — goes in as a single transaction, with the
+       agent marked `provisioning`. Nothing hands work to a `provisioning`
+       agent, so a crash after this point leaves something inert, not
+       something half-empowered.
+    2. The harness is created. Only on success does the agent become
+       `active`. On failure the transaction is rolled back, so the caller can
+       retry the same request rather than clean up after it.
+
+    The audit trail of a failed attempt is written after the rollback and
+    deliberately survives it: "this creation was tried and failed" is a fact
+    worth keeping, and it is the only trace that would otherwise be lost.
+    """
+    actor = _actor(event)
+
+    # Idempotency first: a retried create must return the first agent, not a
+    # second one with a suffixed id.
+    idem_key = _header(event, "idempotency-key")
+    if idem_key:
+        existing_id = store.claim(f"agent:{idem_key}", "pending", field="agentId")
+        if existing_id and existing_id != "pending":
+            agent = store.try_get(K.agent_pk(existing_id), "META")
+            if agent:
+                return _resp(200, agent)
+
+    active = [r for r in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
+              if r.get("status", r.get("state")) in A.SEATED]
+
+    plan = A.plan_create(
+        body, actor,
+        org_connectors=_org_connectors(store),
+        active_count=len(active),
+        max_agents=int(os.environ.get("MAX_AGENTS", A.DEFAULT_MAX_AGENTS)),
+    )
+
+    if store.try_get(K.agent_pk(plan.agent_id), "META"):
+        return _resp(409, {"error": "conflict",
+                           "detail": f"agent {plan.agent_id!r} already exists"})
+
+    store.transact_put(plan.items)
+    if idem_key:
+        store.update(K.idempotency_pk(f"agent:{idem_key}"), "META",
+                     {"agentId": plan.agent_id})
+
+    try:
+        provisioned = _provision_harness(store, plan.agent)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        store.transact_delete(plan.rollback_keys)
+        store.put(A.audit_event(plan.agent_id, "agent.provision_failed", actor,
+                                detail=f"{type(exc).__name__}: {exc}"))
+        return _resp(502, {
+            "error": "provisioning_failed",
+            "detail": f"{type(exc).__name__}: {exc}",
+            "agentId": plan.agent_id,
+            "note": "nothing was left behind; the same request can be retried",
+        })
+
+    return _resp(201, provisioned)
+
+
+def _provision_harness(store: Store, agent: dict) -> dict:
+    """Give the agent its runtime identity and mark it runnable.
+
+    Separated so the whole create path can be exercised without an AWS
+    account: a test swaps this for a stub and still drives the transaction,
+    the rollback and the audit trail.
+    """
+    model_id = (agent.get("model") or {}).get("modelId")
+    if not model_id:
+        # An unresolved model is the intended failure, not a surprise. A
+        # guessed Bedrock identifier fails later, in a way that reads as a
+        # permissions bug (decision D2).
+        raise RuntimeError(
+            f"no modelId resolved for tier "
+            f"{(agent.get('model') or {}).get('tier')!r}; "
+            "run scripts/resolve_models.py against this account first"
+        )
+
+    role_arn = os.environ.get("AGENT_ROLE_ARN_TEMPLATE", "").format(
+        agentId=agent["agentId"]) or None
+    client = agentcore.AgentCore()
+    harness_arn = client.create_harness(
+        name=f"amazai-{agent['agentId']}",
+        execution_role_arn=role_arn,
+        tool_names=agent.get("allowedTools") or [],
+    )
+
+    return store.update(K.agent_pk(agent["agentId"]), "META", {
+        "harnessArn": harness_arn,
+        "executionRoleArn": role_arn,
+        "status": "active",
+        "state": "active",
+    })
 
 
 def _post_message(store: Store, thread_id: str, body: dict):

@@ -58,6 +58,33 @@ INLINE_TOOLS = {
 }
 
 
+def harness_tools(tool_names: list[str]) -> list[dict]:
+    """Build the `tools` argument for create_harness.
+
+    `shell` and `file_operations` are deliberately dropped: they are on by
+    default and declaring them is rejected (BUILD_PLAN gotcha 7). They are
+    still recorded on the agent row, because the router has to reason about
+    tools the model can reach whether or not we declared them.
+    """
+    tools: list[dict] = []
+    for tool in tool_names:
+        if tool == "browser":
+            tools.append({"type": "agentcore_browser", "name": "browser"})
+        elif tool == "code_interpreter":
+            tools.append({"type": "agentcore_code_interpreter",
+                          "name": "code_interpreter"})
+
+    for fn_name, spec in INLINE_TOOLS.items():
+        tools.append({
+            "type": "inline_function", "name": fn_name,
+            "config": {"inlineFunction": {
+                "description": spec["description"],
+                "inputSchema": spec["inputSchema"],
+            }},
+        })
+    return tools
+
+
 class HarnessNotReady(RuntimeError):
     pass
 
@@ -94,6 +121,27 @@ class AgentCore:
             runtimeSessionId=session_id,
             command=command,
         )
+
+    def create_harness(self, *, name: str, execution_role_arn: str | None,
+                       tool_names: list[str]) -> str:
+        """Create a harness and return its ARN.
+
+        The shape is BUILD_PLAN §0 verbatim. Two of its rules bite silently:
+        `shell` and `file_operations` are on by default and declaring them is
+        an error (gotcha 7), and every mount path must sit under /mnt
+        (gotcha 5). `harness_tools` handles the first.
+        """
+        kwargs: dict = {
+            "name": name,
+            "tools": harness_tools(tool_names),
+            "filesystemConfigurations": [
+                {"sessionStorage": {"mountPath": "/mnt/data"}}
+            ],
+        }
+        if execution_role_arn:
+            kwargs["executionRoleArn"] = execution_role_arn
+        resp = self._control.create_harness(**kwargs)
+        return resp.get("harnessArn") or resp["harness"]["harnessArn"]
 
     def get_harness(self, harness_arn: str) -> dict:
         return self._control.get_harness(harnessArn=harness_arn)

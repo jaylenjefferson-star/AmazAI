@@ -26,22 +26,10 @@ from botocore.exceptions import ClientError
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Preference order per tier, most capable first. Matched as substrings against
-# whatever the account actually exposes, so a model released after this was
-# written still resolves as long as it is named conventionally.
-TIERS: dict[str, list[str]] = {
-    "frontier": [
-        "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7",
-        "claude-opus-4-6", "claude-sonnet-5",
-    ],
-    "balanced": [
-        "claude-sonnet-5", "claude-opus-5", "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-    ],
-    "fast": [
-        "claude-haiku-4-5", "claude-sonnet-5", "claude-sonnet-4-6",
-    ],
-}
+# The ladders live in services/amazai/models.py so that the tier an agent was
+# created with and the tier this resolver walks cannot drift apart.
+sys.path.insert(0, str(ROOT / "services"))
+from amazai.models import TIERS  # noqa: E402
 
 # Which tier each seat wants. "best" mode overrides everything to frontier.
 SEAT_TIERS = {

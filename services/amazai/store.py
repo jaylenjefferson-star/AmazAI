@@ -173,19 +173,87 @@ class Store:
                 count += 1
         return count
 
+    # -- transactions -------------------------------------------------------
+
+    def transact_put(self, items: list[dict], *, unique_pks: bool = True) -> list[dict]:
+        """Write several rows or none of them.
+
+        Creating an agent writes its identity, its grants, its memory
+        namespace and its starter thread. Those are one fact, not four, and a
+        crash between them leaves an agent that exists but cannot be used —
+        the specific failure this avoids.
+
+        DynamoDB caps a transaction at 100 items; a caller that could exceed
+        that is a caller whose unit of work is wrong, so this refuses rather
+        than silently splitting into two non-atomic halves.
+        """
+        if not items:
+            return []
+        if len(items) > 100:
+            raise ValueError(
+                f"transaction of {len(items)} items exceeds DynamoDB's limit of 100"
+            )
+
+        prepared = []
+        for item in items:
+            item = dict(item)
+            item["ownerId"] = self.owner_id
+            item.setdefault("createdAt", now_iso())
+            item["updatedAt"] = now_iso()
+            prepared.append(item)
+
+        put = []
+        for item in prepared:
+            entry: dict[str, Any] = {
+                "TableName": self._table.name,
+                "Item": _floats_to_decimal(item),
+            }
+            if unique_pks:
+                entry["ConditionExpression"] = "attribute_not_exists(pk) AND attribute_not_exists(sk)"
+            put.append({"Put": entry})
+
+        client = self._table.meta.client
+        try:
+            client.transact_write_items(TransactItems=put)
+        except client.exceptions.TransactionCanceledException as e:
+            reasons = [r.get("Code") for r in e.response.get("CancellationReasons", [])]
+            raise Conflict(f"transaction cancelled: {reasons}") from e
+        return [_decimals_to_native(i) for i in prepared]
+
+    def transact_delete(self, keys: list[tuple[str, str]]) -> None:
+        """Undo a transact_put. Used only on a provisioning rollback, where
+        leaving the rows behind would mean a half-created agent."""
+        if not keys:
+            return
+        client = self._table.meta.client
+        client.transact_write_items(TransactItems=[
+            {"Delete": {
+                "TableName": self._table.name,
+                "Key": {"pk": pk, "sk": sk},
+                "ConditionExpression": "ownerId = :owner",
+                "ExpressionAttributeValues": {":owner": self.owner_id},
+            }} for pk, sk in keys
+        ])
+
     # -- idempotency --------------------------------------------------------
 
-    def claim(self, key: str, run_id: str, *, ttl_days: int = 7) -> str | None:
+    def claim(self, key: str, value: str, *, ttl_days: int = 7,
+              field: str = "runId") -> str | None:
         """Claim an idempotency key.
 
-        Returns None if this caller won the claim, or the existing run ID if
-        the trigger already produced a run. EventBridge Scheduler is
+        Returns None if this caller won the claim, or the value the first
+        caller stored if the key was already taken. EventBridge Scheduler is
         at-least-once; without this a doubled schedule does the work twice.
+
+        `field` names what is being made idempotent — a run for a schedule, an
+        agent for a create. The retried caller gets back the identifier the
+        first attempt produced, so a duplicate request returns the original
+        result instead of a second object.
         """
         from amazai import keys as K
         item = {
             "pk": K.idempotency_pk(key), "sk": "META",
-            "entity": "Idempotency", "runId": run_id,
+            "entity": "Idempotency", field: value,
             "ttl": int(time.time()) + ttl_days * 86400,
         }
         try:
@@ -193,4 +261,4 @@ class Store:
             return None
         except Conflict:
             existing = self.try_get(K.idempotency_pk(key), "META")
-            return (existing or {}).get("runId", "unknown")
+            return (existing or {}).get(field, "unknown")
