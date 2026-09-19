@@ -3,9 +3,9 @@
 One Lambda dispatching on path. At single-user scale this beats fifteen
 microfunctions.
 
-Every route runs behind the API Gateway Cognito JWT authorizer, and every
-store call re-checks `ownerId`: the authorizer proves who you are, the
-ownership check proves the row is yours.
+Every request presents an Auth0 access token. API Gateway checks it at the
+edge and this handler verifies it again before deriving the owner from its
+subject. The store then re-checks ``ownerId`` on every row operation.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import traceback
 import boto3
 
 from amazai import (agentcore, agents as A, approvals, connectors as C,
-                    keys as K, models, pipedream, runs)
+                    identity, keys as K, models, pipedream, runs)
 from amazai.policy import Capability
 from amazai.states import RunState
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
@@ -35,27 +35,37 @@ def _resp(status: int, body) -> dict:
     return {"statusCode": status, "headers": CORS, "body": json.dumps(body, default=str)}
 
 
-def _claims(event) -> dict:
-    return (((event.get("requestContext") or {}).get("authorizer") or {})
-            .get("jwt") or {}).get("claims") or {}
-
-
 def _owner(event) -> str:
-    return _claims(event).get("sub") or os.environ.get("OWNER_ID", "owner")
+    return _principal(event).user_id
+
+
+def _principal(event) -> identity.Principal:
+    """Return the one verified principal for this request.
+
+    API Gateway's JWT authorizer is a valuable first gate, but handler code
+    must not turn its context map into a second, weaker identity source. The
+    raw bearer token is verified by ``identity`` and cached only for this
+    in-memory Lambda invocation.
+    """
+    principal = event.get("_amazai_principal")
+    if principal is None:
+        principal = identity.principal_from_event(event)
+        identity.assert_owner(principal)
+        event["_amazai_principal"] = principal
+    return principal
 
 
 def _actor(event) -> A.Actor:
     """Who is asking.
 
     `agent_id` is always None here, and that is a property of this entry
-    point rather than an omission: every route runs behind the Cognito
-    authorizer, so the caller is a person. `agents.Actor` carries the field
+    point rather than an omission: every route runs behind Auth0 validation,
+    so the caller is a person. `agents.Actor` carries the field
     because the orchestrator calls the same validation functions on an agent's
     behalf, where the answer is not None.
     """
-    claims = _claims(event)
-    sub = _owner(event)
-    return A.Actor(user_id=sub, org_id=claims.get("custom:orgId") or sub)
+    principal = _principal(event)
+    return A.Actor(user_id=principal.user_id, org_id=principal.org_id)
 
 
 def _header(event, name: str) -> str:
@@ -110,10 +120,13 @@ def handler(event, context):  # noqa: ARG001
     except ValueError:
         return _resp(400, {"error": "invalid JSON body"})
 
-    store = Store(_owner(event))
-
     try:
+        principal = _principal(event)
+        store = Store(principal.user_id)
+        identity.ensure_user(store, principal)
         return _route(store, method, path, body, event)
+    except identity.AuthError:
+        return _resp(401, {"error": "unauthorized"})
     except A.ValidationError as exc:
         return _resp(400, {"error": "invalid_request", "detail": str(exc)})
     except A.Escalation as exc:

@@ -8,13 +8,12 @@
  * ends up readable in the shipped JavaScript. Only public configuration
  * belongs in this file's inputs.
  *
- * **The backend is not protected by this.** The API today validates Cognito
- * JWTs, not Auth0 ones. Hiding a route in the browser hides a route in the
- * browser; it is not authorization. Until the API validates Auth0 access
- * tokens server-side, nothing here should be read as protecting real data,
- * which is why the console runs on fixtures in this environment.
+ * **The backend is not protected by this component.** The deployed API also
+ * validates Auth0 access tokens server-side. Hiding a route in the browser is
+ * still only a UX guard; the backend remains the authorization boundary.
  */
 
+import { useEffect } from 'react';
 import { Auth0Provider, useAuth0 } from '@auth0/auth0-react';
 
 export const config = {
@@ -26,6 +25,29 @@ export const config = {
 };
 
 export const configured = Boolean(config.domain && config.clientId);
+
+let accessTokenProvider = null;
+
+/** Used by API and WebSocket modules, which cannot call React hooks. */
+export async function accessToken() {
+  if (!accessTokenProvider) {
+    throw new Error('Your AmazAI session is still starting. Please try again.');
+  }
+  return accessTokenProvider();
+}
+
+function TokenBridge({ children }) {
+  const { getAccessTokenSilently } = useAuth0();
+
+  useEffect(() => {
+    accessTokenProvider = () => getAccessTokenSilently(
+      config.audience ? { authorizationParams: { audience: config.audience } } : {},
+    );
+    return () => { accessTokenProvider = null; };
+  }, [getAccessTokenSilently]);
+
+  return children;
+}
 
 /** The owner-only seam. */
 const OWNER_SUB = import.meta.env.VITE_OWNER_SUB || '';
@@ -82,7 +104,7 @@ export function AmazAIAuthProvider({ children }) {
         window.dispatchEvent(new PopStateEvent('popstate'));
       }}
     >
-      {children}
+      <TokenBridge>{children}</TokenBridge>
     </Auth0Provider>
   );
 }

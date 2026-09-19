@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { connect } from './ws';
-import { signOut } from './auth';
+import { startLogout, useAuth0 } from './auth0';
 import Topbar from './components/Topbar';
 import Sidebar from './components/Sidebar';
 import Timeline from './components/Timeline';
@@ -11,6 +11,7 @@ import CreateAgent from './components/CreateAgent';
 const REGION = import.meta.env.VITE_REGION || 'us-west-2';
 
 export default function App() {
+  const { logout } = useAuth0();
   const [agents, setAgents] = useState([]);
   const [threads, setThreads] = useState([]);
   const [threadId, setThreadId] = useState(null);
@@ -207,7 +208,7 @@ export default function App() {
     <div className="app">
       <Topbar
         region={REGION} spend={spend} budget={budget} wsStatus={wsStatus}
-        onSignOut={signOut}
+        onSignOut={() => startLogout(logout)}
         onToggleSidebar={() => setNavOpen((o) => !o)}
         onTogglePanel={() => setPanelOpen((o) => !o)}
       />

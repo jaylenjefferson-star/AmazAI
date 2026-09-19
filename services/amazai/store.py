@@ -1,6 +1,6 @@
 """DynamoDB access layer.
 
-Every read and write filters on `ownerId`. The Cognito JWT proves who you are;
+Every read and write filters on `ownerId`. The Auth0 access token proves who you are;
 this proves the row is yours. Today there is exactly one owner, which is
 precisely why the check is cheap to add now and painful to retrofit later
 (see the multi-user seam in docs/architecture/03-data-model.md).

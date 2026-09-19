@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # One-command deploy for AmazAI.
 #
-# Run this on YOUR machine with YOUR AWS credentials. Do not run it anywhere
-# you would not store an admin credential.
+# Run this with a short-lived AWS role/session. Do not create long-lived keys
+# merely to deploy AmazAI.
 #
 #   ./scripts/deploy.sh            full deploy
 #   ./scripts/deploy.sh --check    verify prerequisites and stop
@@ -12,6 +12,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/_python.sh
 . "$ROOT/scripts/_python.sh"
 REGION="${AWS_REGION:-us-west-2}"
+# Make the CDK app, the bootstrap command, and every AWS SDK call resolve the
+# same region even if a shell inherited CDK_DEFAULT_REGION from another repo.
+export AWS_REGION="$REGION"
+export CDK_DEFAULT_REGION="$REGION"
 CHECK_ONLY="${1:-}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -116,35 +120,51 @@ npm install --silent
 npx cdk bootstrap "aws://$ACCOUNT/$REGION" 2>&1 | tail -2
 npx cdk deploy --require-approval any-change --outputs-file "$ROOT/.cdk-outputs.json"
 
-# ----------------------------------------------------------------- wire up
+# ----------------------------------------------------------------- outputs
 step "Reading stack outputs"
 eval "$("$PY" - "$ROOT/.cdk-outputs.json" <<'PY'
 import json, sys
 out = json.load(open(sys.argv[1]))["AmazaiStack"]
 for key, var in [("ApiUrl","API_URL"), ("WsUrl","WS_URL"),
-                 ("UserPoolId","USER_POOL_ID"),
-                 ("UserPoolClientId","USER_POOL_CLIENT_ID"),
-                 ("ConsoleUrl","CONSOLE_URL")]:
+                 ("Auth0Domain","AUTH0_DOMAIN"),
+                 ("Auth0Audience","AUTH0_AUDIENCE")]:
     val = out.get(key + "Output") or out.get(key, "")
     print(f'{var}="{val}"')
 PY
 )"
 ok "API      $API_URL"
-ok "Console  $CONSOLE_URL"
+ok "Auth0    $AUTH0_DOMAIN"
 
-step "Writing web/.env"
+step "Writing backend endpoint values"
+AUTH0_CLIENT_ID="${AMAZAI_AUTH0_CLIENT_ID:-}"
+if [ -z "$AUTH0_CLIENT_ID" ] && [ -f "$ROOT/web/.env" ]; then
+  AUTH0_CLIENT_ID="$(sed -n 's/^VITE_AUTH0_CLIENT_ID=//p' "$ROOT/web/.env" | head -1)"
+fi
+if [ -z "$AUTH0_CLIENT_ID" ]; then
+  bad "AMAZAI_AUTH0_CLIENT_ID is required to preserve the Auth0 SPA setup"
+  exit 1
+fi
 cat > "$ROOT/web/.env" <<ENV
 VITE_API_URL=$API_URL
 VITE_WS_URL=$WS_URL
-VITE_USER_POOL_ID=$USER_POOL_ID
-VITE_USER_POOL_CLIENT_ID=$USER_POOL_CLIENT_ID
+VITE_AUTH0_DOMAIN=$AUTH0_DOMAIN
+VITE_AUTH0_AUDIENCE=$AUTH0_AUDIENCE
+VITE_AUTH0_CLIENT_ID=$AUTH0_CLIENT_ID
 ENV
-ok "web/.env written from the stack outputs"
+ok "web/.env has backend endpoint values"
 
-step "Rebuilding the console against the real endpoints and redeploying"
-(cd "$ROOT/web" && npm run build)
-npx cdk deploy --require-approval never --outputs-file "$ROOT/.cdk-outputs.json" >/dev/null
-ok "console deployed"
+cat <<'AMPLIFY'
+
+The web console is hosted by Amplify, not this CDK stack. Add these safe public
+variables in Amplify Hosting and redeploy the current branch:
+  VITE_API_URL
+  VITE_WS_URL
+  VITE_AUTH0_DOMAIN
+  VITE_AUTH0_AUDIENCE
+
+Keep VITE_AUTH0_CLIENT_ID as the existing Amplify variable. Never add a client
+secret, Management API token, AWS credential, or connector secret there.
+AMPLIFY
 
 # ---------------------------------------------------------------- next steps
 OWNER_EMAIL="${AMAZAI_OWNER_EMAIL:-jaylen.jefferson@amazflow.com}"
@@ -154,28 +174,15 @@ $(bold "Deployed.")
 
 Two things left, both needing your input:
 
-  1. Create your account and set a password:
+  1. In Auth0, create the API identifier $AUTH0_AUDIENCE and add it as the
+     audience in the AmazAI SPA configuration.
 
-       aws cognito-idp admin-create-user \\
-         --user-pool-id $USER_POOL_ID \\
-         --username $OWNER_EMAIL --region $REGION
+  2. Sign in to https://amazai.co once. Auth0's subject is the owner ID.
 
-       aws cognito-idp admin-set-user-password \\
-         --user-pool-id $USER_POOL_ID \\
-         --username $OWNER_EMAIL --password '<a strong password>' \\
-         --permanent --region $REGION
+  3. Create the first agent seat:
 
-     Then find your Cognito sub -- the provisioner needs it as OWNER_ID:
+       OWNER_ID=<your Auth0 sub> $PY scripts/provision_agents.py
 
-       aws cognito-idp admin-get-user --user-pool-id $USER_POOL_ID \\
-         --username $OWNER_EMAIL --region $REGION \\
-         --query 'UserAttributes[?Name==\`sub\`].Value' --output text
-
-  2. Create the agent seats:
-
-       OWNER_ID=<the sub from above> $PY scripts/provision_agents.py
-
-Then open: $CONSOLE_URL
-You will be asked to enrol an authenticator app on first sign-in.
+  4. Add the emitted API/WebSocket values to Amplify and redeploy the web app.
 
 NEXT

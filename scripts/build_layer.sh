@@ -28,7 +28,7 @@ mkdir -p "$TARGET"
   --implementation cp \
   --python-version 3.12 \
   --only-binary=:all: \
-  boto3 botocore
+  boto3 botocore 'pyjwt[crypto]'
 
 # Trim what Lambda does not need, to stay well under the layer size limit.
 find "$TARGET" -type d -name '__pycache__' -prune -exec rm -rf {} +

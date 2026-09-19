@@ -1,14 +1,14 @@
-import { idToken } from './auth';
+import { accessToken } from './auth0';
 import { DEMO, demoApi } from './demo';
 
 const BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, '') ?? '';
 
 async function call(method, path, body, extraHeaders) {
-  const token = await idToken();
+  const token = await accessToken();
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
-      authorization: token, 'content-type': 'application/json', ...extraHeaders,
+      authorization: `Bearer ${token}`, 'content-type': 'application/json', ...extraHeaders,
     },
     body: body ? JSON.stringify(body) : undefined,
   });

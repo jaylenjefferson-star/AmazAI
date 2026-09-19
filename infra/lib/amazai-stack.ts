@@ -1,13 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigwv2auth from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as apigwv2int from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
-import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
-import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
@@ -17,7 +13,6 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 
 export interface SeatConfig {
   key: string;
@@ -36,6 +31,11 @@ export interface SeatConfig {
 export interface AmazaiStackProps extends cdk.StackProps {
   seats: SeatConfig[];
   ownerEmail: string;
+
+  /** Auth0 is the only application identity provider. These are public
+   * identifiers, not credentials; the SPA client id stays in Amplify. */
+  readonly auth0Domain: string;
+  readonly auth0Audience: string;
 
   /** Pipedream Connect project, e.g. proj_xxxxxxx. An identifier, not a
    *  credential -- it appears in every Connect URL. The OAuth client secret
@@ -63,37 +63,6 @@ export class AmazaiStack extends cdk.Stack {
       description: 'AmazAI: drive, evidence, and browser profile encryption',
       enableKeyRotation: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-
-    // ---------------------------------------------------------------------
-    // L0 · Identity — one login, self-signup off, TOTP MFA required
-    // ---------------------------------------------------------------------
-    const userPool = new cognito.UserPool(this, 'UserPool', {
-      userPoolName: 'amazai',
-      selfSignUpEnabled: false,
-      signInAliases: { email: true },
-      autoVerify: { email: true },
-      mfa: cognito.Mfa.REQUIRED,
-      mfaSecondFactor: { sms: false, otp: true },
-      passwordPolicy: {
-        minLength: 14,
-        requireLowercase: true,
-        requireUppercase: true,
-        requireDigits: true,
-        requireSymbols: true,
-      },
-      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-
-    const userPoolClient = userPool.addClient('Console', {
-      userPoolClientName: 'amazai-console',
-      generateSecret: false, // public client (SPA / desktop shell)
-      authFlows: { userSrp: true },
-      accessTokenValidity: cdk.Duration.hours(1),
-      idTokenValidity: cdk.Duration.hours(1),
-      refreshTokenValidity: cdk.Duration.days(30),
-      preventUserExistenceErrors: true,
     });
 
     // ---------------------------------------------------------------------
@@ -151,15 +120,6 @@ export class AmazaiStack extends cdk.Stack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-
-    const consoleBucket = new s3.Bucket(this, 'ConsoleBucket', {
-      bucketName: `amazai-console-${this.account}`,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      enforceSSL: true,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true, // console is a build artifact, safe to replace
     });
 
     // ---------------------------------------------------------------------
@@ -267,7 +227,8 @@ export class AmazaiStack extends cdk.Stack {
       DRIVE_BUCKET: driveBucket.bucketName,
       EVIDENCE_BUCKET: evidenceBucket.bucketName,
       KMS_KEY_ID: key.keyId,
-      USER_POOL_ID: userPool.userPoolId,
+      AUTH0_DOMAIN: props.auth0Domain,
+      AUTH0_AUDIENCE: props.auth0Audience,
       POWERTOOLS_SERVICE_NAME: 'amazai',
 
       // A Pipedream project id is an identifier, not a credential -- it
@@ -307,6 +268,30 @@ export class AmazaiStack extends cdk.Stack {
     const orchestratorFn = makeFn('OrchestratorFn', 'handlers.orchestrator.handler', cdk.Duration.minutes(15), 1024);
     const routineFn = makeFn('RoutineFn', 'handlers.routine.handler', cdk.Duration.minutes(15), 1024);
     const sweeperFn = makeFn('SweeperFn', 'handlers.sweeper.handler', cdk.Duration.minutes(5));
+
+    // WebSocket clients cannot set an Authorization header during the browser
+    // handshake. The $connect authorizer verifies the short-lived query token
+    // once and passes only the subject into the socket handler afterwards.
+    const wsAuthFn = new lambda.Function(this, 'WsAuthFn', {
+      functionName: 'amazai-ws-auth',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      architecture: lambda.Architecture.ARM_64,
+      code: servicesCode,
+      handler: 'handlers.ws_auth.handler',
+      layers: [boto3Layer],
+      timeout: cdk.Duration.seconds(10),
+      memorySize: 256,
+      environment: {
+        AUTH0_DOMAIN: props.auth0Domain,
+        AUTH0_AUDIENCE: props.auth0Audience,
+        POWERTOOLS_SERVICE_NAME: 'amazai',
+      },
+      logGroup: new logs.LogGroup(this, 'WsAuthFnLogs', {
+        logGroupName: '/aws/lambda/amazai-ws-auth',
+        retention: logs.RetentionDays.THREE_MONTHS,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    });
 
     const allFns = [apiFn, wsFn, orchestratorFn, routineFn, sweeperFn];
     for (const fn of allFns) {
@@ -357,25 +342,33 @@ export class AmazaiStack extends cdk.Stack {
     routineFn.grantInvoke(apiFn);
 
     // ---------------------------------------------------------------------
-    // L1 · HTTP API — Cognito JWT on every route
+    // L1 · HTTP API — Auth0 JWT on every route
     // ---------------------------------------------------------------------
     const httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
       apiName: 'amazai',
       corsPreflight: {
         allowHeaders: ['authorization', 'content-type'],
         allowMethods: [apigwv2.CorsHttpMethod.ANY],
-        allowOrigins: ['*'], // tighten to the console origin once DNS is settled
+        allowOrigins: [
+          'https://amazai.co',
+          'https://claude-modest-rubin-rtpea6.d2qtxrhp46u9pz.amplifyapp.com',
+          'http://localhost:4173',
+          'http://localhost:5173',
+        ],
         maxAge: cdk.Duration.hours(1),
       },
+    });
+
+    const auth0Issuer = `https://${props.auth0Domain.replace(/^https:\/\//, '').replace(/\/$/, '')}/`;
+    const httpAuthorizer = new apigwv2auth.HttpJwtAuthorizer('Auth0JwtAuth', auth0Issuer, {
+      jwtAudience: [props.auth0Audience],
     });
 
     httpApi.addRoutes({
       path: '/{proxy+}',
       methods: [apigwv2.HttpMethod.ANY],
       integration: new apigwv2int.HttpLambdaIntegration('ApiInt', apiFn),
-      authorizer: new apigwv2auth.HttpUserPoolAuthorizer('JwtAuth', userPool, {
-        userPoolClients: [userPoolClient],
-      }),
+      authorizer: httpAuthorizer,
     });
 
     // ---------------------------------------------------------------------
@@ -383,7 +376,12 @@ export class AmazaiStack extends cdk.Stack {
     // ---------------------------------------------------------------------
     const wsApi = new apigwv2.WebSocketApi(this, 'WsApi', {
       apiName: 'amazai-ws',
-      connectRouteOptions: { integration: new apigwv2int.WebSocketLambdaIntegration('WsConnect', wsFn) },
+      connectRouteOptions: {
+        integration: new apigwv2int.WebSocketLambdaIntegration('WsConnect', wsFn),
+        authorizer: new apigwv2auth.WebSocketLambdaAuthorizer('WsAuth', wsAuthFn, {
+          identitySource: ['route.request.querystring.token'],
+        }),
+      },
       disconnectRouteOptions: { integration: new apigwv2int.WebSocketLambdaIntegration('WsDisconnect', wsFn) },
       defaultRouteOptions: { integration: new apigwv2int.WebSocketLambdaIntegration('WsDefault', wsFn) },
     });
@@ -449,56 +447,20 @@ export class AmazaiStack extends cdk.Stack {
     sweeperFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
 
     // ---------------------------------------------------------------------
-    // L1 · Console delivery — SPA needs 403/404 -> index.html to survive a refresh
-    // ---------------------------------------------------------------------
-    const distribution = new cloudfront.Distribution(this, 'ConsoleDistribution', {
-      comment: 'AmazAI console',
-      defaultRootObject: 'index.html',
-      defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(consoleBucket),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-      },
-      errorResponses: [
-        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: '/index.html', ttl: cdk.Duration.minutes(5) },
-        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html', ttl: cdk.Duration.minutes(5) },
-      ],
-    });
-
-    // Deploys the built console when web/dist exists, and a placeholder page
-    // before the first `npm run build`. Either way a deploy succeeds, so the
-    // stack can be stood up before the front end is built.
-    const consoleDist = path.join(REPO_ROOT, 'web', 'dist');
-    const hasBuild = fs.existsSync(path.join(consoleDist, 'index.html'));
-
-    new s3deploy.BucketDeployment(this, 'ConsoleDeployment', {
-      sources: [
-        hasBuild
-          ? s3deploy.Source.asset(consoleDist)
-          : s3deploy.Source.data('index.html', PLACEHOLDER_HTML),
-      ],
-      destinationBucket: consoleBucket,
-      distribution,
-      distributionPaths: ['/*'],
-      prune: hasBuild,
-    });
-
-    // ---------------------------------------------------------------------
     // Outputs — everything provision_agents.py and web/.env need
     // ---------------------------------------------------------------------
     const out = (id: string, value: string, description: string) =>
       new cdk.CfnOutput(this, `${id}Output`, { value, description });
 
-    out('ConsoleUrl', `https://${distribution.distributionDomainName}`, 'Console URL');
     out('ApiUrl', httpApi.apiEndpoint, 'HTTP API base URL');
     out('WsUrl', wsStage.url, 'WebSocket URL');
-    out('UserPoolId', userPool.userPoolId, 'Cognito user pool ID');
-    out('UserPoolClientId', userPoolClient.userPoolClientId, 'Cognito app client ID');
+    out('Auth0Domain', props.auth0Domain, 'Auth0 issuer domain');
+    out('Auth0Audience', props.auth0Audience, 'Auth0 API audience');
     out('TableName', table.tableName, 'DynamoDB table');
     out('DriveBucket', driveBucket.bucketName, 'Workspace drive bucket');
     out('EvidenceBucket', evidenceBucket.bucketName, 'Evidence bucket');
     out('KmsKeyArn', key.keyArn, 'Customer-managed key');
-    out('OwnerEmail', props.ownerEmail, 'Account owner (create this Cognito user)');
+    out('OwnerEmail', props.ownerEmail, 'Private workspace owner email');
 
     for (const seat of props.seats) {
       out(`ExecRoleArn${pascal(seat.key)}`, executionRoles[seat.key]!.roleArn,
@@ -510,21 +472,3 @@ export class AmazaiStack extends cdk.Stack {
 function pascal(s: string): string {
   return s.replace(/(^|[-_])(\w)/g, (_m, _p1, c: string) => c.toUpperCase());
 }
-
-const PLACEHOLDER_HTML = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AmazAI</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { margin:0; min-height:100vh; display:grid; place-items:center;
-         font:16px/1.6 ui-sans-serif,system-ui,sans-serif; background:#0b0d10; color:#e6e8eb; }
-  main { max-width:32rem; padding:2rem; text-align:center; }
-  code { background:#1a1d22; padding:.15em .4em; border-radius:4px; font-size:.9em; }
-</style></head>
-<body><main>
-  <h1>AmazAI</h1>
-  <p>Control plane deployed. The console has not been built yet.</p>
-  <p><code>cd web &amp;&amp; npm run build &amp;&amp; cd ../infra &amp;&amp; npx cdk deploy</code></p>
-</main></body></html>
-`;

@@ -165,9 +165,9 @@ def main() -> int:
         return 1
 
     if not args.owner:
-        print("OWNER_ID is required (the Cognito `sub` of the account owner).")
-        print("Find it with: aws cognito-idp admin-get-user "
-              "--user-pool-id <id> --username <email>")
+        print("OWNER_ID is required (the Auth0 `sub` of the account owner).")
+        print("Sign in to AmazAI once, then read the User row from the amazai "
+              "DynamoDB table or copy the subject from the Auth0 user profile.")
         return 1
 
     if args.dry_run:

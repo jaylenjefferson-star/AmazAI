@@ -17,10 +17,16 @@ const app = new cdk.App();
 new AmazaiStack(app, 'AmazaiStack', {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: process.env.CDK_DEFAULT_REGION ?? seatsFile.region,
+    // AWS_REGION is what the deploy script and AWS CLI use. Prefer it over a
+    // stale CDK_DEFAULT_REGION inherited from another local project.
+    region: process.env.AWS_REGION ?? process.env.CDK_DEFAULT_REGION ?? seatsFile.region,
   },
   seats: seatsFile.seats,
   ownerEmail: process.env.AMAZAI_OWNER_EMAIL ?? 'jaylen.jefferson@amazflow.com',
+  // Public identifiers only. Auth0 client credentials stay out of CDK and
+  // Lambda; this stack verifies the tokens the SPA obtains through PKCE.
+  auth0Domain: process.env.AMAZAI_AUTH0_DOMAIN ?? 'dev-msijboy7a85k3chd.us.auth0.com',
+  auth0Audience: process.env.AMAZAI_AUTH0_AUDIENCE ?? 'https://api.amazai.co',
   pipedreamProjectId: process.env.PIPEDREAM_PROJECT_ID ?? 'proj_W7sA34l',
   // Left at development unless the deploy says otherwise, so an unconfigured
   // stack cannot reach real connected accounts.

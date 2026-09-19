@@ -21,9 +21,11 @@ CONNECTION_TTL_HOURS = 12
 
 
 def _owner(event) -> str:
-    claims = (((event.get("requestContext") or {}).get("authorizer") or {})
-              .get("jwt") or {}).get("claims") or {}
-    return claims.get("sub") or os.environ.get("OWNER_ID", "owner")
+    authorizer = ((event.get("requestContext") or {}).get("authorizer") or {})
+    # The $connect request authorizer has already verified the Auth0 access
+    # token. Later frames carry only the immutable principal it returned.
+    return (authorizer.get("principalId") or authorizer.get("sub")
+            or os.environ.get("OWNER_ID", "owner"))
 
 
 def handler(event, context):  # noqa: ARG001

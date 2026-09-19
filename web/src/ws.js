@@ -1,4 +1,4 @@
-import { idToken } from './auth';
+import { accessToken } from './auth0';
 import { DEMO, demoConnect } from './demo';
 
 const URL = import.meta.env.VITE_WS_URL;
@@ -19,7 +19,7 @@ export function connect(onEvent, onStatus) {
   async function open() {
     if (closed) return;
     try {
-      const token = await idToken();
+      const token = await accessToken();
       socket = new WebSocket(`${URL}?token=${encodeURIComponent(token)}`);
     } catch {
       return schedule();

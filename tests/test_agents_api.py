@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from amazai import keys as K
+from amazai import identity, keys as K
 from amazai.store import Store
 
 import handlers.api as api
@@ -53,6 +53,13 @@ def api_table(table, monkeypatch):
     # The handler builds `Store(_owner(event))` itself, so replace the name it
     # reaches for rather than the class — patching __init__ would recurse.
     monkeypatch.setattr(api, "Store", lambda owner_id: Store(owner_id, table=table))
+    # Route tests exercise the handler's ownership behavior; token crypto is
+    # covered independently in test_identity.py.
+    def principal_from_event(evt):
+        claims = (((evt.get("requestContext") or {}).get("authorizer") or {})
+                  .get("jwt") or {}).get("claims") or {}
+        return identity.Principal(user_id=claims.get("sub", "owner-a"))
+    monkeypatch.setattr(api.identity, "principal_from_event", principal_from_event)
     return table
 
 
