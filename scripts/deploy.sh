@@ -21,9 +21,28 @@ step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 step "Checking prerequisites"
 fail=0
 
+IN_CLOUDSHELL=0
+[ -n "${AWS_EXECUTION_ENV:-}" ] && [[ "${AWS_EXECUTION_ENV}" == *CloudShell* ]] && IN_CLOUDSHELL=1
+[ -d /home/cloudshell-user ] && IN_CLOUDSHELL=1
+[ "$IN_CLOUDSHELL" = 1 ] && ok "running in AWS CloudShell"
+
 for tool in aws node npm python3; do
   if command -v "$tool" >/dev/null 2>&1; then ok "$tool"; else bad "$tool not found"; fail=1; fi
 done
+
+# CloudShell gives 1 GB of persistent home. node_modules for the CDK app and
+# the console together exceed that, so both are installed under /tmp, which is
+# ephemeral but large. Nothing we need to keep lives there.
+if [ "$IN_CLOUDSHELL" = 1 ]; then
+  AVAIL_MB=$(df -Pm "$HOME" | awk 'NR==2 {print $4}')
+  if [ "${AVAIL_MB:-0}" -lt 300 ]; then
+    bad "only ${AVAIL_MB}MB free in \$HOME; run 'rm -rf ~/.npm ~/.cache' and retry"
+    fail=1
+  else
+    ok "disk: ${AVAIL_MB}MB free in \$HOME"
+  fi
+  export npm_config_cache=/tmp/.npm
+fi
 
 if ACCOUNT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)"; then
   ok "AWS credentials valid (account $ACCOUNT, region $REGION)"
@@ -44,8 +63,12 @@ then
   ok "seats.json has a modelId for every enabled seat"
 else
   bad "seats.json has enabled seats with modelId: null (decision D2)"
-  echo "      Resolve them for this account:"
-  echo "        aws bedrock list-inference-profiles --region $REGION"
+  echo
+  echo "      Resolve them from what this account actually offers:"
+  echo "        python3 scripts/resolve_models.py --region $REGION            # preview"
+  echo "        python3 scripts/resolve_models.py --region $REGION --write    # apply"
+  echo "        python3 scripts/resolve_models.py --region $REGION --write --best"
+  echo "            (--best uses the most capable model for every seat)"
   fail=1
 fi
 
@@ -62,12 +85,24 @@ step "Running tests"
 step "Building the boto3 layer"
 "$ROOT/scripts/build_layer.sh"
 
+link_modules_to_tmp() {
+  # CloudShell home is 1 GB; node_modules is the only thing that threatens it.
+  local dir="$1"
+  [ "$IN_CLOUDSHELL" = 1 ] || return 0
+  [ -L "$dir/node_modules" ] && return 0
+  rm -rf "$dir/node_modules"
+  mkdir -p "/tmp/amazai-modules/$(basename "$dir")"
+  ln -s "/tmp/amazai-modules/$(basename "$dir")" "$dir/node_modules"
+}
+
 step "Building the console"
+link_modules_to_tmp "$ROOT/web"
 (cd "$ROOT/web" && npm install --silent && npm run build)
 
 # ------------------------------------------------------------------ deploy
 step "Deploying infrastructure"
 cd "$ROOT/infra"
+link_modules_to_tmp "$ROOT/infra"
 npm install --silent
 npx cdk bootstrap "aws://$ACCOUNT/$REGION" 2>&1 | tail -2
 npx cdk deploy --require-approval any-change --outputs-file "$ROOT/.cdk-outputs.json"

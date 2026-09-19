@@ -41,7 +41,7 @@ that needs AWS credentials, which only the owner has.
 | 3 · Store, runs, approvals, evidence | ✅ tested against mocked DynamoDB |
 | 4 · Handlers (api/ws/orchestrator/routine/sweeper) | ✅ written, import clean |
 | 5 · Console (React) | ✅ `npm run build` clean |
-| 2 · Seat provisioning | ⛔ blocked on decision D2 |
+| 2 · Seat provisioning | ✅ D2 resolved by `resolve_models.py` at deploy time |
 
 ```bash
 python3 -m pytest                      # 186 passed
@@ -51,16 +51,26 @@ cd web   && npm install && npm run build
 
 ### To deploy
 
+The shortest safe path is **[AWS CloudShell](CLOUDSHELL.md)** — a terminal
+inside the AWS console, already authenticated by your browser session. No
+access keys, no local install, nothing pasted anywhere.
+
 ```bash
-./scripts/deploy.sh --check    # verify prerequisites, change nothing
-./scripts/deploy.sh            # test, build, deploy, wire up, print next steps
+git clone https://github.com/jaylenjefferson-star/AmazAI.git && cd AmazAI
+python3 scripts/resolve_models.py --write --best   # resolves decision D2
+./scripts/deploy.sh --check                        # read-only
+./scripts/deploy.sh
 ```
 
-Run it on your own machine with your own AWS credentials — not in a shared
-environment. `--check` is safe and read-only. The full runbook, if you would
-rather do it by hand, is in [BUILD_PLAN.md](BUILD_PLAN.md#5-deploy-runbook).
+Enable Bedrock model access first — a fresh account has the models switched
+off and the failure looks like a permissions bug. Details and failure modes:
+**[CLOUDSHELL.md](CLOUDSHELL.md)**.
 
-`scripts/provision_agents.py` deliberately refuses to run while any enabled
-seat has `modelId: null`. Resolve the real Bedrock inference-profile IDs with
-`aws bedrock list-inference-profiles` and write them into
-`scripts/seats.json`. See [open decisions](docs/architecture/15-open-decisions.md).
+Works the same on your own machine with your own credentials. The manual
+runbook is in [BUILD_PLAN.md](BUILD_PLAN.md#5-deploy-runbook).
+
+`scripts/provision_agents.py` refuses to run while any enabled seat has
+`modelId: null`. `scripts/resolve_models.py` fills them in by listing what
+Bedrock actually offers this account and picking the most capable match per
+seat — no identifier is ever guessed. The remaining open decisions are in
+[15-open-decisions.md](docs/architecture/15-open-decisions.md).
