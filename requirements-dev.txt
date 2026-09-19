@@ -1,0 +1,6 @@
+# Test-only. Lambda gets boto3 from the layer built by scripts/build_layer.sh.
+pytest>=8.0
+moto[dynamodb,s3]>=5.0
+boto3>=1.35
+cryptography>=42
+pyjwt[crypto]>=2.9

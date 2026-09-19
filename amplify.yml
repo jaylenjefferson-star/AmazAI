@@ -1,0 +1,24 @@
+# Amplify Hosting build spec.
+#
+# The console is a Vite SPA under web/, so appRoot points there and every
+# path below is relative to it. `npm ci` rather than `npm install`: the build
+# should fail on a stale lockfile instead of quietly resolving something the
+# local machine never saw.
+version: 1
+applications:
+  - appRoot: web
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: dist
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*

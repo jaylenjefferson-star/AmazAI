@@ -1,0 +1,220 @@
+/*
+ * Companion motion.
+ *
+ * Transforms and opacity only — those are composited, so twenty companions
+ * on a screen cost the GPU a little and the main thread nothing. Anything
+ * that would trigger layout or paint per frame (width, filter, box-shadow,
+ * stroke-dashoffset on a long path) is deliberately absent.
+ *
+ * Every animation is switched off under prefers-reduced-motion at the bottom
+ * of this file, where the states fall back to a static pose that still
+ * differs per state — a reduced-motion reader should still be able to tell
+ * thinking from blocked without reading the label, even though the label is
+ * always there.
+ */
+
+.cc { display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; }
+.cc-svg { display: block; overflow: visible; flex: 0 0 auto; }
+.cc-stage { transform-origin: 50px 62px; }
+
+.cc-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ------------------------------------------------------------------ idle */
+
+/* Float and breathe, on two different periods so they drift out of phase
+   and the loop never reads as a loop. */
+.cc-idle .cc-stage { animation: cc-float 4.2s ease-in-out infinite; }
+.cc-idle .cc-body  { animation: cc-breathe 3.1s ease-in-out infinite; transform-origin: 50px 56px; }
+.cc-idle .cc-core  { animation: cc-core-soft 3.1s ease-in-out infinite; }
+
+@keyframes cc-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  30%      { transform: translateY(-3px) rotate(-1.2deg); }
+  70%      { transform: translateY(2px) rotate(1deg); }
+}
+@keyframes cc-breathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.035); }
+}
+@keyframes cc-core-soft {
+  0%, 100% { opacity: .9; }
+  50%      { opacity: 1; }
+}
+
+/* ---------------------------------------------------------------- thinking */
+
+/* The body reorganizes slightly while three points find each other. */
+.cc-thinking .cc-stage { animation: cc-think-sway 2.6s ease-in-out infinite; }
+.cc-thinking .cc-core  { animation: cc-think-core 1.5s ease-in-out infinite; }
+.cc-thinking .cc-fold-a,
+.cc-thinking .cc-fold-b { animation: cc-refold 3s ease-in-out infinite; }
+
+.cc-thinking .cc-star   { animation: cc-star-in 1.8s ease-in-out infinite; }
+.cc-thinking .cc-star-2 { animation-delay: .25s; }
+.cc-thinking .cc-star-3 { animation-delay: .5s; }
+.cc-thinking .cc-link   { animation: cc-link-in 1.8s ease-in-out infinite; opacity: 0; }
+.cc-thinking .cc-link-2 { animation-delay: .3s; }
+
+@keyframes cc-think-sway {
+  0%, 100% { transform: rotate(-1.5deg); }
+  50%      { transform: rotate(1.5deg); }
+}
+@keyframes cc-think-core {
+  0%, 100% { transform: scale(1); opacity: .85; }
+  50%      { transform: scale(.86); opacity: 1; }
+}
+@keyframes cc-refold {
+  0%, 100% { opacity: .34; }
+  50%      { opacity: .12; }
+}
+@keyframes cc-star-in {
+  0%, 100% { opacity: .25; transform: scale(.7); }
+  45%      { opacity: 1; transform: scale(1); }
+}
+@keyframes cc-link-in {
+  0%, 100% { opacity: 0; }
+  50%      { opacity: .55; }
+}
+
+/* ---------------------------------------------------------------- working */
+
+/* Task chips go round and are set down one at a time. Purposeful, not
+   frantic: the period is slow enough to read each chip. */
+.cc-working .cc-stage { animation: cc-work-bob 1.5s ease-in-out infinite; }
+.cc-working .cc-orbit { transform-origin: 50px 50px; animation: cc-orbit 3.4s linear infinite; }
+.cc-working .cc-chip   { transform-origin: 50px 50px; animation: cc-chip-settle 3.4s ease-in-out infinite; }
+.cc-working .cc-chip-2 { animation-delay: -1.13s; }
+.cc-working .cc-chip-3 { animation-delay: -2.26s; }
+
+@keyframes cc-orbit { to { transform: rotate(360deg); } }
+@keyframes cc-work-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-2px); }
+}
+@keyframes cc-chip-settle {
+  0%      { transform: rotate(0deg) scale(.7); opacity: 0; }
+  12%     { opacity: 1; }
+  33%     { transform: rotate(120deg) scale(1); }
+  66%     { transform: rotate(240deg) scale(1); }
+  88%     { opacity: 1; }
+  100%    { transform: rotate(360deg) scale(.7); opacity: 0; }
+}
+
+/* --------------------------------------------------------------- approval */
+
+/* Holds the token up and waits. Warm, patient, not urgent — the urgency
+   lives in the approval card, which is where the decision is made. */
+.cc-approval .cc-stage { animation: cc-offer 2.4s ease-in-out infinite; }
+.cc-approval .cc-body  { animation: cc-warm 2.4s ease-in-out infinite; transform-origin: 50px 56px; }
+.cc-approval .cc-token { transform-origin: 75px 19px; animation: cc-token-lift 2.4s ease-in-out infinite; }
+
+@keyframes cc-offer {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50%      { transform: translateY(-2px) rotate(2deg); }
+}
+@keyframes cc-warm {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.03); }
+}
+@keyframes cc-token-lift {
+  0%, 100% { transform: translateY(1px) scale(.97); opacity: .8; }
+  50%      { transform: translateY(-2px) scale(1.04); opacity: 1; }
+}
+
+/* --------------------------------------------------------------- complete */
+
+/* Plays once and settles. A success that loops stops reading as an event. */
+.cc-complete .cc-stage { animation: cc-settle .7s cubic-bezier(.2, 1.4, .4, 1) 1; }
+.cc-complete .cc-pop   { transform-origin: 76px 25px; animation: cc-pop .7s cubic-bezier(.2, 1.5, .4, 1) 1 both; }
+.cc-complete .cc-ring  { transform-origin: 50px 50px; animation: cc-ring .9s ease-out 1 both; }
+
+@keyframes cc-settle {
+  0%   { transform: scale(.94); }
+  55%  { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+@keyframes cc-pop {
+  0%   { transform: scale(0) rotate(-40deg); opacity: 0; }
+  60%  { transform: scale(1.15) rotate(6deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+@keyframes cc-ring {
+  0%   { transform: scale(.55); opacity: .55; }
+  100% { transform: scale(1.12); opacity: 0; }
+}
+
+/* ---------------------------------------------------------------- blocked */
+
+/* Dim and stop. No flashing: an error that strobes is harder to read, not
+   more noticeable. */
+.cc-blocked .cc-stage { animation: cc-slump .5s ease-out 1 both; }
+.cc-blocked .cc-body,
+.cc-blocked .cc-core  { filter: saturate(.55); }
+.cc-blocked .cc-tangle {
+  stroke-dasharray: 90;
+  animation: cc-tangle 1.1s ease-out 1 both;
+}
+
+@keyframes cc-slump {
+  0%   { transform: translateY(-2px) rotate(0deg); }
+  100% { transform: translateY(2px) rotate(-3deg); }
+}
+@keyframes cc-tangle {
+  0%   { stroke-dashoffset: 90; opacity: 0; }
+  100% { stroke-dashoffset: 0; opacity: .85; }
+}
+
+/* ---------------------------------------------------------------- offline */
+
+.cc-offline .cc-svg   { opacity: .4; filter: grayscale(.85); }
+.cc-offline .cc-stage { transform: translateY(2px); }
+
+/* ----------------------------------------------------------------- labels */
+
+.cc-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--dim); white-space: nowrap;
+}
+.cc-dot, .cc-pip { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; background: currentColor; }
+
+.cc-tone-neutral { color: var(--faint); }
+.cc-tone-accent  { color: var(--accent); }
+.cc-tone-warn    { color: var(--warn); }
+.cc-tone-ok      { color: var(--ok); }
+.cc-tone-danger  { color: var(--danger); }
+.cc-tone-muted   { color: var(--track); }
+
+.cc-chip-inline { position: relative; display: inline-flex; }
+.cc-chip-inline .cc-pip {
+  position: absolute; right: -1px; bottom: -1px;
+  border: 2px solid var(--panel);
+  width: 9px; height: 9px; flex-basis: 9px;
+}
+
+/* ------------------------------------------------------- reduced motion */
+
+/*
+ * Not simply "animations off". Each state keeps a distinct static pose, so
+ * the difference between thinking and blocked is still visible to a reader
+ * who has asked the operating system for less movement — the label carries
+ * it, and the pose backs the label up.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .cc *, .cc *::before, .cc *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .cc-thinking .cc-star, .cc-thinking .cc-link { opacity: .7; }
+  .cc-thinking .cc-core  { transform: scale(.9); transform-origin: 50px 50px; }
+  .cc-working  .cc-chip  { opacity: 1; }
+  .cc-working  .cc-chip-2 { transform: rotate(120deg); transform-origin: 50px 50px; }
+  .cc-working  .cc-chip-3 { transform: rotate(240deg); transform-origin: 50px 50px; }
+  .cc-approval .cc-token { opacity: 1; }
+  .cc-complete .cc-pop   { opacity: 1; }
+  .cc-complete .cc-ring  { opacity: 0; }
+  .cc-blocked  .cc-tangle { stroke-dashoffset: 0; opacity: .85; }
+  .cc-blocked  .cc-stage { transform: translateY(2px) rotate(-3deg); }
+}

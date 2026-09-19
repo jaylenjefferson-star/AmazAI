@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AmazAI</title>
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="description" content="A private agent operator platform." />
+    <script>
+      // Before first paint: a dark-mode machine must not flash a white page.
+      try {
+        var m = localStorage.getItem('amazai.theme');
+        // Light is the default, so an unset preference is pinned to light
+        // rather than left to prefers-color-scheme.
+        if (m !== 'system') {
+          document.documentElement.setAttribute('data-theme',
+            m === 'dark' ? 'dark' : 'light');
+        }
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

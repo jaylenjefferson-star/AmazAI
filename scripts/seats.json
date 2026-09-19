@@ -1,0 +1,62 @@
+{
+  "_comment": "Model IDs are resolved only from the target AWS account. Enable a seat only after its identifier is present here.",
+  "region": "us-west-2",
+  "seats": [
+    {
+      "key": "eng",
+      "name": "Engineering",
+      "accent": "#4F86F7",
+      "role": "Repositories, tests, pull requests, application diagnostics.",
+      "modelId": "us.anthropic.claude-opus-5",
+      "modelNote": "default: Opus 5 (long-horizon agentic work)",
+      "maxTokens": 32000,
+      "effort": "high",
+      "tools": ["browser"],
+      "workspaceMode": "project",
+      "budget": { "perRunUsd": 2.0, "perMonthUsd": 40.0, "onCeiling": "hard_stop", "maxConcurrentRuns": 2, "maxToolCallsPerRun": 60 },
+      "enabled": true
+    },
+    {
+      "key": "ops",
+      "name": "Cloud Operations",
+      "accent": "#E8833A",
+      "role": "AWS investigations, logs, alarms, controlled deployments.",
+      "modelId": null,
+      "modelNote": "default: Opus 5 (production diagnosis; errors are expensive)",
+      "maxTokens": 32000,
+      "effort": "high",
+      "tools": ["browser"],
+      "workspaceMode": "ephemeral",
+      "budget": { "perRunUsd": 1.5, "perMonthUsd": 30.0, "onCeiling": "hard_stop", "maxConcurrentRuns": 1, "maxToolCallsPerRun": 60 },
+      "enabled": false
+    },
+    {
+      "key": "cos",
+      "name": "Chief of Staff",
+      "accent": "#8B5CF6",
+      "role": "Intake, prioritization, planning, daily briefings, delegation.",
+      "modelId": null,
+      "modelNote": "default: Sonnet 5 (summarization and routing at volume)",
+      "maxTokens": 16000,
+      "effort": "medium",
+      "tools": [],
+      "workspaceMode": "ephemeral",
+      "budget": { "perRunUsd": 0.75, "perMonthUsd": 25.0, "onCeiling": "hard_stop", "maxConcurrentRuns": 2, "maxToolCallsPerRun": 40 },
+      "enabled": false
+    },
+    {
+      "key": "research",
+      "name": "Research",
+      "accent": "#10B981",
+      "role": "Browser research, recurring monitoring, administrative workflows.",
+      "modelId": null,
+      "modelNote": "default: Sonnet 5 (browser work, monitoring)",
+      "maxTokens": 16000,
+      "effort": "medium",
+      "tools": ["browser"],
+      "workspaceMode": "ephemeral",
+      "budget": { "perRunUsd": 1.0, "perMonthUsd": 25.0, "onCeiling": "hard_stop", "maxConcurrentRuns": 1, "maxToolCallsPerRun": 50 },
+      "enabled": false
+    }
+  ]
+}
