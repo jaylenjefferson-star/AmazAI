@@ -195,6 +195,39 @@ class Pipedream:
             })
         return out
 
+    def apps(self, *, after: str | None = None, q: str | None = None,
+             limit: int = 48) -> dict:
+        """List Pipedream apps for the owner's connection picker.
+
+        App discovery is intentionally separate from AmazAI's callable
+        connector catalog: seeing an app does not grant an agent any action.
+        """
+        params: dict[str, str | int] = {
+            "limit": max(1, min(limit, 100)),
+            "sort_key": "name",
+            "sort_direction": "asc",
+        }
+        if after:
+            params["after"] = after
+        if q and q.strip():
+            params["q"] = q.strip()
+        url = f"{API_BASE}/connect/apps?" + urllib.parse.urlencode(params)
+        _, payload = self._request("GET", url, headers=self._headers(json_body=False))
+        return {
+            "apps": [{
+                "slug": row.get("name_slug"),
+                "name": row.get("name"),
+                "description": row.get("description") or "",
+                "icon": row.get("img_src"),
+                "authType": row.get("auth_type"),
+                "categories": [
+                    c.get("name") if isinstance(c, dict) else c
+                    for c in (row.get("categories") or [])
+                ],
+            } for row in payload.get("data", [])],
+            "pageInfo": payload.get("page_info") or {},
+        }
+
     # -- invocation ---------------------------------------------------------
 
     def proxy(self, *, external_user_id: str, account_id: str, target_url: str,

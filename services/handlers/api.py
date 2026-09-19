@@ -238,6 +238,15 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     if path == "/connectors/catalog" and method == "GET":
         return _resp(200, {"catalog": C.catalog_for_console()})
 
+    if path == "/connectors/apps" and method == "GET":
+        qs = event.get("queryStringParameters") or {}
+        try:
+            limit = int(qs.get("limit", "48"))
+        except (TypeError, ValueError):
+            return _resp(400, {"error": "invalid_request", "detail": "limit must be an integer"})
+        return _resp(200, _pipedream().apps(
+            after=qs.get("after"), q=qs.get("q"), limit=limit))
+
     if path == "/connectors" and method == "GET":
         return _resp(200, {"connectors": list(C.installed(store).values())})
 
