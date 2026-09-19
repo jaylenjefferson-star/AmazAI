@@ -30,6 +30,15 @@ prove what it did."**
 
 ## Status
 
-Architecture and build plan complete. No code yet. Three decisions are waiting
-on the owner before Phase 2 — see
-[open decisions](docs/architecture/15-open-decisions.md).
+**Phase 1 (infrastructure) is written and synthesizes clean** — 76 resources:
+DynamoDB + 2 GSIs, drive/evidence/console buckets, Cognito with TOTP MFA
+required, one prefix-scoped harness execution role per seat, five Lambdas, HTTP
+API with a JWT authorizer, WebSocket API, the sweeper schedule, and CloudFront.
+Handlers are stubs that return 501 — Phase 3 onward.
+
+Deploying needs AWS credentials, which only the owner has. See the runbook in
+[BUILD_PLAN.md](BUILD_PLAN.md#5-deploy-runbook).
+
+Three decisions are waiting on the owner before Phase 2 (seat provisioning) —
+see [open decisions](docs/architecture/15-open-decisions.md). `scripts/seats.json`
+carries `modelId: null` for every seat until D2 lands.
