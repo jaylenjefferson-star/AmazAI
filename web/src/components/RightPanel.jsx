@@ -1,5 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import CoordinationFeed from './CoordinationFeed';
+
+function Activity({ threadId, agents }) {
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!threadId) return;
+    api.coordination(threadId).then((r) => setItems(r.coordination || []))
+      .catch((e) => setError(e.message));
+  }, [threadId]);
+
+  if (error) return <div className="err"><span className="msg-text">{error}</span></div>;
+  return <CoordinationFeed items={items} agents={agents} />;
+}
 
 function Computer({ threadId, agent }) {
   const [lines, setLines] = useState([]);
@@ -50,6 +65,10 @@ function Computer({ threadId, agent }) {
 
   return (
     <>
+      <div style={{ fontSize: 11, color: 'var(--dim)', marginBottom: 12 }}>
+        {agent.name}&rsquo;s own microVM, on its own execution role and its own
+        S3 prefix — not a machine any other agent can read or write.
+      </div>
       <div className="kv" style={{ marginBottom: 12 }}>
         <span className="k">Mode</span><span className="v">{ws.mode || '—'}</span>
         <span className="k">Storage</span><span className="v">{usedMb} MB / 1 GB</span>
@@ -64,7 +83,7 @@ function Computer({ threadId, agent }) {
 
       <div className="term" ref={boxRef}>
         {lines.length === 0
-          ? 'Runs a real shell in the agent\'s microVM. No model, no tokens.\nTry: ls /mnt/data/workspace'
+          ? `Runs a real shell in ${agent.name}'s own microVM. No model, no tokens, no other agent's files.\nTry: ls /mnt/data/workspace`
           : lines.join('\n')}
       </div>
       <form className="term-input" onSubmit={run}>
@@ -189,15 +208,94 @@ function Access({ agent }) {
   );
 }
 
-const TABS = ['Computer', 'Memory', 'Access', 'Usage'];
+function Skills({ agent, onChange }) {
+  const [catalog, setCatalog] = useState([]);
+  const [selected, setSelected] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
-export default function RightPanel({ threadId, agent, onRefreshAgent, open }) {
+  useEffect(() => {
+    api.skills().then((r) => setCatalog(r.skills || [])).catch((e) => setError(e.message));
+  }, []);
+
+  const byId = Object.fromEntries(catalog.map((s) => [s.skillId, s]));
+  const assigned = agent.skillAssignments || [];
+  const assignedIds = new Set(assigned.map((a) => a.skillId));
+  const assignable = catalog.filter((s) => s.status === 'active' && !assignedIds.has(s.skillId));
+
+  async function assign() {
+    if (!selected) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.assignSkill(selected, agent.agentId, byId[selected].currentVersion);
+      setSelected('');
+      onChange();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function unassign(skillId) {
+    setBusy(true);
+    setError('');
+    try { await api.unassignSkill(skillId, agent.agentId); onChange(); }
+    catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <>
+      {error && <div className="err" style={{ marginBottom: 10 }}><span className="msg-text">{error}</span></div>}
+      <div style={{ fontSize: 11, color: 'var(--dim)', marginBottom: 14 }}>
+        Assignment, not blanket injection: a skill only enters this agent&rsquo;s
+        prompt once it is both active and assigned here, at the version shown.
+      </div>
+      {assigned.length === 0 && (
+        <div className="empty">Nothing assigned. This agent runs on its built-in tools alone.</div>
+      )}
+      {assigned.map((a) => {
+        const skill = byId[a.skillId];
+        const stale = skill && skill.status !== 'active';
+        return (
+          <div key={a.skillId} style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+              <strong style={{ flex: 1, fontSize: 13 }}>{skill?.name || a.skillId}</strong>
+              <button style={{ padding: '2px 6px', fontSize: 11 }} disabled={busy}
+                      onClick={() => unassign(a.skillId)}>✕</button>
+            </div>
+            <div style={{ fontSize: 11, color: stale ? 'var(--warn)' : 'var(--dim)' }}>
+              v{a.version} · {skill?.status || 'unknown'}
+              {stale && ' · not currently injected'}
+            </div>
+          </div>
+        );
+      })}
+      {assignable.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          <select value={selected} onChange={(e) => setSelected(e.target.value)} style={{ flex: 1 }}>
+            <option value="">Assign a skill…</option>
+            {assignable.map((s) => (
+              <option key={s.skillId} value={s.skillId}>{s.name} · v{s.currentVersion}</option>
+            ))}
+          </select>
+          <button disabled={!selected || busy} onClick={assign}>Assign</button>
+        </div>
+      )}
+    </>
+  );
+}
+
+const TABS = ['Computer', 'Memory', 'Skills', 'Access', 'Activity', 'Usage'];
+
+export default function RightPanel({ threadId, agent, agents, onRefreshAgent, open, onClose }) {
   const [tab, setTab] = useState('Computer');
-  const cls = `rightpanel ${open ? 'open' : ''}`;
+  const cls = `task-side ${open ? 'open' : ''}`;
   if (!agent) return <aside className={cls} />;
 
   return (
     <aside className={cls}>
+      <div className="task-side-head">
+        <strong>{agent.name}</strong>
+        {onClose && <button className="ghost sm" onClick={onClose} aria-label="Close">✕</button>}
+      </div>
       <div className="tabs">
         {TABS.map((t) => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>{t}</button>
@@ -206,7 +304,9 @@ export default function RightPanel({ threadId, agent, onRefreshAgent, open }) {
       <div className="tabbody">
         {tab === 'Computer' && <Computer threadId={threadId} agent={agent} />}
         {tab === 'Memory' && <Memory agent={agent} onChange={onRefreshAgent} />}
+        {tab === 'Skills' && <Skills agent={agent} onChange={onRefreshAgent} />}
         {tab === 'Access' && <Access agent={agent} />}
+        {tab === 'Activity' && <Activity threadId={threadId} agents={agents} />}
         {tab === 'Usage' && <Usage agent={agent} />}
       </div>
     </aside>

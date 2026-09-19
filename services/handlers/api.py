@@ -17,8 +17,8 @@ import traceback
 
 import boto3
 
-from amazai import (agentcore, agents as A, approvals, connectors as C,
-                    identity, keys as K, models, pipedream, runs)
+from amazai import (agentcore, agents as A, approvals, collab, connectors as C,
+                    identity, keys as K, memory, models, pipedream, runs, skills)
 from amazai.policy import Capability
 from amazai.states import RunState
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
@@ -129,6 +129,10 @@ def handler(event, context):  # noqa: ARG001
         return _resp(401, {"error": "unauthorized"})
     except A.ValidationError as exc:
         return _resp(400, {"error": "invalid_request", "detail": str(exc)})
+    except skills.ValidationError as exc:
+        return _resp(400, {"error": "invalid_request", "detail": str(exc)})
+    except memory.ValidationError as exc:
+        return _resp(400, {"error": "invalid_request", "detail": str(exc)})
     except A.Escalation as exc:
         return _resp(403, {"error": "forbidden", "detail": str(exc)})
     except (C.NotInstalled, C.NotGranted, pipedream.TargetNotAllowed) as exc:
@@ -212,6 +216,10 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         agent["grants"] = store.query(K.agent_pk(p[0]), sk_prefix="GRANT#")
         agent["audit"] = store.query(K.agent_pk(p[0]), sk_prefix="AUDIT#",
                                      limit=50, ascending=False)
+        # Raw assignment rows, not `skills.assigned_active_skills` -- the
+        # profile needs to show a skill pending approval or disabled too,
+        # not only what the prompt is currently allowed to see.
+        agent["skillAssignments"] = store.query(K.agent_pk(p[0]), sk_prefix="SKILLASSIGN#")
         return _resp(200, agent)
 
     if (p := _match(path, "/agents/{id}")) and method == "PATCH":
@@ -302,17 +310,118 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     # --- memory ------------------------------------------------------------
     if (p := _match(path, "/agents/{id}/memory")) and method == "POST":
-        mem_id = new_id("mem_")
-        return _resp(201, store.put({
-            "pk": K.agent_pk(p[0]), "sk": K.memory_sk(mem_id),
-            "entity": "Memory", "memId": mem_id,
-            "title": body.get("title", ""), "body": body.get("body", ""),
-            "source": "user", "pinned": bool(body.get("pinned", True)),
-            "usedCount": 0,
-        }))
+        return _resp(201, _write_memory(store, K.agent_pk(p[0]), body, scope="agent",
+                                        actor=_actor(event)))
 
     if (p := _match(path, "/agents/{id}/memory/{memId}")) and method == "DELETE":
         store.delete(K.agent_pk(p[0]), K.memory_sk(p[1]))
+        return _resp(204, {})
+
+    if (p := _match(path, "/agents/{id}/memory/{memId}/revoke")) and method == "POST":
+        return _resp(200, store.update(K.agent_pk(p[0]), K.memory_sk(p[1]), memory.revoke()))
+
+    # --- shared user memory --------------------------------------------
+    # Facts every seat should know (name, timezone, standing preferences),
+    # not scoped to one agent's namespace. See 16-grokbot-ux-alignment §4.
+    # This route is only ever reached with a human Actor (api.py sits behind
+    # Auth0; an agent has no bearer token), so a direct POST here always
+    # publishes -- an agent can only reach shared memory through
+    # `propose_shared_memory` -> the `memory.publish` approval below.
+    if path == "/memory" and method == "GET":
+        return _resp(200, {"memory": store.query(K.user_pk(store.owner_id), sk_prefix="MEM#", limit=100)})
+
+    if path == "/memory" and method == "POST":
+        return _resp(201, _write_memory(store, K.user_pk(store.owner_id), body,
+                                        scope="shared_user", actor=_actor(event)))
+
+    if (p := _match(path, "/memory/{memId}")) and method == "DELETE":
+        store.delete(K.user_pk(store.owner_id), K.memory_sk(p[0]))
+        return _resp(204, {})
+
+    if (p := _match(path, "/memory/{memId}/revoke")) and method == "POST":
+        # Excluded from the very next prompt: orchestrator._drive re-reads
+        # status on every run and memory.visible() drops anything not
+        # `published`, so there is nothing left to invalidate.
+        return _resp(200, store.update(K.user_pk(store.owner_id), K.memory_sk(p[0]), memory.revoke()))
+
+    # --- task-scoped memory ----------------------------------------------
+    # Visible only to a run that is actually part of this task -- see
+    # orchestrator._drive's `effective_task_id` query. Never crosses to a
+    # different task because a different task's run never queries this pk.
+    if (p := _match(path, "/tasks/{taskId}/memory")) and method == "GET":
+        return _resp(200, {"memory": store.query(K.task_pk(p[0]), sk_prefix="MEM#", limit=100)})
+
+    if (p := _match(path, "/tasks/{taskId}/memory")) and method == "POST":
+        body = {**body, "taskId": p[0]}
+        return _resp(201, _write_memory(store, K.task_pk(p[0]), body, scope="task",
+                                        actor=_actor(event)))
+
+    # --- skills --------------------------------------------------------
+    if path == "/skills" and method == "GET":
+        return _resp(200, {"skills": store.query_index("gsi1", "gsi1pk", "SKILLS", limit=200)})
+
+    if path == "/skills" and method == "POST":
+        # A person authoring a skill directly goes straight to active,
+        # version 1; only an agent's `propose_skill` call produces a
+        # `proposed` row awaiting this same approval gate agent creation
+        # uses. Written atomically -- META + V1 or neither.
+        return _resp(201, skills.create(store, body, created_by=_owner(event)))
+
+    if (p := _match(path, "/skills/{id}")) and method == "PATCH":
+        existing = store.get(K.skill_pk(p[0]), "META")
+        if body.get("status") == "active" and existing["status"] == "proposed":
+            return _resp(200, store.update(K.skill_pk(p[0]), "META", skills.activate(existing)))
+        changes = {k: v for k, v in body.items()
+                  if k in {"name", "description", "status", "owner"}}
+        if changes.get("status") not in (None, *skills.STATUSES):
+            return _resp(400, {"error": f"status must be one of {sorted(skills.STATUSES)}"})
+        if not changes:
+            return _resp(400, {"error": "no editable fields supplied"})
+        return _resp(200, store.update(K.skill_pk(p[0]), "META", changes))
+
+    # --- skill versions --------------------------------------------------
+    # Immutable once written. Only `tools`/`capabilities`/`approvalRequired`
+    # changing forces the human-approval step below; a body/description-only
+    # edit becomes current immediately -- see skills.version_needs_approval.
+    if (p := _match(path, "/skills/{id}/versions")) and method == "GET":
+        return _resp(200, {"versions": store.query(K.skill_pk(p[0]), sk_prefix="V#", limit=1000)})
+
+    if (p := _match(path, "/skills/{id}/versions")) and method == "POST":
+        skill_id = p[0]
+        latest = skills.latest_version(store, skill_id)
+        fields = skills.validate_skill({**body, "name": store.get(K.skill_pk(skill_id), "META")["name"]})
+        next_version = (latest["version"] + 1) if latest else 1
+        needs_approval = bool(latest) and skills.version_needs_approval(latest, fields)
+        row = skills.propose_version(fields, skill_id=skill_id, next_version=next_version,
+                                     created_by=_owner(event))
+        if not needs_approval:
+            return _resp(201, skills.apply_version(store, skill_id, row, approved_by=_owner(event)))
+        store.put(row)
+        return _resp(202, {**row, "status": "pending_approval"})
+
+    if (p := _match(path, "/skills/{id}/versions/{version}/approve")) and method == "POST":
+        skill_id, version = p[0], int(p[1])
+        pending = store.get(K.skill_pk(skill_id), K.skill_version_sk(version))
+        return _resp(200, skills.apply_version(store, skill_id, pending, approved_by=_owner(event)))
+
+    # --- skill assignment --------------------------------------------------
+    # Assignment, not blanket injection: an active skill an agent is not
+    # assigned to never enters that agent's prompt (orchestrator._drive uses
+    # skills.assigned_active_skills, not the full SKILLS listing).
+    if (p := _match(path, "/skills/{id}/assignments")) and method == "POST":
+        skill_id = p[0]
+        skill = store.get(K.skill_pk(skill_id), "META")
+        version = int(body.get("version") or skill["currentVersion"])
+        return _resp(201, skills.assign(store, skill_id=skill_id, agent_id=body["agentId"],
+                                        version=version, assigned_by=_owner(event)))
+
+    if (p := _match(path, "/skills/{id}/assignments/{agentId}")) and method == "DELETE":
+        skills.unassign(store, skill_id=p[0], agent_id=p[1])
+        return _resp(204, {})
+
+
+    if (p := _match(path, "/skills/{id}")) and method == "DELETE":
+        store.delete(K.skill_pk(p[0]), "META")
         return _resp(204, {})
 
     # --- threads -----------------------------------------------------------
@@ -321,6 +430,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     if path == "/threads" and method == "POST":
         thread_id = new_id("th_")
+        actor = _actor(event)
         return _resp(201, store.put({
             "pk": K.thread_pk(thread_id), "sk": "META",
             "entity": "Thread", "threadId": thread_id,
@@ -330,11 +440,22 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
             "agentIds": body.get("agentIds", []),
             "sessionId": K.session_id(thread_id),
             "lastActivity": now_iso(),
+            # A room is task-bound from creation: the human who opened it is
+            # its owner of record, and it starts "active" so the Rooms list
+            # never has to guess a status for a room with no runs yet.
+            "createdBy": actor.user_id,
+            "status": body.get("status", "active"),
         }))
 
     if (p := _match(path, "/threads/{id}")) and method == "GET":
         thread = store.get(K.thread_pk(p[0]), "META")
-        thread["messages"] = store.query(K.thread_pk(p[0]), sk_prefix="MSG#", limit=200)
+        # Agent-to-agent traffic (`AgentMessage`) is a coordination event, not
+        # a chat turn -- see /threads/{id}/coordination. Mixing it into
+        # `messages` would render it as an ordinary bubble in the room the
+        # owner reads, which is exactly the "looks like a shared DM" framing
+        # this route must not produce.
+        rows = store.query(K.thread_pk(p[0]), sk_prefix="MSG#", limit=200)
+        thread["messages"] = [r for r in rows if r.get("entity") != "AgentMessage"]
         return _resp(200, thread)
 
     if (p := _match(path, "/threads/{id}/messages")) and method == "POST":
@@ -342,6 +463,38 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     if (p := _match(path, "/threads/{id}/exec")) and method == "POST":
         return _exec(store, p[0], body)
+
+    # --- coordination (read-only) -------------------------------------
+    # The owner's view onto agent<->agent traffic bound to this thread:
+    # handoffs proposed on any run this thread has driven, plus the
+    # AgentMessage rows `collab.send` wrote here (room or task context --
+    # both land on this same thread pk; see collab._context_pk). Never a
+    # write path: sender/recipient are the only agents who may address one
+    # another here, and the owner is a reader, not a third participant.
+    if (p := _match(path, "/threads/{id}/coordination")) and method == "GET":
+        store.get(K.thread_pk(p[0]), "META")   # 404 if the thread is not ours
+        agent_messages = [r for r in store.query(K.thread_pk(p[0]), sk_prefix="MSG#", limit=200)
+                          if r.get("entity") == "AgentMessage"]
+        thread_runs = [r for r in store.query_index("gsi1", "gsi1pk", "RUNS", limit=500)
+                      if r.get("threadId") == p[0]]
+        handoffs = [(r, h) for r in thread_runs
+                   for h in store.query(r["pk"], sk_prefix="HOFF#", limit=200)]
+        items = [
+            *({"kind": "message", "at": m.get("at") or m.get("createdAt"),
+               "fromAgentId": m.get("senderAgentId"), "toAgentId": m.get("recipientAgentId"),
+               "status": "delivered", "priority": _priority_label(m),
+               "summary": m.get("text", "")[:200],
+               "taskId": m.get("taskId"), "collaborationContextId": m.get("collaborationContextId"),
+              } for m in agent_messages),
+            *({"kind": "handoff", "at": h.get("createdAt"),
+               "fromAgentId": h.get("fromAgentId"), "toAgentId": h.get("toAgentId"),
+               "status": h.get("status", "proposed"), "priority": None,
+               "summary": h.get("goal", ""), "taskId": r["runId"],
+               "collaborationContextId": None,
+              } for r, h in handoffs),
+        ]
+        items.sort(key=lambda i: i.get("at") or "")
+        return _resp(200, {"coordination": items})
 
     # --- runs --------------------------------------------------------------
     if (p := _match(path, "/runs/{id}")) and method == "GET":
@@ -361,6 +514,17 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         return _resp(202, runs.advance(store, run, RunState.CANCELLING))
 
     # --- approvals ---------------------------------------------------------
+    # Global, across every run -- what the Home inbox needs. The per-run
+    # route above stays the source of truth for one run's own approvals;
+    # this is a read-only index scan of the same rows, never a second
+    # decision path.
+    if path == "/approvals" and method == "GET":
+        qs = event.get("queryStringParameters") or {}
+        wanted = qs.get("status", approvals.PENDING)
+        rows = store.query_index("gsi1", "gsi1pk", "APPROVALS", limit=500)
+        matched = [a for a in rows if a.get("status") == wanted] if wanted else rows
+        return _resp(200, {"approvals": [approvals.to_card(a) for a in matched]})
+
     if (p := _match(path, "/approvals/{runId}/{apvId}")) and method == "POST":
         return _decide(store, p[0], p[1], body, _actor(event))
 
@@ -377,6 +541,27 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
                            "totalUsd": round(total, 4), "runs": rows})
 
     return _resp(404, {"error": "no such route", "path": path, "method": method})
+
+
+def _write_memory(store: Store, pk: str, body: dict, *, scope: str, actor: A.Actor) -> dict:
+    """Write one published memory row, tagged by scope and kind.
+
+    Every route that reaches this helper runs behind Auth0 (`api.py` never
+    sees an agent-originated request -- see `_actor`), so a `shared_user`
+    write here is always human-authored and always publishes immediately.
+    An agent can only reach `shared_user` through `propose_shared_memory` ->
+    the `memory.publish` approval in `_decide`.
+
+    `kind` supersedes the old bare `pinned` flag: `foundational` always
+    enters context (what `pinned: true` used to mean), `log` is dated
+    history, `note` is short-lived. A caller that still only sends `pinned`
+    keeps working exactly as before.
+    """
+    pinned = bool(body.get("pinned", True))
+    kind = body.get("kind") or ("foundational" if pinned else "note")
+    row = memory.plan_write({**body, "kind": kind}, pk, scope=scope,
+                            source="user", author=actor.user_id, status="published")
+    return store.put(row)
 
 
 def _create_agent(store: Store, body: dict, event: dict):
@@ -480,6 +665,18 @@ def _provision_harness(store: Store, agent: dict) -> dict:
     })
 
 
+def _priority_label(agent_message: dict) -> str:
+    """`collab.send`'s two outcomes for `priority: true`, in the words the
+    console must show -- see docs/architecture/17 §1: a priority request
+    only ever asks for an expedited wake, so a request that did not clear
+    the rate/concurrency/budget gate is still delivered, just not now."""
+    if agent_message.get("priorityGranted"):
+        return "Priority — recipient awakened"
+    if agent_message.get("priorityRequested"):
+        return "Deferred — delivered on next turn"
+    return "Deferred — delivered on next turn"
+
+
 def _post_message(store: Store, thread_id: str, body: dict):
     text = (body.get("text") or "").strip()
     if not text:
@@ -554,6 +751,18 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict,
             "createdAgentId": created["agentId"],
             "executionStatus": "created",
         })
+    if approve and decided["action"] == "skill.create":
+        created = _create_approved_skill(store, decided["arguments"], actor)
+        store.update(run_pk, K.approval_sk(approval_id), {
+            "createdSkillId": created["skillId"],
+            "executionStatus": "created",
+        })
+    if approve and decided["action"] == "memory.publish":
+        created = _create_approved_memory(store, decided["arguments"], actor)
+        store.update(run_pk, K.approval_sk(approval_id), {
+            "createdMemId": created["memId"],
+            "executionStatus": "created",
+        })
 
     verb = "approved" if approve else "denied"
     note = f'Your decision on "{decided["action"]}": {verb}.'
@@ -565,9 +774,42 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict,
     runs.advance(store, run, RunState.EXECUTING, pending=None)
     _invoke_orchestrator(run_id, store.owner_id, resume=True, resume_note=note)
     result = {"approval": approvals.to_card(decided), "resumed": True}
-    if created:
+    if created and decided["action"] == "agent.create":
         result["createdAgent"] = created
+    elif created and decided["action"] == "skill.create":
+        result["createdSkill"] = created
+    elif created and decided["action"] == "memory.publish":
+        result["createdMemory"] = created
     return _resp(200, result)
+
+
+def _create_approved_memory(store: Store, proposal: dict, actor: A.Actor) -> dict:
+    """Publish the exact approved shared-memory proposal.
+
+    `proposal` came from the approval's argument binding, not a fresh
+    payload -- the same substitution-gap closing `_create_approved_agent`
+    and `_create_approved_skill` already rely on. This is the only path by
+    which an agent-authored fact ever reaches `shared_user`.
+    """
+    row = memory.plan_write(proposal, K.user_pk(store.owner_id), scope="shared_user",
+                            source="agent", author=proposal.get("proposedBy", ""),
+                            status="published")
+    return store.put(row)
+
+
+def _create_approved_skill(store: Store, proposal: dict, actor: A.Actor) -> dict:
+    """Create the exact approved skill proposal, atomically (META + v1).
+
+    Mirrors `_create_approved_agent`: the proposal came from the approval's
+    argument binding, not a fresh payload, so an agent cannot widen what it
+    proposed between the request and the decision.
+    """
+    meta, version = skills.plan_create(proposal, created_by=actor.user_id,
+                                       proposed_by=proposal.get("proposedBy"))
+    meta["status"] = "active"
+    version["approvedBy"] = actor.user_id
+    written = store.transact_put([meta, version])
+    return written[0]
 
 
 def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict:

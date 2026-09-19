@@ -24,6 +24,7 @@ import Home from './screens/Home';
 import { Agents, Artifacts, Rooms, Routines } from './screens/Sections';
 import Settings from './screens/Settings';
 import Task from './screens/Task';
+import Room from './screens/Room';
 import Usage from './screens/Usage';
 import Gallery from './screens/Gallery';
 import Connectors from './screens/Connectors';
@@ -87,6 +88,7 @@ function Router() {
         <Route path="/agents/:agentId" element={<Task />} />
         <Route path="/connectors" element={<Connectors />} />
         <Route path="/rooms" element={<Rooms />} />
+        <Route path="/rooms/:roomId" element={<Room />} />
         <Route path="/routines" element={<Routines />} />
         <Route path="/artifacts" element={<Artifacts />} />
         <Route path="/settings" element={<Settings />} />

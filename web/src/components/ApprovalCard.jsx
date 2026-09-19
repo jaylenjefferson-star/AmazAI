@@ -8,6 +8,15 @@ function remaining(expiresAt) {
   return { text: `${m}:${String(s).padStart(2, '0')}`, ms };
 }
 
+const ACTION_LABELS = {
+  'agent.create': 'Create a new agent seat',
+  'memory.publish': 'Publish to shared memory',
+};
+
+function actionLabel(action) {
+  return ACTION_LABELS[action] || action;
+}
+
 /**
  * Every field here comes from the tool call's arguments, never from
  * model-authored prose. An injected model must not be able to write its own
@@ -78,7 +87,7 @@ export default function ApprovalCard({ approval, onDecide }) {
       )}
 
       <dl>
-        <dt>Action</dt><dd>{approval.action}</dd>
+        <dt>Action</dt><dd>{actionLabel(approval.action)}</dd>
         {Object.entries(approval.arguments || {}).map(([k, v]) => (
           <span key={k} style={{ display: 'contents' }}>
             <dt>{k}</dt>
