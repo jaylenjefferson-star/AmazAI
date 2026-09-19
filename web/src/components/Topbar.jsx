@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Logo from './Logo';
 import { applyMode, effectiveMode, nextMode, storedMode } from '../theme';
 
 const ICON = { light: '☀', dark: '☾', system: '◐' };
@@ -46,8 +47,7 @@ export default function Topbar({
       <button className="ghost sm nav-only" onClick={onToggleSidebar} aria-label="Toggle navigation">☰</button>
 
       <div className="brand">
-        <span className="mark" aria-hidden="true">A</span>
-        <span>AmazAI</span>
+        <Logo size={26} title="AmazAI" />
         <span className="env">{region}</span>
       </div>
 

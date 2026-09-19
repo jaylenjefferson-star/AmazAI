@@ -29,10 +29,10 @@
   --faint:     #8a909c;
 
   /* ---- signal ---- */
-  --accent:     #2f6fe4;
+  --accent:     #2b6bff;
   --accent-ink: #ffffff;
   --warn-ink:   #ffffff;
-  --accent-dim: #b9cdf5;
+  --accent-dim: #b6c9ff;
   --ok:         #16885f;
   --warn:       #a96a06;
   --danger:     #c8372c;
@@ -41,7 +41,7 @@
   --warn-edge:   rgba(169, 106, 6, .30);
   --danger-wash: rgba(200, 55, 44, .06);
   --danger-edge: rgba(200, 55, 44, .28);
-  --accent-wash: rgba(47, 111, 228, .09);
+  --accent-wash: rgba(43, 107, 255, .09);
 
   --hover:     rgba(16, 24, 40, .045);
   --scrim:     rgba(16, 24, 40, .28);
@@ -59,6 +59,15 @@
   --r-sm: 7px;
   --r:    10px;
   --r-lg: 14px;
+
+  /* The logo gradient, available to anything that should feel like the mark.
+     Used sparingly — it is the brand, not a decoration. */
+  --brand-1: #0ea5f0;
+  --brand-2: #2b6bff;
+  --brand-3: #8b2fe0;
+  --brand-4: #c026d3;
+  --brand-sweep: linear-gradient(115deg, var(--brand-1), var(--brand-2) 45%,
+                                 var(--brand-3) 78%, var(--brand-4));
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -247,14 +256,12 @@ input:focus, textarea:focus {
   box-shadow: var(--lift);
 }
 
-.brand { display: flex; align-items: baseline; gap: 8px; font-weight: 620; letter-spacing: -.01em; }
-.brand .mark {
-  display: grid; place-items: center;
-  width: 22px; height: 22px; border-radius: 6px;
-  background: linear-gradient(150deg, var(--accent), #8e6bff);
-  color: #fff; font-size: 12px; font-weight: 800;
-  align-self: center;
-}
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 620; letter-spacing: -.01em; }
+
+.logo { display: inline-flex; align-items: center; gap: 7px; }
+.logo-mark { display: block; flex: 0 0 auto; }
+.logo-word { display: block; overflow: visible; }
+.logo-amaz { fill: var(--text); }
 .brand .env {
   font: 11px/1 var(--mono);
   color: var(--dim);

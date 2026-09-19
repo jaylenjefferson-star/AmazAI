@@ -11,15 +11,23 @@
  */
 
 const KEY = 'amazai.theme';
-export const MODES = ['system', 'light', 'dark'];
+export const MODES = ['light', 'dark', 'system'];
+
+/** Light unless the viewer has chosen otherwise.
+ *
+ *  Deliberately not 'system': AmazAI is a light product, and a visitor
+ *  arriving on a dark-mode laptop should see the brand as designed rather
+ *  than a dark variant they never asked for. 'system' remains available,
+ *  it is just no longer the default. */
+export const DEFAULT_MODE = 'light';
 
 export function storedMode() {
   try {
     const v = localStorage.getItem(KEY);
-    return MODES.includes(v) ? v : 'system';
+    return MODES.includes(v) ? v : DEFAULT_MODE;
   } catch {
     // Private browsing, blocked site data: fall back rather than throw.
-    return 'system';
+    return DEFAULT_MODE;
   }
 }
 

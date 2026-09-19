@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import Logo from './Logo';
 import { signIn } from '../auth';
 
 export default function Login({ onDone }) {
@@ -32,9 +33,8 @@ export default function Login({ onDone }) {
     <div className="login">
       {!mfa ? (
         <form onSubmit={submit}>
-          <div className="brand">
-            <span className="mark" aria-hidden="true">A</span>
-            <span>AmazAI</span>
+          <div className="brand" style={{ justifyContent: 'center' }}>
+            <Logo size={34} title="AmazAI" />
           </div>
           <p>Sign in to your control plane.</p>
           {error && <div className="err"><span className="msg-text">{error}</span></div>}
@@ -48,9 +48,9 @@ export default function Login({ onDone }) {
         </form>
       ) : (
         <form onSubmit={submitCode}>
-          <div className="brand">
-            <span className="mark" aria-hidden="true">A</span>
-            <span>Verification</span>
+          <div className="brand" style={{ justifyContent: 'center' }}>
+            <Logo size={34} showText={false} title="AmazAI" />
+            <span style={{ fontWeight: 620 }}>Verification</span>
           </div>
           <p>Enter the 6-digit code from your authenticator app.</p>
           {error && <div className="err"><span className="msg-text">{error}</span></div>}

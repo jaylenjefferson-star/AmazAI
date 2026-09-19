@@ -4,6 +4,7 @@ import App from './App';
 import Login from './components/Login';
 import { isSignedIn, configured } from './auth';
 import { DEMO } from './demo';
+import Logo from './components/Logo';
 import './styles.css';
 
 function Root() {
@@ -19,8 +20,11 @@ function Root() {
   if (!DEMO && !configured) {
     return (
       <div className="login">
-        <div className="empty" style={{ maxWidth: 420 }}>
-          <span className="title">This console is not wired up yet</span>
+        <div className="empty" style={{ maxWidth: 440 }}>
+          <Logo size={40} title="AmazAI" />
+          <span className="title" style={{ marginTop: 6 }}>
+            This console is not wired up yet
+          </span>
           <span>
             It was built without the Cognito pool from the stack outputs, so
             there is nothing to sign in to.
