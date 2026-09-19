@@ -364,6 +364,15 @@ export class AmazaiStack extends cdk.Stack {
       jwtAudience: [props.auth0Audience],
     });
 
+    // A browser sends OPTIONS before its authenticated request. It cannot
+    // attach the bearer token to that CORS preflight, so OPTIONS must remain
+    // public while every operation that carries data stays behind Auth0.
+    httpApi.addRoutes({
+      path: '/{proxy+}',
+      methods: [apigwv2.HttpMethod.OPTIONS],
+      integration: new apigwv2int.HttpLambdaIntegration('OptionsInt', apiFn),
+    });
+
     httpApi.addRoutes({
       path: '/{proxy+}',
       methods: [apigwv2.HttpMethod.ANY],
