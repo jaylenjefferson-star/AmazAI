@@ -1,0 +1,116 @@
+"""Run record lifecycle: create, advance, pause, seal.
+
+Holds the persistence rule from docs/architecture/05-run-lifecycle.md:
+nothing irreversible happens until the intent to do it is durable.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+from amazai import keys as K
+from amazai.states import RunState, is_terminal, transition
+from amazai.store import Store, new_id, now_iso
+
+DEFAULT_DEADLINE_MINUTES = 15
+
+
+def create(store: Store, *, agent_id: str, thread_id: str, goal: str,
+           trigger: dict | None = None, deadline_minutes: int = DEFAULT_DEADLINE_MINUTES) -> dict:
+    run_id = new_id("run_")
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=deadline_minutes)
+
+    item = {
+        "pk": K.run_pk(run_id), "sk": "META",
+        "entity": "Run", "runId": run_id,
+        "gsi1pk": "RUNS", "gsi1sk": now_iso(),
+        "gsi2pk": K.run_state_gsi(RunState.QUEUED.value), "gsi2sk": now_iso(),
+        "agentId": agent_id, "threadId": thread_id,
+        "sessionId": K.session_id(thread_id),
+        "goal": goal,
+        "trigger": trigger or {"type": "user"},
+        "state": RunState.QUEUED.value,
+        "plan": [], "toolPaths": [],
+        "cursor": {"turn": 0, "lastEventSeq": 0},
+        "pending": None,
+        "attempt": 0, "toolErrorCount": 0, "toolCallCount": 0,
+        "consecutiveToolErrors": 0,
+        "heartbeatAt": now_iso(),
+        "deadlineAt": deadline.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "costUsd": 0.0,
+        "evidenceKey": None,
+        "startedAt": now_iso(), "endedAt": None,
+    }
+    return store.put(item, unique=True)
+
+
+def advance(store: Store, run: dict, to: RunState, **changes) -> dict:
+    """Move a run to a new state, validating the transition first.
+
+    The conditional write on the current state means two workers racing on the
+    same run cannot both win; the loser re-reads.
+    """
+    frm = RunState(run["state"])
+    transition(frm, to)
+
+    changes = dict(changes)
+    changes["state"] = to.value
+    changes["gsi2pk"] = K.run_state_gsi(to.value)
+    changes["gsi2sk"] = now_iso()
+    changes["heartbeatAt"] = now_iso()
+    if is_terminal(to) and not run.get("endedAt"):
+        changes["endedAt"] = now_iso()
+
+    return store.update(run["pk"], "META", changes, expect={"state": frm.value})
+
+
+def heartbeat(store: Store, run: dict) -> dict:
+    return store.update(run["pk"], "META",
+                        {"heartbeatAt": now_iso(), "gsi2sk": now_iso()})
+
+
+def record_event(store: Store, run: dict, seq: int, kind: str, **payload) -> dict:
+    return store.put({
+        "pk": run["pk"], "sk": K.run_event_sk(seq),
+        "entity": "RunEvent", "seq": seq, "kind": kind,
+        "at": now_iso(), **payload,
+    })
+
+
+def pause_for_approval(store: Store, run: dict, approval: dict) -> dict:
+    """Park the run on a human decision.
+
+    Nothing is held open while paused: no task token, no waiting execution, no
+    billed compute. The entire resumable state is this row plus the session ID.
+    """
+    return advance(store, run, RunState.AWAITING_APPROVAL, pending={
+        "kind": "approval",
+        "approvalId": approval["approvalId"],
+        "toolUseId": approval.get("toolUseId"),
+    })
+
+
+def is_cancelled(store: Store, run: dict) -> bool:
+    """Re-read the cancel flag between stream events and tool calls."""
+    fresh = store.try_get(run["pk"], "META")
+    if not fresh:
+        return False
+    return fresh["state"] in (RunState.CANCELLING.value, RunState.CANCELLED.value)
+
+
+def deadline_passed(run: dict, *, now: datetime | None = None) -> bool:
+    deadline = run.get("deadlineAt")
+    if not deadline:
+        return False
+    now = now or datetime.now(timezone.utc)
+    dt = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+    return now >= dt
+
+
+def heartbeat_stale(run: dict, *, minutes: int = 10, now: datetime | None = None) -> bool:
+    hb = run.get("heartbeatAt")
+    if not hb:
+        return True
+    now = now or datetime.now(timezone.utc)
+    dt = datetime.fromisoformat(hb.replace("Z", "+00:00"))
+    return (now - dt) > timedelta(minutes=minutes)
