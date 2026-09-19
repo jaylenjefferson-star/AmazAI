@@ -9,9 +9,12 @@
  * `DEMO_DATA` is exported so screens can label themselves honestly.
  */
 
-export const DEMO_DATA = true;
+export const DEMO_DATA = import.meta.env.DEV
+  && typeof location !== 'undefined'
+  && new URLSearchParams(location.search).has('demo');
 
 export function fixtureAgents() {
+  if (!DEMO_DATA) return [];
   return [
     { agentId: 'eng', name: 'Ansel', role: 'Engineering', archetype: 'paper',
       color: '#2b6bff', state: 'working', budget: { perMonthUsd: 40 } },
@@ -27,6 +30,7 @@ export function fixtureAgents() {
 }
 
 export function fixtureInbox() {
+  if (!DEMO_DATA) return [];
   return [
     { id: 'apv-1', kind: 'approval', agent: 'Pell', archetype: 'pebble', color: '#12a594',
       title: 'Invalidate the CloudFront cache',
@@ -37,6 +41,7 @@ export function fixtureInbox() {
 }
 
 export function fixtureRooms() {
+  if (!DEMO_DATA) return [];
   return [
     { id: 'rm-launch', name: 'Launch room', members: ['eng', 'ops', 'cos'],
       last: 'Ansel handed the rollout watch to Pell.' },
@@ -46,6 +51,7 @@ export function fixtureRooms() {
 }
 
 export function fixtureRoutines() {
+  if (!DEMO_DATA) return [];
   return [
     { id: 'rt-brief', name: 'Morning brief', cadence: 'Weekdays · 07:30',
       agent: 'cos', state: 'idle', next: 'Tomorrow 07:30' },
@@ -55,6 +61,7 @@ export function fixtureRoutines() {
 }
 
 export function fixtureArtifacts() {
+  if (!DEMO_DATA) return [];
   return [
     { id: 'ar-1', name: 'rollout-evidence-9a22.zip', kind: 'Evidence bundle',
       agent: 'Ansel', at: '2 hours ago', sealed: true },

@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import Companion from '../characters/Companion';
 import { useAuth0 } from '../auth0';
 import { fixtureAgents, fixtureInbox } from '../fixtures';
+import { useAgents } from '../hooks/useAgents';
 
 /**
  * Home is an inbox, not a dashboard.
@@ -14,7 +15,7 @@ export default function Home() {
   const { user } = useAuth0();
   const first = (user?.given_name || user?.name || '').split(' ')[0];
   const inbox = fixtureInbox();
-  const agents = fixtureAgents();
+  const { agents, loading, error } = useAgents();
   const needsYou = inbox.filter((i) => i.kind === 'approval');
 
   return (
@@ -51,6 +52,11 @@ export default function Home() {
 
       <section className="card-list">
         <h2 className="section-title">Your cast</h2>
+        {loading && <div className="empty">Loading your companions…</div>}
+        {error && <div className="empty"><strong>Control plane unavailable</strong><span>{error}</span></div>}
+        {!loading && !error && agents.length === 0 && (
+          <div className="empty"><strong>No companions yet</strong><span>Create your first one in Agents. Nothing is pre-filled or simulated.</span></div>
+        )}
         <div className="cast-grid">
           {agents.map((a) => (
             <Link key={a.agentId} to={`/agents/${a.agentId}`} className="cast-card">

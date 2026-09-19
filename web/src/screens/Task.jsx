@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import Companion, { STATES } from '../characters/Companion';
 import Timeline from '../components/Timeline';
-import { fixtureAgents } from '../fixtures';
+import { api } from '../api';
+import { presentAgent, useAgents } from '../hooks/useAgents';
 
 /**
  * One companion, one thread.
@@ -15,45 +16,39 @@ import { fixtureAgents } from '../fixtures';
  */
 export default function Task() {
   const { agentId } = useParams();
-  const agents = fixtureAgents();
-  const agent = agents.find((a) => a.agentId === agentId) || agents[0];
+  const { agents } = useAgents();
+  const [agent, setAgent] = useState(null);
+  const [items, setItems] = useState([]);
   const [draft, setDraft] = useState('');
+  const [error, setError] = useState('');
 
-  const items = useMemo(() => ([
-    { type: 'message', role: 'user', author: 'you',
-      text: 'Build the console and push it to the CloudFront distribution. Tell me before anything touches production.' },
-    { type: 'message', role: 'assistant', author: agent.name,
-      text: 'Building web/ now. I will need approval before the invalidation, since that is user-visible immediately.' },
-    { type: 'tool', name: 'shell', summary: 'npm run build  →  built in 4.21s' },
-    { type: 'handoff', handoff: {
-      handoffId: 'hoff_31ab', fromAgentId: agent.agentId, toAgentId: 'ops',
-      status: 'proposed',
-      goal: 'Confirm the distribution is serving the new bundle once the invalidation clears.',
-      constraints: ['Read-only: no stack changes', 'Stop and report if the 5xx rate moves'],
-      grantsOffered: [],
-    } },
-    { type: 'message', role: 'assistant', author: agent.name,
-      text: 'Build is clean and the bundle is on S3. The last step is an invalidation — immediate and irreversible, so it needs you.' },
-    { type: 'approval', approval: {
-      approvalId: 'apv-7c41', runId: 'run-9a22', agentId: agent.agentId,
-      action: 'cloudfront.create_invalidation',
-      risk: 'high', reversible: false, status: 'pending',
-      requestedAt: new Date(Date.now() - 90_000).toISOString(),
-      expiresAt: new Date(Date.now() + 8 * 60_000).toISOString(),
-      arguments: { distributionId: 'EXAMPLE00000001', paths: '/*' },
-      target: { account: '123456789012', env: 'production', region: 'us-west-2' },
-      why: 'The console bundle hash changed, so cached index.html would keep serving the previous build.',
-      requestedBy: { agentId: agent.agentId },
-    } },
-  ]), [agent]);
+  useEffect(() => {
+    api.agent(agentId).then((a) => setAgent(presentAgent(a))).catch((e) => setError(e.message));
+    api.thread(`dm-${agentId}`).then((thread) => {
+      setItems((thread.messages || []).map((message) => ({
+        type: 'message', role: message.role, author: message.author, text: message.text,
+      })));
+    }).catch((e) => {
+      // A newly provisioned agent has no conversation yet; a missing thread
+      // is not a substitute for demo conversation history.
+      if (!String(e.message).includes('404')) setError(e.message);
+    });
+  }, [agentId]);
 
-  const [approvals, setApprovals] = useState(
-    () => items.filter((i) => i.type === 'approval').map((i) => i.approval));
-
-  function decide(approval, approve, note) {
-    setApprovals((a) => a.map((x) => x.approvalId === approval.approvalId
-      ? { ...x, status: approve ? 'approved' : 'denied', note } : x));
+  async function send(e) {
+    e.preventDefault();
+    const text = draft.trim();
+    if (!text || !agent) return;
+    setDraft('');
+    setItems((current) => [...current, { type: 'message', role: 'user', author: 'you', text }]);
+    try {
+      await api.send(`dm-${agentId}`, text);
+    } catch (err) {
+      setError(err.message);
+    }
   }
+
+  if (!agent) return <div className="page"><div className="empty">{error || 'Loading companion…'}</div></div>;
 
   return (
     <div className="task">
@@ -65,20 +60,21 @@ export default function Task() {
           <strong>{agent.name}</strong>
           <span>{agent.role}</span>
         </div>
-        <span className={`state-chip cc-tone-${STATES[agent.state].tone}`}>
+        <span className={`state-chip cc-tone-${(STATES[agent.state] || STATES.idle).tone}`}>
           <i className="cc-dot" aria-hidden="true" />
-          {STATES[agent.state].label}
+          {(STATES[agent.state] || STATES.idle).label}
         </span>
       </header>
 
+      {error && <div className="empty"><strong>Message not sent</strong><span>{error}</span></div>}
       <Timeline items={items} streaming={null} agents={agents}
-                approvals={approvals} onDecide={decide} />
+                approvals={[]} onDecide={() => {}} />
 
-      <form className="composer" onSubmit={(e) => { e.preventDefault(); setDraft(''); }}>
+      <form className="composer" onSubmit={send}>
         <textarea value={draft} onChange={(e) => setDraft(e.target.value)}
                   placeholder={`Ask ${agent.name} for something…`}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); setDraft(''); }
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(e); }
                   }} />
         <div className="send">
           <button className="primary" disabled={!draft.trim()}>Send</button>

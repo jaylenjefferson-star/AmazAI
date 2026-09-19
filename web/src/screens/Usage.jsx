@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import Companion from '../characters/Companion';
 import { fixtureAgents } from '../fixtures';
+import { DEMO_DATA } from '../fixtures';
 
 const MICRO = 1_000_000;
 const usd = (micros) => `$${(micros / MICRO).toFixed(2)}`;
@@ -60,6 +61,20 @@ function demoSummary(agents) {
 }
 
 export default function Usage() {
+  if (!DEMO_DATA) {
+    return (
+      <div className="page">
+        <header className="page-head">
+          <div><h1>Usage</h1><p>Token and cost records from your live ledger.</p></div>
+          <span className="state-chip cc-tone-ok"><i className="cc-dot" aria-hidden="true" />Live</span>
+        </header>
+        <div className="empty">
+          <strong>No usage recorded yet</strong>
+          <span>Usage will appear here after a live agent completes a model call. AmazAI never substitutes projected or sample spend for real billing data.</span>
+        </div>
+      </div>
+    );
+  }
   const agents = fixtureAgents();
   const s = useMemo(() => demoSummary(agents), []);           // eslint-disable-line
   const pct = Math.min(100, (s.spentMicros / s.limitMicros) * 100);

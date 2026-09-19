@@ -458,7 +458,7 @@ def _provision_harness(store: Store, agent: dict) -> dict:
         agentId=agent["agentId"]) or None
     client = agentcore.AgentCore()
     harness_arn = client.create_harness(
-        name=f"amazai-{agent['agentId']}",
+        name=f"amazai_{agent['agentId']}",
         execution_role_arn=role_arn,
         tool_names=agent.get("allowedTools") or [],
     )

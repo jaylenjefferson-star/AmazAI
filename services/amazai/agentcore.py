@@ -126,48 +126,25 @@ class AgentCore:
                        tool_names: list[str]) -> str:
         """Create a harness and return its ARN.
 
-        The shape is BUILD_PLAN §0 verbatim. Two of its rules bite silently:
-        `shell` and `file_operations` are on by default and declaring them is
-        an error (gotcha 7), and every mount path must sit under /mnt
-        (gotcha 5). `harness_tools` handles the first.
+        The base harness intentionally has no optional tools or filesystem
+        mounts. Those features are enabled only once their current AgentCore
+        configuration shapes have been verified in this account.
         """
         kwargs: dict = {
-            "name": name,
-            "tools": harness_tools(tool_names),
-            "filesystemConfigurations": [
-                {"sessionStorage": {"mountPath": "/mnt/data"}}
-            ],
+            "harnessName": name.replace("-", "_"),
         }
         if execution_role_arn:
             kwargs["executionRoleArn"] = execution_role_arn
         resp = self._control.create_harness(**kwargs)
-        return resp.get("harnessArn") or resp["harness"]["harnessArn"]
+        return resp.get("harnessArn") or resp.get("arn") or resp["harness"]["harnessArn"]
 
     def get_harness(self, harness_arn: str) -> dict:
         return self._control.get_harness(harnessArn=harness_arn)
 
     def update_filesystem(self, harness_arn: str, mounts: list[dict]) -> dict:
-        """Merge-then-update the filesystem configuration.
-
-        UpdateHarness REPLACES the entire filesystemConfigurations list. Always
-        read first and merge, or a mount is silently dropped -- and with it a
-        workspace. This is gotcha #3 in BUILD_PLAN, and the reason this helper
-        exists rather than callers invoking update_harness directly.
-        """
-        current = self.get_harness(harness_arn)
-        existing = current.get("filesystemConfigurations", []) or []
-
-        by_path: dict[str, dict] = {}
-        for cfg in existing:
-            path = (cfg.get("sessionStorage") or {}).get("mountPath") or repr(cfg)
-            by_path[path] = cfg
-        for cfg in mounts:
-            path = (cfg.get("sessionStorage") or {}).get("mountPath") or repr(cfg)
-            by_path[path] = cfg
-
-        return self._control.update_harness(
-            harnessArn=harness_arn,
-            filesystemConfigurations=list(by_path.values()),
+        """Filesystem mounts are not enabled in this deployment."""
+        raise NotImplementedError(
+            "AgentCore filesystem mounting has not been configured for this account."
         )
 
 

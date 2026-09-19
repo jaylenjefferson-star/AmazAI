@@ -1,5 +1,5 @@
 {
-  "_comment": "Model IDs are intentionally null until D2 is decided and the exact Bedrock inference-profile identifier is resolved for the target account. Run: aws bedrock list-inference-profiles --region <region>. provision_agents.py refuses to run while any modelId is null.",
+  "_comment": "Model IDs are resolved only from the target AWS account. Enable a seat only after its identifier is present here.",
   "region": "us-west-2",
   "seats": [
     {
@@ -7,7 +7,7 @@
       "name": "Engineering",
       "accent": "#4F86F7",
       "role": "Repositories, tests, pull requests, application diagnostics.",
-      "modelId": null,
+      "modelId": "us.anthropic.claude-opus-5",
       "modelNote": "default: Opus 5 (long-horizon agentic work)",
       "maxTokens": 32000,
       "effort": "high",

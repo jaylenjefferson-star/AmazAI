@@ -1,9 +1,12 @@
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
 import Companion, { STATES } from '../characters/Companion';
 import { ARCHETYPES } from '../characters/archetypes';
 import {
   fixtureAgents, fixtureArtifacts, fixtureRooms, fixtureRoutines,
 } from '../fixtures';
+import { useAgents } from '../hooks/useAgents';
+import CreateAgent from '../components/CreateAgent';
 
 function Page({ title, sub, children, action }) {
   return (
@@ -21,11 +24,21 @@ function Page({ title, sub, children, action }) {
 }
 
 export function Agents() {
-  const agents = fixtureAgents();
+  const { agents, loading, error, reload } = useAgents();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [creating, setCreating] = useState(location.pathname === '/agents/new');
+  const close = () => { setCreating(false); navigate('/agents'); };
   return (
     <Page title="Agents" sub="Your cast. Each one has its own drive, budget and grants."
-          action={<Link className="btn-link primary" to="/agents/new">New companion</Link>}>
+          action={<button className="btn-link primary" onClick={() => setCreating(true)}>New companion</button>}>
+      {creating && <CreateAgent onClose={close} onCreated={() => { close(); reload(); }} />}
       <div className="row-list">
+        {loading && <div className="empty">Loading your companions…</div>}
+        {error && <div className="empty"><strong>Control plane unavailable</strong><span>{error}</span></div>}
+        {!loading && !error && agents.length === 0 && (
+          <div className="empty"><strong>Your cast is empty</strong><span>Create a companion when you are ready. Agents only appear here after the control plane creates them.</span></div>
+        )}
         {agents.map((a) => (
           <Link key={a.agentId} to={`/agents/${a.agentId}`} className="row-card">
             <Companion archetype={a.archetype} color={a.color} state={a.state}

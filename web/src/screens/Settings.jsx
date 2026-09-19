@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { applyMode, MODES, nextMode, storedMode } from '../theme';
 import { config, startLogout, useAuth0 } from '../auth0';
-import { DEMO_DATA } from '../fixtures';
 
 const LABEL = { light: 'Light', dark: 'Dark', system: 'Match system' };
 
@@ -57,14 +56,12 @@ export default function Settings() {
           <div>
             <strong>Data source</strong>
             <span>
-              {DEMO_DATA
-                ? 'Demo fixtures. No control plane is connected, so nothing here is real.'
-                : 'Live control plane.'}
+              Live AWS control plane. Empty sections mean no real records exist yet.
             </span>
           </div>
-          <span className={`state-chip ${DEMO_DATA ? 'cc-tone-warn' : 'cc-tone-ok'}`}>
+          <span className="state-chip cc-tone-ok">
             <i className="cc-dot" aria-hidden="true" />
-            {DEMO_DATA ? 'Demo' : 'Live'}
+            Live
           </span>
         </div>
         <div className="setting-row">

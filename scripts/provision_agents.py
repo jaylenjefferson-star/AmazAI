@@ -50,18 +50,15 @@ def validate(seats: list[dict]) -> list[str]:
 
 
 def ensure_harness(control, seat: dict, role_arn: str, region: str) -> str:
-    name = f"amazai-{seat['key']}"
-
-    # Shared with the API's create path, so a seat provisioned from the CLI
-    # and an agent created from the console get identical harnesses.
-    from amazai.agentcore import harness_tools
-    tools = harness_tools(seat.get("tools", []))
+    # Provider harness names accept letters, numbers, and underscores. Keep
+    # the human-facing agent id separate from this provider identifier.
+    name = f"amazai_{seat['key']}"
 
     existing = None
     try:
         for page in control.get_paginator("list_harnesses").paginate():
             for h in page.get("harnessSummaries", page.get("harnesses", [])):
-                if h.get("name") == name:
+                if h.get("harnessName", h.get("name")) == name:
                     existing = h.get("harnessArn") or h.get("arn")
                     break
     except Exception:  # noqa: BLE001
@@ -72,12 +69,10 @@ def ensure_harness(control, seat: dict, role_arn: str, region: str) -> str:
         return existing
 
     resp = control.create_harness(
-        name=name,
+        harnessName=name,
         executionRoleArn=role_arn,
-        tools=tools,
-        filesystemConfigurations=[{"sessionStorage": {"mountPath": "/mnt/data"}}],
     )
-    arn = resp.get("harnessArn") or resp["harness"]["harnessArn"]
+    arn = resp.get("harnessArn") or resp.get("arn") or resp["harness"]["harnessArn"]
     print(f"  created harness: {arn}")
 
     deadline = time.time() + READY_TIMEOUT_SECONDS
