@@ -31,6 +31,28 @@ def new_id(prefix: str = "") -> str:
     return f"{prefix}{stamp}{uuid.uuid4().hex[:10]}"
 
 
+def ordered_suffix() -> str:
+    """A sort-key suffix that is both unique and chronological.
+
+    Append-only trails key on `PREFIX#<iso second>#<suffix>`, and the ISO
+    stamp only resolves to the second — so within one second the suffix is
+    what orders the rows, and it has to do two jobs at once.
+
+    Two ways of getting this wrong were both live in this repository:
+
+    - `new_id()[:8]` is not unique. The first twelve characters of new_id are
+      a millisecond timestamp in hex, so a prefix of it is identical for
+      hours. Two rows written in the same second got the same key and the
+      second silently overwrote the first.
+    - A purely random suffix is unique but unordered, so three events one
+      second apart replayed in an arbitrary order — which for an audit trail
+      is its own kind of wrong answer.
+
+    The full `new_id()` is both: millisecond-ordered, then random.
+    """
+    return new_id()
+
+
 def _floats_to_decimal(obj: Any) -> Any:
     """DynamoDB rejects float. Convert on the way in, not at every call site."""
     if isinstance(obj, float):

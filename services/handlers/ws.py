@@ -15,7 +15,7 @@ import traceback
 import boto3
 
 from amazai import keys as K, runs
-from amazai.store import Store, new_id, now_iso
+from amazai.store import Store, new_id, now_iso, ordered_suffix
 
 CONNECTION_TTL_HOURS = 12
 
@@ -78,7 +78,7 @@ def _default(store: Store, event: dict) -> dict:
         return {"statusCode": 400, "body": "no agent assigned to this thread"}
 
     store.put({
-        "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), new_id()[:8]),
+        "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "user", "author": "you", "text": text,
     })
     store.update(K.thread_pk(thread_id), "META", {"lastActivity": now_iso()})

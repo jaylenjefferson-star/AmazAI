@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 
 from amazai import keys as K, models
 from amazai.policy import Capability, NEVER_APPROVABLE, _matches
-from amazai.store import new_id, now_iso
+from amazai.store import now_iso, ordered_suffix
 
 # --- vocabulary -------------------------------------------------------------
 
@@ -352,7 +352,7 @@ def audit_event(agent_id: str, action: str, actor: Actor, *,
     stamp = now_iso()
     return {
         "pk": K.agent_pk(agent_id),
-        "sk": f"AUDIT#{stamp}#{new_id()[:8]}",
+        "sk": f"AUDIT#{stamp}#{ordered_suffix()}",
         "entity": "AuditEvent",
         "gsi1pk": "AUDIT", "gsi1sk": f"{stamp}#{agent_id}",
         "agentId": agent_id, "action": action, "at": stamp,

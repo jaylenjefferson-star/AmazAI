@@ -14,6 +14,7 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
@@ -35,6 +36,16 @@ export interface SeatConfig {
 export interface AmazaiStackProps extends cdk.StackProps {
   seats: SeatConfig[];
   ownerEmail: string;
+
+  /** Pipedream Connect project, e.g. proj_xxxxxxx. An identifier, not a
+   *  credential -- it appears in every Connect URL. The OAuth client secret
+   *  lives in Secrets Manager and never passes through here. */
+  readonly pipedreamProjectId?: string;
+
+  /** Pipedream's own environment switch: 'development' or 'production'.
+   *  Defaults to development, so a half-configured stack talks to test
+   *  accounts rather than real ones. */
+  readonly pipedreamEnvironment?: string;
 }
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
@@ -236,6 +247,21 @@ export class AmazaiStack extends cdk.Stack {
 
     const servicesCode = lambda.Code.fromAsset(path.join(REPO_ROOT, 'services'));
 
+    // The Pipedream OAuth client. CDK creates it with a generated placeholder
+    // value, which is then replaced out of band -- putting the real client
+    // secret in a CDK property would put it in the synthesized template, in
+    // CloudFormation's stored state and in this repository's history, three
+    // places a credential should never be. Replace the placeholder with:
+    //
+    //   aws secretsmanager put-secret-value --secret-id amazai/pipedream \
+    //     --secret-string '{"client_id":"...","client_secret":"..."}'
+    const pipedreamSecret = new secretsmanager.Secret(this, 'PipedreamSecret', {
+      secretName: 'amazai/pipedream',
+      description: 'Pipedream Connect OAuth client (client_id, client_secret)',
+      encryptionKey: key,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     const commonEnv: Record<string, string> = {
       TABLE_NAME: table.tableName,
       DRIVE_BUCKET: driveBucket.bucketName,
@@ -243,6 +269,12 @@ export class AmazaiStack extends cdk.Stack {
       KMS_KEY_ID: key.keyId,
       USER_POOL_ID: userPool.userPoolId,
       POWERTOOLS_SERVICE_NAME: 'amazai',
+
+      // A Pipedream project id is an identifier, not a credential -- it
+      // appears in every Connect URL. The secret above is the credential.
+      PIPEDREAM_PROJECT_ID: props?.pipedreamProjectId ?? '',
+      PIPEDREAM_ENVIRONMENT: props?.pipedreamEnvironment ?? 'development',
+      PIPEDREAM_SECRET_ID: pipedreamSecret.secretName,
     };
 
     const makeFn = (
@@ -284,6 +316,14 @@ export class AmazaiStack extends cdk.Stack {
     for (const fn of [apiFn, orchestratorFn, routineFn, sweeperFn]) {
       driveBucket.grantReadWrite(fn);
       evidenceBucket.grantReadWrite(fn);
+    }
+
+    // Only the paths that actually call a connector may read its credential:
+    // the API installs and lists, the orchestrator and routine workers invoke.
+    // The websocket and sweeper functions never touch Pipedream and are left
+    // without the grant rather than given one they do not use.
+    for (const fn of [apiFn, orchestratorFn, routineFn]) {
+      pipedreamSecret.grantRead(fn);
     }
 
     // Only the orchestrator and routine workers talk to AgentCore.

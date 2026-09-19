@@ -20,14 +20,15 @@ import traceback
 
 import boto3
 
-from amazai import agentcore, approvals, keys as K, policy, redact, router, runs
+from amazai import (agentcore, approvals, connectors, keys as K, policy,
+                    redact, router, runs)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
 from amazai.policy import Capability
 from amazai.push import Push
 from amazai.states import RunState
-from amazai.store import Store, new_id, now_iso
+from amazai.store import Store, new_id, now_iso, ordered_suffix
 from amazai.stream import EventKind, StreamParser
 
 MAX_HISTORY = 40
@@ -106,11 +107,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
         push.notification("warn", f"{agent['name']}: {verdict.reason}")
 
     # --- tool resolution: grants ∩ budget ∩ rate limits --------------------
-    grants = [
-        router.Grant(g["connectorId"], frozenset(g.get("allowedTools", [])),
-                     g.get("capability", "read"))
-        for g in store.query(K.agent_pk(run["agentId"]), sk_prefix="GRANT#")
-    ]
+    # Intersected with the org install and the catalog on every run, not
+    # trusted as written. A grant row that outlived its install — a revoke
+    # that raced this read, a restored backup — contributes nothing, so
+    # revoking a connector removes its tools from the next schema built.
+    grants = connectors.router_grants(store, run["agentId"])
     resolution = router.resolve_tools(router.ResolutionInput(
         agent_allowed_tools=frozenset(agent.get("allowedTools", [])),
         grants=grants,
@@ -290,9 +291,46 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
     ev.action(seq, name, summary, redactions=redacted)
     cost.add_connector(name.split(".")[0], calls=1)
     push.tool(run["runId"], run["threadId"], name, summary)
+
+    # A connector tool is executed here, through the Pipedream proxy, rather
+    # than inside the harness. The proxy injects the third party's credential
+    # on its side, so the token never enters this process and cannot reach
+    # model context. Everything that decided this call was allowed already
+    # ran: the org install, the agent grant, and policy.evaluate.
+    if _is_connector_tool(name, resolution):
+        try:
+            # Re-read the grants here rather than reusing the ones resolution
+            # was built from. A revoke that lands mid-run is then honoured on
+            # the very next tool call, not only on the next run.
+            live_grants = connectors.router_grants(store, run["agentId"])
+            result = connectors.invoke(
+                store, _pipedream_client(), agent_id=run["agentId"], tool=name,
+                arguments=args, grants=live_grants, run_id=run["runId"])
+        except Exception as exc:  # noqa: BLE001
+            ev.error(seq, "retryable", f"{name} failed: {type(exc).__name__}")
+            return {"pause": False, "toolResult": {
+                "error": f"{name} failed: {exc}"}}
+        return {"pause": False, "toolResult": redact.redact(result)[0]}
     store.update(run["pk"], "META",
                  {"toolCallCount": run.get("toolCallCount", 0) + 1})
     return {"pause": False}
+
+
+_pd = None
+
+
+def _pipedream_client():
+    """Built on first use, so a run that calls no connector never reads the
+    Pipedream secret."""
+    global _pd
+    if _pd is None:
+        from amazai.pipedream import Pipedream
+        _pd = Pipedream()
+    return _pd
+
+
+def _is_connector_tool(name: str, resolution) -> bool:
+    return name in resolution.connector_tools
 
 
 def _summarise(name: str, args: dict) -> str:
@@ -340,7 +378,7 @@ def _record_handoff(store: Store, run: dict, args: dict) -> dict:
 def _persist_message(store: Store, run: dict, agent: dict, text: str, cost: RunCost) -> None:
     store.put({
         "pk": K.thread_pk(run["threadId"]),
-        "sk": K.message_sk(now_iso(), new_id()[:8]),
+        "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "assistant",
         "author": agent.get("name"), "agentId": agent["agentId"],
         "runId": run["runId"], "text": text,

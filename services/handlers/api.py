@@ -17,10 +17,11 @@ import traceback
 
 import boto3
 
-from amazai import agentcore, agents as A, approvals, keys as K, models, runs
+from amazai import (agentcore, agents as A, approvals, connectors as C,
+                    keys as K, models, pipedream, runs)
 from amazai.policy import Capability
 from amazai.states import RunState
-from amazai.store import Conflict, NotFound, Store, new_id, now_iso
+from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
 
 CORS = {
     "content-type": "application/json",
@@ -60,6 +61,18 @@ def _actor(event) -> A.Actor:
 def _header(event, name: str) -> str:
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     return headers.get(name.lower(), "")
+
+
+_pd_client = None
+
+
+def _pipedream():
+    """One client per container. Built on first use so a request that never
+    touches a connector never reads the secret."""
+    global _pd_client
+    if _pd_client is None:
+        _pd_client = pipedream.Pipedream()
+    return _pd_client
 
 
 def _org_connectors(store: Store) -> dict[str, A.OrgConnector]:
@@ -105,6 +118,14 @@ def handler(event, context):  # noqa: ARG001
         return _resp(400, {"error": "invalid_request", "detail": str(exc)})
     except A.Escalation as exc:
         return _resp(403, {"error": "forbidden", "detail": str(exc)})
+    except (C.NotInstalled, C.NotGranted, pipedream.TargetNotAllowed) as exc:
+        return _resp(403, {"error": "forbidden", "detail": str(exc)})
+    except C.UnknownConnector as exc:
+        return _resp(404, {"error": "not_found", "detail": str(exc)})
+    except pipedream.PipedreamError as exc:
+        # The connector is reachable or it is not; either way this is not a
+        # fault in the caller's request.
+        return _resp(502, {"error": "connector_unavailable", "detail": str(exc)})
     except A.QuotaExceeded as exc:
         return _resp(409, {"error": "quota_exceeded", "detail": str(exc)})
     except NotFound as exc:
@@ -198,6 +219,64 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         for ev in events:
             store.put(ev)
         return _resp(200, updated)
+
+    # --- connectors --------------------------------------------------------
+    # Ordered before /connectors/{id} so these never resolve as an id.
+    if path == "/connectors/catalog" and method == "GET":
+        return _resp(200, {"catalog": C.catalog_for_console()})
+
+    if path == "/connectors" and method == "GET":
+        return _resp(200, {"connectors": list(C.installed(store).values())})
+
+    if path == "/connectors/connect-token" and method == "POST":
+        # Mints a short-lived token for Pipedream's own authorization UI. The
+        # owner authorizes the third party there; the resulting credential
+        # lives on Pipedream's side and is referenced here only by account id.
+        actor = _actor(event)
+        token = _pipedream().connect_token(actor.user_id)
+        store.put(C.connector_event(
+            body.get("connectorId") or "pipedream:unknown",
+            "connector.authorization_started",
+            actor_user_id=actor.user_id,
+            detail="connect token issued"))
+        return _resp(201, token)
+
+    if path == "/connectors/accounts" and method == "GET":
+        actor = _actor(event)
+        qs = event.get("queryStringParameters") or {}
+        return _resp(200, {"accounts": _pipedream().accounts(
+            actor.user_id, app=qs.get("app"))})
+
+    if (p := _match(path, "/connectors/{id}")) and method == "GET":
+        row = store.get(K.connector_pk(p[0]), "META")
+        row["log"] = store.query(K.connector_pk(p[0]), sk_prefix="LOG#",
+                                 limit=50, ascending=False)
+        return _resp(200, row)
+
+    if (p := _match(path, "/connectors/{id}/install")) and method == "POST":
+        actor = _actor(event)
+        account_id = (body.get("accountId") or "").strip()
+        if not account_id:
+            return _resp(400, {"error": "invalid_request",
+                               "detail": "accountId is required "
+                                         "(authorize the app first)"})
+        row = C.install(store, p[0], account_id=account_id,
+                        external_user_id=actor.user_id,
+                        actor_user_id=actor.user_id,
+                        allowed_tools=body.get("allowedTools"))
+        store.put(C.connector_event(p[0], "connector.installed",
+                                    actor_user_id=actor.user_id,
+                                    detail=f"tools: {row['allowedTools']}"))
+        return _resp(201, row)
+
+    if (p := _match(path, "/connectors/{id}")) and method == "DELETE":
+        actor = _actor(event)
+        store.get(K.connector_pk(p[0]), "META")   # 404 if it is not ours
+        result = C.revoke(store, p[0])
+        store.put(C.connector_event(
+            p[0], "connector.revoked", actor_user_id=actor.user_id,
+            detail=f"grants removed from: {result['revokedFrom'] or 'no agents'}"))
+        return _resp(200, result)
 
     # --- memory ------------------------------------------------------------
     if (p := _match(path, "/agents/{id}/memory")) and method == "POST":
@@ -390,7 +469,7 @@ def _post_message(store: Store, thread_id: str, body: dict):
         return _resp(400, {"error": "no agent assigned to this thread"})
 
     store.put({
-        "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), new_id()[:8]),
+        "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "user", "author": "you", "text": text,
     })
     store.update(K.thread_pk(thread_id), "META", {"lastActivity": now_iso()})

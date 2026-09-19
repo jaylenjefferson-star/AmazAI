@@ -13,7 +13,7 @@ import traceback
 import boto3
 
 from amazai import keys as K, runs
-from amazai.store import Store, new_id, now_iso
+from amazai.store import Store, new_id, now_iso, ordered_suffix
 
 
 def handler(event, context):  # noqa: ARG001
@@ -55,7 +55,7 @@ def handler(event, context):  # noqa: ARG001
 
     prompt = routine.get("prompt") or routine.get("purpose", "")
     store.put({
-        "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), new_id()[:8]),
+        "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "user", "author": "routine",
         "routineId": routine_id, "text": prompt,
     })

@@ -21,6 +21,10 @@ new AmazaiStack(app, 'AmazaiStack', {
   },
   seats: seatsFile.seats,
   ownerEmail: process.env.AMAZAI_OWNER_EMAIL ?? 'jaylen.jefferson@amazflow.com',
+  pipedreamProjectId: process.env.PIPEDREAM_PROJECT_ID ?? 'proj_W7sA34l',
+  // Left at development unless the deploy says otherwise, so an unconfigured
+  // stack cannot reach real connected accounts.
+  pipedreamEnvironment: process.env.PIPEDREAM_ENVIRONMENT ?? 'development',
   description: 'AmazAI control plane: identity, orchestration, execution roles, evidence.',
 });
 

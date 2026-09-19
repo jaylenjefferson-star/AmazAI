@@ -25,8 +25,8 @@ exists because the code reads its own `...Z` timestamps with
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest                 # 212 tests
-cd infra && npm install && npx cdk synth   # 75 resources
+.venv/bin/python -m pytest                 # 299 tests
+cd infra && npm install && npx cdk synth   # 76 resources
 cd web   && npm install && npm run build
 ```
 
@@ -39,10 +39,12 @@ cd web && npm run dev      # then open http://localhost:5173/?demo=1
 | Phase | State |
 |---|---|
 | 1 · Infrastructure (CDK) | written, `cdk synth` clean |
-| 3 · Enforcement core + store | written, 212 tests |
+| 3 · Enforcement core + store | written, 299 tests |
 | 4 · Handlers | written, never run against AWS |
 | 5 · Console | designed, light + dark, builds clean |
 | 2 · Seat provisioning | needs a deploy first |
+| 6 · Agent CRUD + Create-a-Bot | written, never run against AWS |
+| 7 · Connectors (Pipedream) | written; live leg needs the OAuth client |
 
 ## To deploy
 
@@ -74,6 +76,23 @@ Three bugs fixed while wiring this up, all of which blanked the page:
 `CognitoUserPool` throwing at import when `.env` was unfilled (now lazy, with
 a real message), and an approval arriving mid-stream rendering above the
 sentence explaining it (now flushed in order).
+
+## Connectors
+
+A Pipedream app becomes an AmazAI connector; Pipedream is a way to reach an
+API and a place for its OAuth token to live, never a second place where
+permission is decided. Full reasoning in `docs/connectors.md`.
+
+    catalog -> org install -> agent grant -> router.resolve_tools -> schema
+
+The third party's token never enters this process: calls go through the
+Connect proxy with an account reference and Pipedream injects the credential
+on its side. The one credential AmazAI holds is the Pipedream OAuth client,
+in Secrets Manager, readable by three Lambdas.
+
+The proof-of-concept connector is Slack, chosen because its two actions sit on
+opposite sides of the approval boundary — `slack.read` flows, `slack.post` is
+on the always-approve floor and cannot be pre-approved away.
 
 ## Layout
 

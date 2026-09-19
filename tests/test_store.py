@@ -97,3 +97,45 @@ class TestIndexQueries:
         stale = store.query_index("gsi2", "gsi2pk", "RUNSTATE#EXECUTING",
                                   sk_name="gsi2sk", sk_lt="2030-01-01T00:00:00Z")
         assert [r["pk"] for r in stale] == ["RUN#1"]
+
+
+class TestSortKeySuffixes:
+    """Append-only trails key on `PREFIX#<iso second>#<suffix>`, so within one
+    second the suffix alone decides both identity and order."""
+
+    def test_the_suffix_is_unique(self):
+        from amazai.store import ordered_suffix
+        suffixes = {ordered_suffix() for _ in range(1000)}
+        assert len(suffixes) == 1000
+
+    def test_the_suffix_sorts_chronologically(self):
+        """A random suffix would be unique and still replay three events one
+        second apart in an arbitrary order."""
+        import time
+        from amazai.store import ordered_suffix
+        made = []
+        for _ in range(5):
+            made.append(ordered_suffix())
+            time.sleep(0.002)
+        assert made == sorted(made)
+
+    def test_the_trap_it_replaces_is_still_a_trap(self):
+        """Kept as a live assertion: if new_id's layout ever changes so that a
+        prefix is unique, this fails and the comment above can be deleted."""
+        from amazai.store import new_id
+        assert len({new_id()[:8] for _ in range(50)}) == 1
+
+    def test_two_rows_in_the_same_second_both_survive_and_stay_ordered(self, store):
+        import time
+        from amazai.store import now_iso, ordered_suffix
+        stamp = now_iso()
+        written = []
+        for n in range(5):
+            sk = f"AUDIT#{stamp}#{ordered_suffix()}"
+            written.append(sk)
+            store.put({"pk": "AGENT#x", "sk": sk, "entity": "AuditEvent", "n": n})
+            time.sleep(0.002)
+
+        rows = store.query("AGENT#x", sk_prefix="AUDIT#")
+        assert len(rows) == 5
+        assert [r["n"] for r in rows] == [0, 1, 2, 3, 4]
