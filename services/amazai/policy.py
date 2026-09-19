@@ -54,7 +54,7 @@ ALWAYS_APPROVE: frozenset[str] = frozenset({
     "file.delete_outside_workspace", "file.transfer_offplatform",
     "payment.*", "bulk.*", "data.export_sensitive",
     # Platform and agents
-    "agent.grant", "agent.delete", "workspace.reset", "evidence.delete",
+    "agent.create", "agent.grant", "agent.delete", "workspace.reset", "evidence.delete",
     "budget.raise", "approval.disable",
     "device.register", "device.modify", "device.unpause", "device.action.*",
 })

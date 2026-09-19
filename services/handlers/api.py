@@ -353,7 +353,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     # --- approvals ---------------------------------------------------------
     if (p := _match(path, "/approvals/{runId}/{apvId}")) and method == "POST":
-        return _decide(store, p[0], p[1], body)
+        return _decide(store, p[0], p[1], body, _actor(event))
 
     # --- usage -------------------------------------------------------------
     if path == "/usage" and method == "GET":
@@ -525,7 +525,8 @@ def _exec(store: Store, thread_id: str, body: dict):
     })
 
 
-def _decide(store: Store, run_id: str, approval_id: str, body: dict):
+def _decide(store: Store, run_id: str, approval_id: str, body: dict,
+            actor: A.Actor):
     run_pk = K.run_pk(run_id)
     run = store.get(run_pk, "META")
 
@@ -537,6 +538,14 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict):
     decided = approvals.decide(store, run_pk, approval_id,
                                approve=approve, note=body.get("note"))
 
+    created = None
+    if approve and decided["action"] == "agent.create":
+        created = _create_approved_agent(store, decided["arguments"], actor)
+        store.update(run_pk, K.approval_sk(approval_id), {
+            "createdAgentId": created["agentId"],
+            "executionStatus": "created",
+        })
+
     verb = "approved" if approve else "denied"
     note = f'Your decision on "{decided["action"]}": {verb}.'
     if body.get("note"):
@@ -546,7 +555,39 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict):
 
     runs.advance(store, run, RunState.EXECUTING, pending=None)
     _invoke_orchestrator(run_id, store.owner_id, resume=True, resume_note=note)
-    return _resp(200, {"approval": approvals.to_card(decided), "resumed": True})
+    result = {"approval": approvals.to_card(decided), "resumed": True}
+    if created:
+        result["createdAgent"] = created
+    return _resp(200, result)
+
+
+def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict:
+    """Create the exact approved child proposal under the approving owner.
+
+    ``proposal`` comes from the approval's argument binding, never a new
+    browser payload. It was normalized in the orchestrator, so it carries no
+    grants or optional tools. This closes the approval-to-execution
+    substitution gap for agent creation as well as connector actions.
+    """
+    active = [row for row in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
+              if row.get("status", row.get("state")) in A.SEATED]
+    plan = A.plan_create(
+        proposal, actor,
+        org_connectors=_org_connectors(store),
+        active_count=len(active),
+        max_agents=int(os.environ.get("MAX_AGENTS", A.DEFAULT_MAX_AGENTS)),
+    )
+    if store.try_get(K.agent_pk(plan.agent_id), "META"):
+        raise Conflict(f"agent {plan.agent_id!r} already exists")
+
+    store.transact_put(plan.items)
+    try:
+        return _provision_harness(store, plan.agent)
+    except Exception:
+        store.transact_delete(plan.rollback_keys)
+        store.put(A.audit_event(plan.agent_id, "agent.provision_failed", actor,
+                                detail="approved agent creation could not provision"))
+        raise
 
 
 def _invoke_orchestrator(run_id: str, owner_id: str, *, resume: bool = False,

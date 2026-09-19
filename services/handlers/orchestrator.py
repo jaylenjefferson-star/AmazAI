@@ -20,7 +20,7 @@ import traceback
 
 import boto3
 
-from amazai import (agentcore, approvals, connectors, keys as K, policy,
+from amazai import (agentcore, agents as A, approvals, connectors, keys as K, policy,
                     redact, router, runs)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
@@ -240,6 +240,28 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
     name = parsed.tool_name
     args = parsed.tool_input
 
+    if name == "propose_agent":
+        # This is deliberately a proposal rather than an agent-originated
+        # create. The model can nominate a role, but cannot choose grants,
+        # optional tools, or an open-ended budget; those fields are fixed
+        # below and the human approval is bound to the exact proposal.
+        proposal = _agent_creation_proposal(args, parent_agent_id=agent["agentId"])
+        A.validate_profile(proposal)
+        # The always-approve floor includes agent.create. Calling the central
+        # policy gate here keeps that invariant explicit if the policy evolves.
+        policy.evaluate("agent.create", Capability.ADMIN)
+        approval = approvals.request(
+            store, run,
+            action="agent.create", arguments=proposal,
+            why=args.get("why", "A separate companion is needed for this lane."),
+            capability=Capability.ADMIN,
+            tool_use_id=parsed.tool_use_id,
+            target={"parentAgentId": agent["agentId"]},
+            reversible=False,
+        )
+        ev.action(seq, "agent.create", "agent creation proposed", approvalId=approval["approvalId"])
+        return {"pause": True, "approval": approval}
+
     if name == "request_approval":
         action = args.get("action", "unknown")
         arguments = args.get("arguments", {}) or {}
@@ -314,6 +336,35 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
     store.update(run["pk"], "META",
                  {"toolCallCount": run.get("toolCallCount", 0) + 1})
     return {"pause": False}
+
+
+def _agent_creation_proposal(args: dict, *, parent_agent_id: str) -> dict:
+    """Normalize the only fields a model may nominate for a child agent.
+
+    These limits are intentionally below the normal human Create-a-Bot
+    defaults. A newly approved companion has a useful, bounded first session;
+    granting connectors, optional computer tools, or a larger budget remains a
+    distinct owner action in the console.
+    """
+    return {
+        "name": args.get("name", ""),
+        "role": args.get("role", ""),
+        "description": args.get("description", ""),
+        "systemPrompt": args.get("systemPrompt", ""),
+        "modelTier": args.get("modelTier"),
+        "workingStyle": args.get("workingStyle", "collaborative"),
+        "avatar": args.get("avatar") or {},
+        "parentAgentId": parent_agent_id,
+        "tools": [],
+        "grants": [],
+        "budget": {
+            "perRunUsd": 0.50,
+            "perMonthUsd": 5.00,
+            "maxConcurrentRuns": 1,
+            "maxToolCallsPerRun": 20,
+            "onCeiling": "hard_stop",
+        },
+    }
 
 
 _pd = None

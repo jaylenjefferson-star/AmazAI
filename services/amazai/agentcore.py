@@ -19,6 +19,28 @@ REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or
 #: file_operations, browser, gateway targets -- executes inside the harness
 #: and never round-trips through us.
 INLINE_TOOLS = {
+    "propose_agent": {
+        "description": (
+            "Propose a new companion when the task genuinely needs a separate lane. "
+            "This never creates an agent directly: it creates an owner approval card "
+            "showing the proposed role, model tier, and fixed safe starter budget. "
+            "The new companion starts with no connector grants and no optional tools."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "role": {"type": "string"},
+                "description": {"type": "string"},
+                "systemPrompt": {"type": "string"},
+                "modelTier": {"type": "string"},
+                "workingStyle": {"type": "string"},
+                "avatar": {"type": "object"},
+                "why": {"type": "string", "description": "Why a separate companion is needed"},
+            },
+            "required": ["name", "role", "why"],
+        },
+    },
     "request_approval": {
         "description": (
             "Request the owner's approval before performing a consequential action. "
