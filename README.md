@@ -30,26 +30,31 @@ prove what it did."**
 
 ## Status
 
-**Phase 1 (infrastructure)** — written, `cdk synth` clean. 76 resources:
-DynamoDB + 2 GSIs, drive/evidence/console buckets, Cognito with TOTP MFA
-required, one prefix-scoped harness execution role per seat, five Lambdas, HTTP
-API with a JWT authorizer, WebSocket API, sweeper schedule, CloudFront.
+Everything below is built and verified in CI-less form — `pytest` and
+`cdk synth` and `npm run build` all pass locally. **Nothing is deployed**:
+that needs AWS credentials, which only the owner has.
 
-**Phase 3 (enforcement core)** — written, 158 tests passing. The deterministic
-half of the orchestrator: run state machine, tool router, approval policy,
-secret redaction, cost ledger, error classification, and defensive parsing of
-the AgentCore event stream.
+| Phase | State |
+|---|---|
+| 1 · Infrastructure (CDK) | ✅ `cdk synth` clean, 76 resources |
+| 3 · Enforcement core | ✅ 186 tests passing |
+| 3 · Store, runs, approvals, evidence | ✅ tested against mocked DynamoDB |
+| 4 · Handlers (api/ws/orchestrator/routine/sweeper) | ✅ written, import clean |
+| 5 · Console (React) | ✅ `npm run build` clean |
+| 2 · Seat provisioning | ⛔ blocked on decision D2 |
 
 ```bash
-python3 -m pytest        # 158 passed
-cd infra && npx cdk synth
+python3 -m pytest                      # 186 passed
+cd infra && npm install && npx cdk synth
+cd web   && npm install && npm run build
 ```
 
-Not yet built: the DynamoDB store layer, evidence sealing, the WebSocket push
-helper, and the handler bodies (they return 501). Deploying needs AWS
-credentials, which only the owner has — see the runbook in
-[BUILD_PLAN.md](BUILD_PLAN.md#5-deploy-runbook).
+### To deploy
 
-Three decisions are waiting on the owner before Phase 2 (seat provisioning) —
-see [open decisions](docs/architecture/15-open-decisions.md).
-`scripts/seats.json` carries `modelId: null` for every seat until D2 lands.
+See the runbook in [BUILD_PLAN.md](BUILD_PLAN.md#5-deploy-runbook). Run it
+with your own AWS credentials, locally — not in a shared environment.
+
+`scripts/provision_agents.py` deliberately refuses to run while any enabled
+seat has `modelId: null`. Resolve the real Bedrock inference-profile IDs with
+`aws bedrock list-inference-profiles` and write them into
+`scripts/seats.json`. See [open decisions](docs/architecture/15-open-decisions.md).

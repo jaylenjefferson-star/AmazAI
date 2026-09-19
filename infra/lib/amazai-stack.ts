@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigwv2auth from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
@@ -424,13 +425,22 @@ export class AmazaiStack extends cdk.Stack {
       ],
     });
 
-    // Deploys web/dist when it exists; harmless placeholder before the console is built.
+    // Deploys the built console when web/dist exists, and a placeholder page
+    // before the first `npm run build`. Either way a deploy succeeds, so the
+    // stack can be stood up before the front end is built.
+    const consoleDist = path.join(REPO_ROOT, 'web', 'dist');
+    const hasBuild = fs.existsSync(path.join(consoleDist, 'index.html'));
+
     new s3deploy.BucketDeployment(this, 'ConsoleDeployment', {
-      sources: [s3deploy.Source.data('index.html', PLACEHOLDER_HTML)],
+      sources: [
+        hasBuild
+          ? s3deploy.Source.asset(consoleDist)
+          : s3deploy.Source.data('index.html', PLACEHOLDER_HTML),
+      ],
       destinationBucket: consoleBucket,
       distribution,
       distributionPaths: ['/*'],
-      prune: false,
+      prune: hasBuild,
     });
 
     // ---------------------------------------------------------------------
