@@ -8,7 +8,7 @@ scheduled routines, and an approval gate on risky actions.
 
 - `BUILD_PLAN.md` — the operational spec. **Contains verified AgentCore API
   shapes that a model will not recall correctly. Do not improvise those calls.**
-- `docs/architecture/README.md` — 17 documents, one per layer, holding the
+- `docs/architecture/README.md` — 20 documents, one per layer, holding the
   reasoning behind every decision in the spec.
 - `docs/architecture/15-open-decisions.md` — what is still undecided, each with
   a working default.
@@ -28,7 +28,7 @@ exists because the code reads its own `...Z` timestamps with
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest                 # 432 tests
+.venv/bin/python -m pytest                 # 625 tests
 cd infra && npm install && npx cdk synth   # 72 resources
 cd web   && npm install && npm run build
 ```
@@ -39,6 +39,17 @@ The console renders against fixtures without any AWS at all:
 cd web && npm run dev      # then open http://localhost:5173/?demo=1
 ```
 
+Three shapes of account, because the first-run bug was a matter of which one you
+are in: `?demo=1` (a working org, first Bot included), `?demo=1&fresh=1` (nobody
+here yet: setup) and `?demo=1&offer=1` (a fresh deploy: only the Engineering
+seat). Demo mode bypasses the sign-in gate, and only in a dev build --
+`DEMO` is `import.meta.env.DEV && ?demo`, folded to `false` in production;
+check with `grep -c demoApi web/dist/assets/*.js` (expect 0).
+
+Port 5173 is pinned (`strictPort`). If something else is already on it -- a
+Copilot worktree's dev server was, once -- it is serving *that* checkout, not
+this one; run `npx vite --port 5174` instead of assuming your edits are live.
+
 | Phase | State |
 |---|---|
 | 1 · Infrastructure (CDK) | written, `cdk synth` clean |
@@ -48,6 +59,8 @@ cd web && npm run dev      # then open http://localhost:5173/?demo=1
 | 2 · Seat provisioning | needs a deploy first |
 | 6 · Agent CRUD + Create-a-Bot | written, never run against AWS |
 | 7 · Connectors (Pipedream) | written; live leg needs the OAuth client |
+| 8 · First Bot, greeting, roster, presence | written, tested; see [18](docs/architecture/18-first-bot-and-presence.md). **Needs a backend deploy** for `entrypoint`, `title`, thread previews and pins |
+| 9 · Composer, Auto Review, the closed loop | written, tested; see [19](docs/architecture/19-composer-review-and-the-loop.md). Connector writes are now gated **in code**. D4 isolated behind `continuation.py`; live test: `scripts/spike_d4.py` |
 
 ## To deploy
 
@@ -156,8 +169,15 @@ deleting the agent that produced it.
 Decision **D4**: whether `invoke_harness` accepts a native `toolResult`
 continuation when resuming after an `inline_function` call on the same
 `runtimeSessionId`. The whole pause/resume design rests on it. The fallback —
-delivering the decision as a user turn — is already wired as `resumeNote` in
-`handlers/orchestrator.py`. **Settle this before touching the approval UI.**
+delivering the decision as a user turn — is what runs today, and it is now
+**isolated in `services/amazai/continuation.py`**: nothing else builds a resume
+turn, and `AMAZAI_CONTINUATION=tool_result` is refused until the spike shows the
+service accepts it. Everything that can be done without credentials is done and
+tested (`tests/test_d4_boundary.py`, `tests/test_drive_loop.py`). What remains is
+one command that needs an AWS account — see D4 in
+`docs/architecture/15-open-decisions.md`:
+
+    python3 scripts/spike_d4.py --harness-arn <ARN> --model-id <ID> --execute
 
 ## Style
 
