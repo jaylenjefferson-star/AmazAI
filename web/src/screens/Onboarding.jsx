@@ -5,7 +5,12 @@ import Logo from '../components/Logo';
 import { ARCHETYPES, ARCHETYPE_KEYS } from '../characters/archetypes';
 import { useAuth0 } from '../auth0';
 
-const PALETTE = ['#2b6bff', '#8b2fe0', '#12a594', '#e8833a', '#e93d82', '#3dc98a'];
+// Six of the ten the API accepts (`agents.AVATAR_COLORS`). The blue and the
+// purple used to be #2b6bff and #8b2fe0, which are not in that list at all --
+// onboarding's first companion would have been refused on submit. Kept as a
+// short list rather than the full palette because this is the first screen
+// anyone sees, but every entry has to be one the validator allows.
+const PALETTE = ['#2f6fe4', '#8b5cf6', '#12a594', '#e8833a', '#e93d82', '#3dc98a'];
 const KEY = 'amazai.onboarded';
 
 export function hasOnboarded() {

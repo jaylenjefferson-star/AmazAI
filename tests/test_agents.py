@@ -33,7 +33,7 @@ def a_body(**over):
         "name": "Cloud Operations",
         "role": "AWS investigations, logs, alarms.",
         "modelTier": "frontier",
-        "avatar": {"shape": "hex", "color": "#2f6fe4"},
+        "avatar": {"shape": "paper", "color": "#2f6fe4"},
         "budget": {"perRunUsd": 1.5, "perMonthUsd": 30.0},
     }
     body.update(over)
@@ -68,7 +68,7 @@ class TestAuthorization:
         existing = {"agentId": "ops", "name": "Ops", "role": "things",
                     "description": "", "systemPrompt": "things",
                     "workingStyle": "collaborative",
-                    "avatar": {"shape": "circle", "color": "#2f6fe4"}}
+                    "avatar": {"shape": "pebble", "color": "#2f6fe4"}}
         changes, events = A.plan_update(existing, {"name": "Cloud Operations"}, PERSON)
         assert changes["name"] == "Cloud Operations"
         assert [e["action"] for e in events] == ["agent.updated"]
@@ -211,7 +211,7 @@ class TestTheRecord:
         """Free-form colour would let two agents look identical in a handoff
         line, where the avatar is all there is room for."""
         with pytest.raises(A.ValidationError):
-            A.plan_create(a_body(avatar={"shape": "hex", "color": "#123456"}),
+            A.plan_create(a_body(avatar={"shape": "paper", "color": "#123456"}),
                           PERSON, org_connectors=ORG)
 
     def test_changing_tier_reopens_the_ladder_and_clears_the_model_id(self):
@@ -230,7 +230,7 @@ class TestAudit:
         existing = {"agentId": "ops", "name": "Ops", "role": "Runs things",
                     "description": "", "systemPrompt": "Runs things",
                     "workingStyle": "collaborative",
-                    "avatar": {"shape": "circle", "color": "#2f6fe4"},
+                    "avatar": {"shape": "pebble", "color": "#2f6fe4"},
                     "budget": {"perMonthUsd": 10.0}}
         _, events = A.plan_update(
             existing,

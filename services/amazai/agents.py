@@ -51,8 +51,20 @@ RUNNABLE: frozenset[str] = frozenset({"active"})
 #: the seat it held, which is the practical reason to archive rather than pause.
 SEATED: frozenset[str] = frozenset({"provisioning", "active", "paused"})
 
+#: The companion archetypes, and the same six keys the console's character
+#: system draws (`web/src/characters/archetypes.jsx`). They must stay in step:
+#: `useAgents.presentAgent` maps a stored `avatar.shape` straight onto an
+#: archetype, so a name accepted here that the console cannot draw silently
+#: becomes the fallback pebble, and a name the console offers that is refused
+#: here makes the create form fail on submit.
+#:
+#: This was geometry once -- circle, squircle, hex -- from before the
+#: characters existed. Only `cloud` overlapped the archetypes, so five of the
+#: six characters the picker offered were refused by this validator. It had
+#: never been caught because the console has never run against a deployed API.
+#: `test_character_parity.py` is the guard.
 AVATAR_SHAPES: tuple[str, ...] = (
-    "circle", "squircle", "square", "pill", "triangle", "hex", "cloud", "drop",
+    "pebble", "paper", "jelly", "cloud", "lantern", "moth",
 )
 
 #: Fixed palette. Free-form colour would let two agents be visually
@@ -174,7 +186,7 @@ def validate_profile(body: dict) -> dict:
              f"workingStyle must be one of {list(WORKING_STYLES)}")
 
     avatar = body.get("avatar") or {}
-    shape = avatar.get("shape") or "circle"
+    shape = avatar.get("shape") or "pebble"
     color = avatar.get("color") or AVATAR_COLORS[5]
     _require(shape in AVATAR_SHAPES, f"avatar.shape must be one of {list(AVATAR_SHAPES)}")
     _require(color in AVATAR_COLORS, f"avatar.color must be one of {list(AVATAR_COLORS)}")

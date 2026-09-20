@@ -55,7 +55,7 @@ class TestRequiresApproval:
         run = runs.advance(store, run, RunState.EXECUTING)
         proposal = {"name": "Shadow Agent", "role": "Handles a bounded lane.", "description": "x",
                    "systemPrompt": "", "modelTier": "balanced", "workingStyle": "collaborative",
-                   "avatar": {"shape": "hex", "color": "#8b5cf6"},
+                   "avatar": {"shape": "moth", "color": "#8b5cf6"},
                    "parentAgentId": "cloud-operations", "tools": [], "grants": [],
                    "budget": {"perRunUsd": 0.5, "perMonthUsd": 5.0, "maxConcurrentRuns": 1,
                              "maxToolCallsPerRun": 20, "onCeiling": "hard_stop"}}
