@@ -57,6 +57,13 @@ const PATHS = {
     </>
   ),
   chevronLeft: <path d="M14.5 6.25 8.75 12l5.75 5.75" />,
+  more: (
+    <>
+      <circle cx="12" cy="5.25" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="18.75" r="1.4" fill="currentColor" stroke="none" />
+    </>
+  ),
 };
 
 export default function Icon({ name, size = 20, className = '' }) {

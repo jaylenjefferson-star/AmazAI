@@ -88,6 +88,19 @@ const MESSAGES = {
     { role: 'user', author: 'you', text: 'The 5xx alarm fired twice overnight. What happened?' },
   ],
   't-brief': [],
+  // The inbox opens dm threads, so those are the ones that have to carry a
+  // conversation -- an empty timeline reviews nothing.
+  'dm-eng': [
+    { role: 'user', author: 'you', text: 'Why did last night\u2019s deploy roll back?' },
+    { role: 'assistant', author: 'Engineering', text: 'The parity check failed on two response contracts. Neither invariant actually broke \u2014 the patterns matched the field tables by literal text, and the tables had been reformatted.' },
+    { role: 'user', author: 'you', text: 'Can you fix it without widening the change?' },
+    { role: 'assistant', author: 'Engineering', text: 'Yes. Two patterns, matched on the binding rather than the formatting. I will need approval before anything touches production.' },
+  ],
+  'dm-ops': [
+    { role: 'user', author: 'you', text: 'Anything from the overnight alarms?' },
+    { role: 'assistant', author: 'Cloud Operations', text: 'Two 5xx spikes, both from the same deploy, both cleared on rollback. Nothing outstanding.' },
+  ],
+  'dm-cos': [], 'dm-res': [], 'dm-fin': [],
 };
 
 const APPROVAL = {

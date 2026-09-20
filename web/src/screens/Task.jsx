@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import Companion, { STATES } from '../characters/Companion';
+import Icon from '../components/Icon';
 import Timeline from '../components/Timeline';
 import RightPanel from '../components/RightPanel';
 import { api } from '../api';
@@ -121,20 +122,33 @@ export default function Task() {
 
   return (
     <div className="task">
-      <header className="task-head">
-        <Link to="/agents" className="task-back" aria-label="Back to agents">‹</Link>
-        <Companion archetype={agent.archetype} color={agent.color}
-                   state={typing ? 'thinking' : agent.state} size={34} name={agent.name} />
-        <div className="task-who">
-          <strong>{agent.name}</strong>
-          <span>{agent.role}</span>
+      {/* Back goes to the inbox, which is where this conversation was opened
+          from now that the inbox is home -- `/agents` was the old section
+          list and returning there loses the thread you came in on.
+
+          The identity sits centred between two equal-width controls rather
+          than left-aligned beside them, so it stays centred whatever the
+          name's length, and the status reads as the companion's own rather
+          than as a chip parked at the end of a row. */}
+      <header className="chat-head">
+        <Link to="/" className="chat-icon" aria-label="Back to inbox">
+          <Icon name="chevronLeft" size={20} />
+        </Link>
+
+        <div className="chat-identity">
+          <Companion archetype={agent.archetype} color={agent.color}
+                     state={typing ? 'thinking' : agent.state} size={30} name={agent.name} />
+          <span className="chat-who">
+            <strong>{agent.name}</strong>
+            <small className={`cc-tone-${(STATES[typing ? 'thinking' : agent.state] || STATES.idle).tone}`}>
+              {(STATES[typing ? 'thinking' : agent.state] || STATES.idle).label}
+            </small>
+          </span>
         </div>
-        <span className={`state-chip cc-tone-${(STATES[agent.state] || STATES.idle).tone}`}>
-          <i className="cc-dot" aria-hidden="true" />
-          {(STATES[agent.state] || STATES.idle).label}
-        </span>
-        <button className="panel-toggle" onClick={() => setPanelOpen((o) => !o)}>
-          {agent.name}&rsquo;s computer
+
+        <button type="button" className="chat-icon" onClick={() => setPanelOpen((o) => !o)}
+                aria-label={`${agent.name}'s computer and settings`} aria-expanded={panelOpen}>
+          <Icon name="more" size={20} />
         </button>
       </header>
 

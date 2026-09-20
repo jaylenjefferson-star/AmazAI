@@ -1818,6 +1818,13 @@ a.row-card:hover { border-color: var(--btn-line); }
 
 @media (max-width: 899px) {
   .shell-rail .rail-item:not([data-primary]) { display: none; }
+
+  /* The app bar goes too, and its grid row with it -- hiding the element
+     alone would leave a 52px band of nothing above the conversation. The
+     chat header already carries the identity and the way back, so keeping
+     both is one header too many on a screen this size. */
+  .shell[data-focused="true"] { grid-template-rows: 0 minmax(0, 1fr) auto; }
+  .shell[data-focused="true"] .shell-top { display: none; }
 }
 @media (min-width: 900px) {
   .shell[data-focused="true"] .shell-rail { display: flex; }
@@ -1882,3 +1889,63 @@ a.row-card:hover { border-color: var(--btn-line); }
     padding-bottom: 16px;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * The conversation screen.
+ *
+ * Full height, with only the timeline scrolling: the header and the
+ * composer are the two things that must never move while reading.
+ * ------------------------------------------------------------------ */
+
+/* Three columns, the outer two equal and fixed, so the identity is centred
+   on the screen rather than centred on whatever is left after a long name.
+   A header whose contents shift as the title grows is the tell that it was
+   laid out as a row. */
+.chat-head {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center; gap: 8px;
+  padding: 8px 12px;
+  /* Opaque: with the app bar hidden on a phone this IS the top bar, and a
+     transparent one would let the timeline show through as it scrolls. */
+  background: var(--panel);
+  border-bottom: 1px solid var(--hairline);
+  padding-top: max(8px, env(safe-area-inset-top));
+  flex: 0 0 auto;
+}
+
+.chat-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 999px;
+  color: var(--dim); text-decoration: none; cursor: pointer;
+  background: none; border: 0;
+}
+.chat-icon:hover { background: var(--hover); color: var(--text); }
+.chat-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.chat-identity {
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  min-width: 0;
+}
+.chat-who { display: grid; justify-items: center; min-width: 0; }
+.chat-who strong {
+  font: var(--t-title); letter-spacing: var(--t-title-track);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+/* The status is the companion's, so it takes the companion's tone colour
+   rather than sitting in a chip of its own. */
+.chat-who small { font: var(--t-meta); color: var(--faint); }
+.chat-who small.cc-tone-accent { color: var(--accent); }
+.chat-who small.cc-tone-warn   { color: var(--warn); }
+.chat-who small.cc-tone-danger { color: var(--danger); }
+.chat-who small.cc-tone-ok     { color: var(--ok); }
+
+/* The composer is the one element a phone will try to bury. The home
+   indicator sits over the bottom ~34px on a modern iPhone, so the padding
+   has to carry `env(safe-area-inset-bottom)` or the send control lands
+   underneath it. `max()` keeps the desktop padding when the inset is 0. */
+.task .composer {
+  padding-bottom: max(16px, calc(10px + env(safe-area-inset-bottom)));
+}
+.task .composer textarea { font: var(--t-body); }
+.task .composer .hint { font: var(--t-meta); color: var(--faint); }
