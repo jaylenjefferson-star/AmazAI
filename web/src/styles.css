@@ -1808,6 +1808,30 @@ a.row-card:hover { border-color: var(--btn-line); }
   .inbox-row { grid-template-columns: 64px minmax(0, 1fr); }
 }
 
+/* Unread.
+ *
+ * Two signals, not one: a dot carries it at a glance, and the name takes the
+ * full ink and a heavier weight. A dot alone is a single small coloured mark
+ * -- the first thing lost to a colour-vision difference, to a dim screen, or
+ * to a glance that did not linger. */
+/* The name takes the weight; the subtitle stays where it was. Darkening both
+   flattens the row -- the name stops being the first thing read, which is the
+   hierarchy the list depends on. */
+.inbox-row[data-unread="true"] .inbox-line strong { font-weight: 680; color: var(--text); }
+.inbox-dot {
+  flex: none; width: 8px; height: 8px; margin-left: 8px;
+  border-radius: 999px; background: var(--accent);
+}
+
+/* Announced to a screen reader, never drawn. The dot is aria-hidden, so
+   without this the fact is carried only by colour and weight -- neither of
+   which reaches someone listening to the page. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
 /* An icon inherits its ink and never carries the text's own metrics. */
 .icon { display: block; flex: none; }
 .rail-item .rail-glyph { font-size: 0; }

@@ -40,6 +40,12 @@ export default function Task() {
       setItems((thread.messages || []).map((message) => ({
         type: 'message', role: message.role, author: message.author, text: message.text,
       })));
+      // Opening a conversation is reading it. Marked after the messages are
+      // in hand rather than on mount, so a thread whose load failed is not
+      // recorded as seen. Failure here is silent on purpose: the reader has
+      // the conversation, and an error about a read marker would be noise
+      // about something they did not ask for.
+      api.markRead(threadId).catch(() => {});
     }).catch((e) => {
       // A newly provisioned agent has no conversation yet; a missing thread
       // is not a substitute for demo conversation history.

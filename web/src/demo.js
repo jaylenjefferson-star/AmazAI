@@ -103,6 +103,10 @@ const MESSAGES = {
   'dm-cos': [], 'dm-res': [], 'dm-fin': [],
 };
 
+//: Read markers, by thread. Empty to start, so a fresh demo session opens on
+//: an inbox with everything unread -- which is the state the design is for.
+const READ = {};
+
 const APPROVAL = {
   approvalId: 'apv-7c41', runId: 'run-9a22', agentId: 'eng',
   action: 'cloudfront.create_invalidation',
@@ -165,8 +169,22 @@ export const demoApi = {
   addMemory: async () => ({}),
   deleteMemory: async () => ({}),
 
-  threads: async () => (await wait(120), { threads: THREADS }),
+  // `unread` is derived by the control plane from lastActivity against the
+  // read marker. Mirrored here rather than stored as a flag, so the fixture
+  // cannot drift into showing an unread row that the real API would not.
+  threads: async () => (await wait(120), {
+    threads: THREADS.map((t) => ({
+      ...t,
+      readAt: READ[t.threadId] || null,
+      unread: Boolean(t.lastActivity && t.lastActivity > (READ[t.threadId] || '')),
+    })),
+  }),
   thread: async (id) => (await wait(80), { threadId: id, messages: MESSAGES[id] || [] }),
+  markRead: async (id) => {
+    const thread = THREADS.find((t) => t.threadId === id);
+    READ[id] = thread?.lastActivity || iso();
+    return { threadId: id, readAt: READ[id] };
+  },
   createThread: async (t) => {
     const threadId = `room-${Math.random().toString(36).slice(2, 8)}`;
     const thread = { threadId, kind: t?.kind || 'room', title: t?.title || 'New room',

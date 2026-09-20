@@ -219,6 +219,10 @@ export default function Inbox() {
         subtitle: agent.role || STATES[agent.state]?.verb || '',
         state: needsYou ? 'approval' : agent.state,
         at: thread?.lastActivity || agent.updatedAt || '',
+        // Server-derived. A companion with no thread yet has nothing to have
+        // missed, so an absent thread is read rather than unread -- otherwise
+        // every newly created companion would arrive already shouting.
+        unread: Boolean(thread?.unread),
         agent,
       };
     });
@@ -238,6 +242,7 @@ export default function Inbox() {
             : 'No companions in this room yet',
           state: needsYou ? 'approval' : (room.status === 'active' ? 'working' : 'idle'),
           at: room.lastActivity || '',
+          unread: Boolean(room.unread),
           members,
         };
       });
@@ -252,15 +257,20 @@ export default function Inbox() {
   }, [agents, threads, byId, waiting, query]);
 
   const needsYouCount = rows.filter((r) => r.state === 'approval').length;
+  const unreadCount = rows.filter((r) => r.unread).length;
 
   return (
     <div className="inbox">
       <header className="inbox-head">
         <div className="inbox-head-text">
           <h1>Conversations</h1>
+          {/* Two different facts, and the urgent one wins the line: something
+              awaiting your decision outranks something merely unseen. */}
           <p>{needsYouCount
             ? `${needsYouCount} waiting on you`
-            : 'Nothing is waiting on you'}</p>
+            : unreadCount
+              ? `${unreadCount} unread`
+              : 'Nothing is waiting on you'}</p>
         </div>
         <div className="inbox-head-actions">
           <button type="button" className="inbox-icon" aria-label="Search"
@@ -315,7 +325,8 @@ export default function Inbox() {
       <ul className="inbox-list">
         {rows.map((row) => (
           <li key={row.key}>
-            <Link className="inbox-row" to={row.to} data-kind={row.kind}>
+            <Link className="inbox-row" to={row.to} data-kind={row.kind}
+                  data-unread={row.unread ? 'true' : undefined}>
               <span className="inbox-mark">
                 {row.kind === 'room'
                   ? <RoomMark members={row.members} />
@@ -326,6 +337,7 @@ export default function Inbox() {
               <span className="inbox-main">
                 <span className="inbox-line">
                   <strong>{row.title}</strong>
+                  {row.unread && <span className="sr-only">Unread</span>}
                   <small>{timeLabel(row.at)}</small>
                 </span>
                 <span className="inbox-line">
@@ -333,6 +345,7 @@ export default function Inbox() {
                   <span className={`inbox-state s-${row.state}`}>
                     {STATES[row.state]?.label || 'Idle'}
                   </span>
+                  {row.unread && <span className="inbox-dot" aria-hidden="true" />}
                 </span>
               </span>
             </Link>

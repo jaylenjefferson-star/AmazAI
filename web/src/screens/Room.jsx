@@ -34,6 +34,9 @@ export default function Room() {
       setItems((t.messages || []).map((m) => ({
         type: 'message', role: m.role, author: m.author, text: m.text,
       })));
+      // Same rule as a companion conversation: reading it is what marks it
+      // read, and only once the messages actually arrived.
+      api.markRead(roomId).catch(() => {});
     }).catch((e) => setError(e.message));
   }, [roomId]);
 
