@@ -55,23 +55,24 @@ at M3. The `MEM#` schema can front a managed store later without changing the UI
 
 ---
 
-### D4 · Resume mechanism ⚠️ spike before building approvals
+### D4 · Resume mechanism ✅ settled 2026-09-20
 The pause/resume design assumes `invoke_harness` accepts a continuation carrying
 a `toolResult` for a previously-emitted `inline_function` call on the same
 `runtimeSessionId`.
 
-**Default:** assume it works; **verify in M1 step 2, before the approval UI.**
+**Decision:** use the native `tool_result` continuation.
 
 **Fallback if not:** resume with the decision as a synthetic user turn. Slightly
 less clean, same state machine, roughly a day.
 
-**Status: isolated, not settled.** Everything that can be done without an AWS
-account is done. The choice lives in one place, `services/amazai/continuation.py`
-(`AMAZAI_CONTINUATION`, default `resume_note`, which is what runs today);
-`tool_result` is *refused* until this spike shows the service accepts it, and
-nothing else in the codebase builds a resume turn (a test enforces that).
+**Status: verified and deployed.** The live probe ran against the Engineering
+harness with the account's `us.anthropic.claude-opus-4-6-v1` inference profile.
+Both continuation shapes were accepted; the probe recommended `tool_result`,
+which is now deployed as `AMAZAI_CONTINUATION=tool_result` on the orchestrator.
+The choice remains isolated in `services/amazai/continuation.py`, and no other
+code builds a resume turn (a test enforces that).
 
-**The live test -- the one thing that needs you.** It opens two fresh sessions on
+**The live test.** It opens two fresh sessions on
 a harness you name, makes the model call `request_approval`, then continues one
 with a `toolResult` and the other with a plain user turn, and reports which the
 service accepted. It creates no agent, writes nothing to DynamoDB, touches no
@@ -86,7 +87,6 @@ connector, and costs a few cents (four short model calls).
 `AMAZAI_CONTINUATION=<value>`; deploy it with
 `cdk deploy -c continuation=<value>`. Exit code 2 means neither shape was
 accepted: do not deploy the approval flow, and the printed errors are the finding.
-Record the result here.
 
 **What D4 does and does not gate.** Approvals already resume through the
 fallback. What D4 changes is the *shape of the resume turn*. Cards (`request_connector`,

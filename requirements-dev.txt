@@ -2,5 +2,8 @@
 pytest>=8.0
 moto[dynamodb,s3]>=5.0
 boto3>=1.35
+# Required when AWS CLI login credentials are refreshed through the CRT-backed
+# provider; provisioning and live AgentCore probes use boto3 directly.
+awscrt>=0.20
 cryptography>=42
 pyjwt[crypto]>=2.9
