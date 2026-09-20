@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from amazai import identity, keys as K
+from amazai import identity, keys as K, settings as S
 from amazai.store import Store, now_iso
 
 import handlers.api as api
@@ -348,3 +348,96 @@ def test_a_malformed_clock_is_refused(api_table, agent):
 def test_a_bare_word_is_not_a_timezone(api_table, agent):
     status, _ = call("PATCH", f"/agents/{agent['agentId']}", {"timezone": "Pacific"})
     assert status == 400
+
+
+# --- first-run setup --------------------------------------------------------
+#
+# Setup used to be recorded in `localStorage['amazai.onboarded']`, which is a
+# fact about a browser rather than about an account: a second machine, a
+# private window or a cleared cache put an owner who had been here for months
+# back through setup. These assert that the account is the thing that knows.
+
+def test_setup_is_recorded_on_the_account_not_the_browser(api_table):
+    status, body = call("GET", "/settings")
+    assert status == 200
+    # Before setup, and answered rather than 404 -- the console's guard reads
+    # this on every first paint.
+    assert body["onboardedAt"] is None
+    assert body["workspaceName"] is None
+
+    status, body = call("PUT", "/settings",
+                        {"workspaceName": "Jaylen's workspace", "onboarded": True})
+    assert status == 200, body
+    assert body["workspaceName"] == "Jaylen's workspace"
+    assert body["onboardedAt"]
+
+    # A different browser is a different device, not a different account.
+    _, fresh = call("GET", "/settings")
+    assert fresh["onboardedAt"] == body["onboardedAt"]
+
+
+def test_finishing_setup_twice_does_not_move_the_date_it_happened(api_table, monkeypatch):
+    _, first = call("PUT", "/settings", {"onboarded": True})
+    # The clock is moved rather than trusted to differ: `now_iso` is only
+    # accurate to the second, so two writes in the same second agree by
+    # accident and the assertion passes whether or not the stamp is held.
+    monkeypatch.setattr(S, "now_iso", lambda: "2030-01-01T00:00:00Z")
+    _, second = call("PUT", "/settings", {"onboarded": True,
+                                          "workspaceName": "Renamed"})
+    assert second["onboardedAt"] == first["onboardedAt"]
+    # It is the stamp that is held, not the call that is dropped: everything
+    # else in the same write still lands.
+    assert second["workspaceName"] == "Renamed"
+
+
+def test_setup_cannot_be_unset_by_asserting_it_false(api_table):
+    call("PUT", "/settings", {"onboarded": True})
+    status, body = call("PUT", "/settings", {"onboarded": False})
+    # Named rather than ignored: a client that thinks it can clear this is
+    # wrong about where setup lives, and should be told so.
+    assert status == 400
+    assert "onboarded" in body["detail"]
+    _, after = call("GET", "/settings")
+    assert after["onboardedAt"]
+
+
+def test_a_client_does_not_get_to_say_when_setup_happened(api_table):
+    # `onboardedAt` is output only. The write key is the assertion, and the
+    # server stamps the time, so a clock-skewed browser cannot backdate an
+    # account.
+    status, _ = call("PUT", "/settings", {"onboardedAt": "2001-01-01T00:00:00Z"})
+    assert status == 400
+
+
+def test_renaming_the_workspace_leaves_the_setup_record_alone(api_table):
+    _, done = call("PUT", "/settings", {"workspaceName": "First", "onboarded": True})
+    _, renamed = call("PUT", "/settings", {"workspaceName": "Second"})
+    assert renamed["workspaceName"] == "Second"
+    assert renamed["onboardedAt"] == done["onboardedAt"]
+
+
+def test_a_workspace_name_has_to_be_one_the_setup_form_could_have_produced(api_table):
+    # The setup input is `maxLength={60}` and will not advance under two
+    # characters. The server holds the same bounds rather than trusting them.
+    assert call("PUT", "/settings", {"workspaceName": "x"})[0] == 400
+    assert call("PUT", "/settings", {"workspaceName": "x" * 61})[0] == 400
+    assert call("PUT", "/settings", {"workspaceName": "  ok  "})[1]["workspaceName"] == "ok"
+    # Cleared, which is what the settings row does with an emptied field.
+    assert call("PUT", "/settings", {"workspaceName": None})[1]["workspaceName"] is None
+
+
+def test_the_payload_first_run_setup_sends_is_one_the_api_accepts(api_table):
+    """Setup asks for four things -- a name, a job, a shape and a colour --
+    and posts exactly those. Everything the create form also offers (tier,
+    budget, grants, working style) is deliberately absent, because asking a
+    new owner to set a monthly ceiling before they have seen the product is
+    how setup becomes a form. If the API grew a required field, setup would
+    be the last place to find out."""
+    status, agent = call("POST", "/agents", {
+        "name": "Pell",
+        "role": "Watches production and investigates alarms",
+        "avatar": {"shape": "pebble", "color": "#2f6fe4"},
+    })
+    assert status in (200, 201), agent
+    assert agent["name"] == "Pell"
+    assert agent["avatar"] == {"shape": "pebble", "color": "#2f6fe4"}

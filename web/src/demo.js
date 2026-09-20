@@ -250,6 +250,10 @@ export const demoApi = {
       notifications: { completion: true, inputNeeded: true, failure: true, ...SETTINGS.notifications },
       theme: SETTINGS.theme ?? 'system',
       defaultTimezone: SETTINGS.defaultTimezone ?? null,
+      workspaceName: SETTINGS.workspaceName ?? null,
+      // The fixture account is already set up, so ?demo=1 opens on the inbox
+      // rather than on first-run setup. Clear it to review onboarding.
+      onboardedAt: SETTINGS.onboardedAt ?? iso(-30 * 24 * 60 * 60_000),
       updatedAt: SETTINGS.updatedAt ?? null,
     };
   },
@@ -266,6 +270,13 @@ export const demoApi = {
     }
     if ('theme' in changes) SETTINGS.theme = changes.theme;
     if ('defaultTimezone' in changes) SETTINGS.defaultTimezone = changes.defaultTimezone;
+    if ('workspaceName' in changes) SETTINGS.workspaceName = changes.workspaceName;
+    // Asserted, never supplied as a time -- the same contract as the API, so
+    // a console reviewed here behaves the way it will against the real one.
+    if ('onboarded' in changes) {
+      if (changes.onboarded !== true) throw new Error('onboarded is asserted by finishing setup and is not unset here');
+      SETTINGS.onboardedAt = SETTINGS.onboardedAt ?? iso();
+    }
     SETTINGS.updatedAt = iso();
     return demoApi.settings();
   },

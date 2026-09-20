@@ -34,6 +34,17 @@ DEFAULTS: dict = {
     #: Applied to a new agent when the caller does not name one, so a person
     #: sets their zone once rather than on every companion.
     "defaultTimezone": None,
+    #: Named during first-run setup. Stored here rather than in the browser
+    #: because it is a fact about the account, not about the machine someone
+    #: happened to sign in from.
+    "workspaceName": None,
+    #: When first-run setup was completed, or None if it never was. This is
+    #: what the console's first-run guard reads. It used to be a localStorage
+    #: flag, which meant a new browser, a cleared cache or a private window
+    #: put an account that had been set up months ago back through setup --
+    #: the flag was a fact about the device, and setup is a fact about the
+    #: account.
+    "onboardedAt": None,
 }
 
 THEMES: frozenset[str] = frozenset({"system", "light", "dark"})
@@ -56,6 +67,8 @@ def read(store) -> dict:
         "notifications": notifications,
         "theme": stored.get("theme", DEFAULTS["theme"]),
         "defaultTimezone": stored.get("defaultTimezone", DEFAULTS["defaultTimezone"]),
+        "workspaceName": stored.get("workspaceName", DEFAULTS["workspaceName"]),
+        "onboardedAt": stored.get("onboardedAt", DEFAULTS["onboardedAt"]),
         "updatedAt": stored.get("updatedAt"),
     }
 
@@ -66,13 +79,16 @@ def write(store, body: dict) -> dict:
     Partial so a console that only renders the notification group cannot
     silently reset a theme it never showed.
     """
-    unknown = sorted(set(body) - {"notifications", "theme", "defaultTimezone"})
+    unknown = sorted(set(body) - {"notifications", "theme", "defaultTimezone",
+                                  "workspaceName", "onboarded"})
     _require(not unknown, f"not a setting: {unknown}")
 
     current = read(store)
     nxt = {"notifications": dict(current["notifications"]),
            "theme": current["theme"],
-           "defaultTimezone": current["defaultTimezone"]}
+           "defaultTimezone": current["defaultTimezone"],
+           "workspaceName": current["workspaceName"],
+           "onboardedAt": current["onboardedAt"]}
 
     if "notifications" in body:
         supplied = body["notifications"] or {}
@@ -105,8 +121,28 @@ def write(store, body: dict) -> dict:
             except AgentInvalid as exc:
                 raise ValidationError(str(exc)) from exc
 
+    if "workspaceName" in body:
+        name = body["workspaceName"]
+        if name is None:
+            nxt["workspaceName"] = None
+        else:
+            _require(isinstance(name, str), "workspaceName must be a string")
+            name = name.strip()
+            _require(2 <= len(name) <= 60,
+                     "workspaceName must be between 2 and 60 characters")
+            nxt["workspaceName"] = name
+
+    if "onboarded" in body:
+        # Asserted, never supplied as a time: the client says setup finished
+        # and the server decides when that was. Stamped once, so re-running
+        # setup -- which is allowed, there is nothing destructive about it --
+        # does not rewrite the date the account was actually set up.
+        _require(body["onboarded"] is True,
+                 "onboarded is asserted by finishing setup and is not unset here")
+        nxt["onboardedAt"] = current["onboardedAt"] or now_iso()
+
     store.put({
         "pk": K.settings_pk(store.owner_id), "sk": "META",
-        "entity": "Settings", "updatedAt": now_iso(), **nxt,
+        "entity": "Settings", **nxt,
     })
     return read(store)
