@@ -2034,3 +2034,35 @@ a.row-card:hover { border-color: var(--btn-line); }
 }
 .savebar span { font: var(--t-label); color: var(--dim); }
 .savebar .primary { margin-left: auto; }
+
+/* A room's participants in its header, same geometry as the inbox stack:
+   three 26px marks overlapped by 10px fit the space without bleeding. */
+.chat-stack { display: inline-flex; align-items: center; flex: none; }
+.chat-stack-item + .chat-stack-item { margin-left: -10px; }
+
+/* The coordination summary. A count and a way in, never the traffic: the
+   owner is a reader of what the companions said to each other, not a party
+   to it, and rendering it inline would say otherwise. */
+.activity-summary {
+  display: flex; align-items: center; gap: 10px;
+  width: calc(100% - 32px); margin: 0 16px 12px;
+  padding: 11px 13px; min-height: 44px;
+  border: 1px dashed var(--line); border-radius: 12px;
+  background: none; color: var(--dim);
+  font: var(--t-label); text-align: left; cursor: pointer;
+}
+.activity-summary:hover { background: var(--hover); color: var(--text); }
+.activity-summary span { flex: 1; min-width: 0; }
+.activity-summary em { font-style: normal; color: var(--accent); }
+
+/* A finished room. Sized like the composer it replaces, so the timeline
+   above it does not jump when a room closes while being read. */
+.room-closed {
+  display: grid; gap: 4px;
+  padding: 14px 20px;
+  padding-bottom: max(16px, calc(10px + env(safe-area-inset-bottom)));
+  border-top: 1px solid var(--hairline);
+  background: var(--raised);
+}
+.room-closed strong { font: var(--t-strong); }
+.room-closed span { font: var(--t-meta); color: var(--dim); line-height: 1.55; }

@@ -77,6 +77,11 @@ const THREADS = [
   { threadId: 'room-ship', title: 'Ship the console', kind: 'room',
     agentIds: ['eng', 'ops', 'cos'], status: 'active',
     lastActivity: iso(-11 * 60_000) },
+  // A room is task-bound, so it ends. Without a finished one the read-only
+  // state has nothing to render against.
+  { threadId: 'room-migrate', title: 'Migrate the evidence bucket', kind: 'room',
+    agentIds: ['ops', 'eng'], status: 'completed', readOnly: true,
+    createdBy: 'you', lastActivity: iso(-5 * 86400_000) },
 ];
 
 const MESSAGES = {
@@ -101,6 +106,15 @@ const MESSAGES = {
     { role: 'assistant', author: 'Cloud Operations', text: 'Two 5xx spikes, both from the same deploy, both cleared on rollback. Nothing outstanding.' },
   ],
   'dm-cos': [], 'dm-res': [], 'dm-fin': [],
+  'room-ship': [
+    { role: 'user', author: 'you', text: 'Where are we for the release?' },
+    { role: 'assistant', author: 'Engineering', text: 'Tests are green on the branch. The full job ran end to end for the first time.' },
+    { role: 'assistant', author: 'Cloud Operations', text: 'Distribution is warm and the alarm thresholds are back to normal.' },
+  ],
+  'room-migrate': [
+    { role: 'user', author: 'you', text: 'Move the sealed bundles to the new bucket. Nothing may be rewritten.' },
+    { role: 'assistant', author: 'Cloud Operations', text: 'Copied 1,284 objects and verified every checksum against the manifest. Originals left in place.' },
+  ],
 };
 
 //: Read markers, by thread. Empty to start, so a fresh demo session opens on
@@ -199,7 +213,15 @@ export const demoApi = {
       unread: Boolean(t.lastActivity && t.lastActivity > (READ[t.threadId] || '')),
     })),
   }),
-  thread: async (id) => (await wait(80), { threadId: id, messages: MESSAGES[id] || [] }),
+  // The whole record plus its messages, as GET /threads/{id} returns. The
+  // stub this used to be -- id and messages only -- meant a room rendered
+  // with no participants, no title and no status, so the read-only state and
+  // the participant marks could not be reviewed at all.
+  thread: async (id) => {
+    await wait(80);
+    const thread = THREADS.find((t) => t.threadId === id) || { threadId: id };
+    return { ...thread, threadId: id, messages: MESSAGES[id] || [] };
+  },
   markRead: async (id) => {
     const thread = THREADS.find((t) => t.threadId === id);
     READ[id] = thread?.lastActivity || iso();
@@ -215,7 +237,21 @@ export const demoApi = {
     return thread;
   },
   send: async () => (await wait(200), { runId: 'run-9a22' }),
-  coordination: async () => (await wait(80), { coordination: [] }),
+  // Agent-to-agent traffic bound to a room. Read-only in the console, and
+  // the reason the room keeps it in its own feed rather than the chat.
+  coordination: async (id) => {
+    await wait(80);
+    if (id !== 'room-ship') return { coordination: [] };
+    return { coordination: [
+      { kind: 'handoff', at: iso(-16 * 60_000), fromAgentId: 'cos', toAgentId: 'eng',
+        status: 'accepted', summary: 'Cut the release once CI is green.' },
+      { kind: 'message', at: iso(-14 * 60_000), fromAgentId: 'eng', toAgentId: 'ops',
+        status: 'delivered', priority: 'normal',
+        summary: 'Invalidation will be needed once the bundle hash changes.' },
+      { kind: 'handoff', at: iso(-12 * 60_000), fromAgentId: 'eng', toAgentId: 'ops',
+        status: 'accepted', summary: 'Warm the distribution before the cutover.' },
+    ] };
+  },
   exec: async (_id, command) => (await wait(260), {
     stdout: command.startsWith('ls')
       ? 'dist/\nindex.html\nassets/\npackage.json'

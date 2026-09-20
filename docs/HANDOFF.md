@@ -14,7 +14,7 @@ cd web && npm run dev               # http://localhost:5173/?demo=1
 
 **This repo has no CI.** There is no `.github/workflows` directory at all, so
 nothing validates a pull request. Every number above is from a local run. Adding
-a workflow that runs those three commands is itself a task (see 6 below).
+a workflow that runs those three commands is itself a task (see 5 below).
 
 ---
 
@@ -29,6 +29,7 @@ a workflow that runs those three commands is itself a task (see 6 below).
 | Control plane | Read state, routines CRUD, EventBridge schedules, artifacts, settings, agent hours/timezone |
 | Unread | Shown in the inbox, cleared by opening a conversation |
 | 4 · Companion settings | `screens/CompanionSettings.jsx`, reached from the chat header overflow |
+| 5 · Room chat | Same chat header, participant marks, read-only when finished, collapsed coordination summary |
 
 ### Conventions established in this work
 
@@ -39,6 +40,13 @@ a workflow that runs those three commands is itself a task (see 6 below).
   characters would have been refused on create.
 - **Never build a control the API will refuse.** Companion settings deliberately
   omits the agent's computer, duplicate and save-as-template for this reason.
+- **Agent-to-agent traffic is not chat.** A room keeps coordination in its own
+  feed; the room tab shows a collapsed count and a way in, never the traffic
+  itself. Rendering it inline would say the owner was addressed by hop counts
+  and priority wakes that were never sent to them.
+- **The demo backend must answer like the real one.** Three fixture stubs have
+  now hidden real behaviour: a `thread()` that dropped every field but
+  messages, an `updateAgent()` that returned `{}`, and avatars the API refuses.
 
 - **Every CSS rule reads a token.** Light and dark both work from one block.
   Do not hardcode a surface or an ink colour — that is exactly what broke light
@@ -57,20 +65,7 @@ a workflow that runs those three commands is itself a task (see 6 below).
 
 ## Left to do, in order
 
-### 1 · Room chat (plan step 5)
-
-`screens/Room.jsx` still uses the **old** `task-head` header and has none of the
-step-3 treatment.
-
-- Give it the same `chat-head` / `chat-icon` / `chat-identity` markup `Task.jsx`
-  now uses, with `AvatarStack`-style stacked marks for participants.
-- Per-companion attribution on each message.
-- Collapsed collaboration summaries that expand — `GET /threads/{id}/coordination`
-  already returns handoffs and agent-to-agent messages, read-only.
-- Read-only state for a finished room (`thread.status !== 'active'`): hide the
-  composer rather than disabling it silently.
-
-### 2 · Account settings (plan step 6)
+### 1 · Account settings (plan step 6)
 
 A bottom sheet opened from the avatar, over the inbox. Reuse the `.sheet`
 styles added for the create menu.
@@ -81,7 +76,7 @@ styles added for the create menu.
 Writes are partial — send only what changed. **`approval` is deliberately not a
 switchable notification**; the API refuses it by name. Do not add a toggle.
 
-### 3 · Routines and Artifacts screens
+### 2 · Routines and Artifacts screens
 
 `screens/Sections.jsx` renders both from `fixtures.js`, which returns `[]`
 outside `?demo=1`. So in production **both screens are permanently empty** and
@@ -94,13 +89,13 @@ Add "New routine" to the inbox create sheet once the routine form exists — the
 sheet currently states plainly why it is missing, and that note must come out at
 the same time.
 
-### 4 · Desktop two-pane
+### 3 · Desktop two-pane
 
 At ≥900px: inbox list beside the open conversation, third pane optional for
 companion detail. Today desktop keeps the rail and navigates between them.
 `Shell.jsx` already marks a focused conversation via `data-focused`.
 
-### 5 · Deploy
+### 4 · Deploy
 
 Never deployed. `CLAUDE.md` → "To deploy". Two things will bite:
 
@@ -110,7 +105,7 @@ Never deployed. `CLAUDE.md` → "To deploy". Two things will bite:
   missing, and the first `CreateSchedule` would have failed as a permissions
   error since the IAM policy names `schedule/amazai/*`.
 
-### 6 · CI
+### 5 · CI
 
 Add `.github/workflows/ci.yml` running pytest, `cdk synth` and the web build.
 Nothing validates this repo today.
