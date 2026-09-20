@@ -775,6 +775,18 @@ def _create_agent(store: Store, body: dict, event: dict):
         has_entrypoint=any(r.get("entrypoint") for r in active),
     )
 
+    # A browser creates a Bot by tier, never by guessing a Bedrock identifier.
+    # Reuse an already-provisioned seat's resolved model when one exists in the
+    # org; it was discovered from this account by resolve_models.py, so a first
+    # Bot can be created without turning the UI into a model-ID configuration
+    # screen. A fresh org still fails clearly at provisioning time until its
+    # models have been resolved.
+    if not plan.agent["model"].get("modelId"):
+        resolved = next((r.get("model", {}).get("modelId") for r in active
+                         if r.get("model", {}).get("modelId")), None)
+        if resolved:
+            plan.agent["model"]["modelId"] = resolved
+
     if store.try_get(K.agent_pk(plan.agent_id), "META"):
         return _resp(409, {"error": "conflict",
                            "detail": f"agent {plan.agent_id!r} already exists"})
