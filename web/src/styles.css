@@ -2066,3 +2066,56 @@ a.row-card:hover { border-color: var(--btn-line); }
 }
 .room-closed strong { font: var(--t-strong); }
 .room-closed span { font: var(--t-meta); color: var(--dim); line-height: 1.55; }
+
+/* A sheet that holds a whole settings surface rather than a short menu.
+   Capped so the scrim stays visible: a sheet at full height is a page, and
+   the thing it is over stops being the thing you will go back to. */
+.sheet-tall { max-height: 88vh; }
+.sheet-head { display: flex; align-items: center; gap: 8px; }
+.sheet-head .sheet-title { margin-bottom: 0; }
+.sheet-head .chat-icon { margin-left: auto; font-size: 15px; }
+.sheet-tall .settings-group:first-of-type { margin-top: 10px; }
+
+/* The platform switch, drawn rather than borrowed: a bare checkbox in a
+   settings row reads as a form field, and this is a thing that takes effect
+   the moment it moves. */
+.native-toggle { position: relative; display: inline-flex; flex: none; cursor: pointer; }
+.native-toggle input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer;
+}
+.native-toggle > span[aria-hidden] {
+  width: 46px; height: 28px; border-radius: 999px;
+  background: var(--track); transition: background-color .16s ease;
+}
+.native-toggle > span[aria-hidden]::after {
+  content: ""; display: block;
+  width: 24px; height: 24px; margin: 2px; border-radius: 999px;
+  background: var(--panel); box-shadow: var(--lift);
+  transition: transform .16s ease;
+}
+.native-toggle input:checked + span[aria-hidden] { background: var(--accent); }
+.native-toggle input:checked + span[aria-hidden]::after { transform: translateX(18px); }
+.native-toggle input:focus-visible + span[aria-hidden] {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+/* A settings row stacks on a phone. Side by side, a control with three
+   words in it squeezes the label into a column two words wide, and both
+   halves become harder to read than either would be alone. */
+@media (max-width: 520px) {
+  .setting-row { align-items: stretch; flex-direction: column; gap: 10px; }
+  .setting-row .seg,
+  .setting-row .inline-input { width: 100%; max-width: none; }
+  /* The toggle is the exception: it is small enough to stay on the line,
+     and a switch on its own row reads as a heading with nothing under it. */
+  .setting-row:has(.native-toggle) { flex-direction: row; align-items: center; }
+}
+
+/* An input that sits in a settings row rather than in a form. */
+.inline-input {
+  flex: none; width: 180px; max-width: 45vw;
+  padding: 8px 10px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font: var(--t-label);
+}

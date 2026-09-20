@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { startLogout, useAuth0 } from '../auth0';
+import { AccountSheet } from './AccountSettings';
 
 /** Avatar, identity, settings, sign out. */
 export default function AccountMenu() {
   const { user, logout } = useAuth0();
   const [open, setOpen] = useState(false);
+  const [sheet, setSheet] = useState(false);
   const ref = useRef(null);
 
   useEffect(() => {
@@ -44,14 +46,19 @@ export default function AccountMenu() {
               <span>{email}</span>
             </div>
           </div>
-          <Link className="account-item" to="/settings" role="menuitem"
-                onClick={() => setOpen(false)}>Settings</Link>
+          {/* A sheet rather than a destination: account settings are opened
+              over what you were reading and closed again, never navigated to
+              and back from. */}
+          <button className="account-item" role="menuitem"
+                  onClick={() => { setOpen(false); setSheet(true); }}>Settings</button>
           <Link className="account-item" to="/usage" role="menuitem"
                 onClick={() => setOpen(false)}>Usage</Link>
           <button className="account-item danger" role="menuitem"
                   onClick={() => startLogout(logout)}>Sign out</button>
         </div>
       )}
+
+      {sheet && <AccountSheet onClose={() => setSheet(false)} />}
     </div>
   );
 }

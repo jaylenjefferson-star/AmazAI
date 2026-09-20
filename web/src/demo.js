@@ -117,6 +117,9 @@ const MESSAGES = {
   ],
 };
 
+//: Owner preferences. Only what was changed, as the stored row holds.
+const SETTINGS = { notifications: {} };
+
 //: Read markers, by thread. Empty to start, so a fresh demo session opens on
 //: an inbox with everything unread -- which is the state the design is for.
 const READ = {};
@@ -239,6 +242,34 @@ export const demoApi = {
   send: async () => (await wait(200), { runId: 'run-9a22' }),
   // Agent-to-agent traffic bound to a room. Read-only in the console, and
   // the reason the room keeps it in its own feed rather than the chat.
+  // Owner preferences, defaulted on read exactly as the control plane does,
+  // so the sheet can be reviewed without a deploy.
+  settings: async () => {
+    await wait(80);
+    return {
+      notifications: { completion: true, inputNeeded: true, failure: true, ...SETTINGS.notifications },
+      theme: SETTINGS.theme ?? 'system',
+      defaultTimezone: SETTINGS.defaultTimezone ?? null,
+      updatedAt: SETTINGS.updatedAt ?? null,
+    };
+  },
+  saveSettings: async (changes) => {
+    await wait(150);
+    // Refused by name, as the API does: an approval is a question a run
+    // cannot proceed without, not a notification.
+    const kinds = Object.keys(changes.notifications || {});
+    const bad = kinds.filter((k) => !['completion', 'inputNeeded', 'failure'].includes(k));
+    if (bad.length) throw new Error(`not a notification kind: ${bad.join(', ')}`);
+
+    if (changes.notifications) {
+      SETTINGS.notifications = { ...SETTINGS.notifications, ...changes.notifications };
+    }
+    if ('theme' in changes) SETTINGS.theme = changes.theme;
+    if ('defaultTimezone' in changes) SETTINGS.defaultTimezone = changes.defaultTimezone;
+    SETTINGS.updatedAt = iso();
+    return demoApi.settings();
+  },
+
   coordination: async (id) => {
     await wait(80);
     if (id !== 'room-ship') return { coordination: [] };
