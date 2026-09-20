@@ -36,10 +36,18 @@ class TestContinuationFailsClosed:
         assert continuation.resume_messages({"resume": True, "resumeNote": "approved"}) == [
             {"role": "user", "content": [{"text": "approved"}]}]
 
-    def test_tool_result_is_refused_until_the_spike_has_shown_it_works(self, monkeypatch):
+    def test_tool_result_requires_the_paused_tool_identity(self, monkeypatch):
         monkeypatch.setenv("AMAZAI_CONTINUATION", "tool_result")
-        with pytest.raises(ContinuationUnavailable, match="spike_d4"):
+        with pytest.raises(ContinuationUnavailable, match="paused tool identity"):
             continuation.resume_messages({"resume": True, "resumeNote": "approved"})
+
+    def test_tool_result_replays_the_paused_tool_and_decision(self, monkeypatch):
+        monkeypatch.setenv("AMAZAI_CONTINUATION", "tool_result")
+        turns = continuation.resume_messages({"resume": True, "resumeNote": "approved",
+            "resumeApproval": {"status": "approved", "toolUseId": "tu-1",
+                               "toolName": "request_approval", "toolInput": {"action": "x"}}})
+        assert turns[0]["content"][0]["toolUse"]["toolUseId"] == "tu-1"
+        assert turns[1]["content"][0]["toolResult"]["status"] == "success"
 
     def test_a_typo_is_an_error_not_a_silent_default(self, monkeypatch):
         monkeypatch.setenv("AMAZAI_CONTINUATION", "toolresult")

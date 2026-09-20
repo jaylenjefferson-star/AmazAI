@@ -53,8 +53,18 @@ def resume_messages(event: dict) -> list[dict]:
     if not (event.get("resume") and event.get("resumeNote")):
         return []
     if mode() is Mode.TOOL_RESULT:
-        raise ContinuationUnavailable(
-            "AMAZAI_CONTINUATION=tool_result has not been verified against "
-            "invoke_harness (decision D4). Run scripts/spike_d4.py; until it "
-            "reports tool_result as accepted, leave this at resume_note.")
+        approval = event.get("resumeApproval") or {}
+        tool_use_id = approval.get("toolUseId")
+        tool_name = approval.get("toolName")
+        if not tool_use_id or not tool_name:
+            raise ContinuationUnavailable("native continuation is missing the paused tool identity")
+        status = "success" if approval.get("status") == "approved" else "error"
+        return [
+            {"role": "assistant", "content": [{"toolUse": {
+                "toolUseId": tool_use_id, "name": tool_name,
+                "input": approval.get("toolInput") or {}}}]},
+            {"role": "user", "content": [{"toolResult": {
+                "toolUseId": tool_use_id, "status": status,
+                "content": [{"text": event["resumeNote"]}]}}]},
+        ]
     return [{"role": "user", "content": [{"text": event["resumeNote"]}]}]
