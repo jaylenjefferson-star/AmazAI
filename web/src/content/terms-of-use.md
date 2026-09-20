@@ -14,7 +14,7 @@ contact: legal@amazai.co
 
 These Terms of Use (the "Terms") form an agreement between you and AmazFlow, LLC, a Georgia limited liability company, doing business as AmazAI ("AmazAI," "we," "us," or "our"). They govern your access to and use of the AmazAI website, application, agents, routines, connectors, and related services (collectively, the "Service").
 
-By accessing or using the Service, you agree to these Terms and our [Privacy Policy](/privacy), [Cookie Policy](/cookie-policy), [Acceptable Use Policy](/acceptable-use), and [Security & Responsible Disclosure](/security) policy. If you use the Service for an organization, you represent that you have authority to bind that organization, and "you" includes that organization.
+By accessing or using the Service, you agree to these Terms and our [Privacy Policy](/privacy), [Cookie Policy](/cookie-policy), [Acceptable Use Policy](/acceptable-use), and [Security & Responsible Disclosure](/security-disclosure) policy. If you use the Service for an organization, you represent that you have authority to bind that organization, and "you" includes that organization.
 
 You must be at least 18 years old and capable of forming a binding agreement to use the Service. AmazAI is currently available by invitation only. We may grant, change, suspend, or end access in our discretion, subject to any separate written agreement.
 

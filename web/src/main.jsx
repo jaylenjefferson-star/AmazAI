@@ -28,8 +28,24 @@ import Room from './screens/Room';
 import Usage from './screens/Usage';
 import Gallery from './screens/Gallery';
 import Connectors from './screens/Connectors';
+import HowItWorks from './screens/marketing/HowItWorks';
+import Product from './screens/marketing/Product';
+import Pricing from './screens/marketing/Pricing';
+import Integrations from './screens/marketing/Integrations';
+import UseCases from './screens/marketing/UseCases';
+import SecurityOverview from './screens/marketing/SecurityOverview';
+import ForTeams from './screens/marketing/ForTeams';
+import Enterprise from './screens/marketing/Enterprise';
+import FAQ from './screens/marketing/FAQ';
+import Contact from './screens/marketing/Contact';
+import Legal from './screens/marketing/Legal';
 
-const PUBLIC_PATHS = ['/welcome-to-amazai', '/about', '/terms', '/privacy', '/cookie-policy', '/acceptable-use', '/security'];
+const PUBLIC_PATHS = [
+  '/welcome-to-amazai', '/about', '/terms', '/privacy', '/cookie-policy',
+  '/acceptable-use', '/security', '/security-disclosure', '/how-it-works',
+  '/product', '/pricing', '/integrations', '/use-cases', '/for-teams',
+  '/enterprise', '/faq', '/contact', '/legal',
+];
 
 /**
  * Routing.
@@ -71,11 +87,23 @@ function Router() {
       {/* Public */}
       <Route path="/welcome-to-amazai" element={<PublicOnly><Landing /></PublicOnly>} />
       <Route path="/about" element={<About />} />
+      <Route path="/how-it-works" element={<HowItWorks />} />
+      <Route path="/product" element={<Product />} />
+      <Route path="/pricing" element={<Pricing />} />
+      <Route path="/integrations" element={<Integrations />} />
+      <Route path="/use-cases" element={<UseCases />} />
+      <Route path="/security" element={<SecurityOverview />} />
+      <Route path="/for-teams" element={<ForTeams />} />
+      <Route path="/enterprise" element={<Enterprise />} />
+      <Route path="/faq" element={<FAQ />} />
+      <Route path="/contact" element={<Contact />} />
+      <Route path="/legal" element={<Legal />} />
       <Route path="/terms" element={<PolicyPage raw={termsRaw} />} />
       <Route path="/privacy" element={<PolicyPage raw={privacyRaw} />} />
       <Route path="/cookie-policy" element={<PolicyPage raw={cookieRaw} />} />
       <Route path="/acceptable-use" element={<PolicyPage raw={acceptableUseRaw} />} />
-      <Route path="/security" element={<PolicyPage raw={securityRaw} />} />
+      <Route path="/security-disclosure" element={<PolicyPage raw={securityRaw} />} />
+      <Route path="/security-responsible-disclosure" element={<Navigate to="/security-disclosure" replace />} />
 
       {/* First run */}
       <Route path="/welcome" element={<Protected><Onboarding /></Protected>} />
