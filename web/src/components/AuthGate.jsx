@@ -1,6 +1,7 @@
 import Companion from '../characters/Companion';
 import Logo from './Logo';
 import { configured, isOwner, startLogin, startLogout, useAuth0 } from '../auth0';
+import { DEMO } from '../demo';
 
 /**
  * The boundary between "anyone" and "the owner".
@@ -13,6 +14,12 @@ import { configured, isOwner, startLogin, startLogout, useAuth0 } from '../auth0
  */
 export default function AuthGate({ children }) {
   const { isLoading, isAuthenticated, error, user, loginWithRedirect, logout } = useAuth0();
+
+  // Demo mode renders the console against fixtures, so there is no session to
+  // check and nothing behind this gate to protect -- `demoApi` never touches
+  // the control plane. `DEMO` is `import.meta.env.DEV && ?demo`, which a
+  // production build folds to `false`; the gate is unchanged where it matters.
+  if (DEMO) return children;
 
   if (!configured) {
     return (

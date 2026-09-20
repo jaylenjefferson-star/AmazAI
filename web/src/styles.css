@@ -44,6 +44,12 @@
   --accent-wash: rgba(43, 107, 255, .09);
 
   --hover:     rgba(16, 24, 40, .045);
+
+  /* Conversation bubbles: what you said is the darkest thing on the page, what
+     they said is a quiet surface. */
+  --bubble-bot:      #eceef2;
+  --bubble-user:     #0d0f14;
+  --bubble-user-ink: #ffffff;
   --scrim:     rgba(16, 24, 40, .28);
   --track:     rgba(16, 24, 40, .08);
   --btn:       #ffffff;
@@ -121,6 +127,10 @@
     --accent-wash: rgba(91, 157, 255, .12);
 
     --hover:     rgba(255, 255, 255, .045);
+
+    --bubble-bot:      #1c222b;
+    --bubble-user:     #e8eaf0;
+    --bubble-user-ink: #0c0e12;
     --scrim:     rgba(0, 0, 0, .55);
     --track:     rgba(255, 255, 255, .07);
     --btn:       #1c222b;
@@ -161,6 +171,10 @@
   --accent-wash: rgba(91, 157, 255, .12);
 
   --hover:     rgba(255, 255, 255, .045);
+
+  --bubble-bot:      #1c222b;
+  --bubble-user:     #e8eaf0;
+  --bubble-user-ink: #0c0e12;
   --scrim:     rgba(0, 0, 0, .55);
   --track:     rgba(255, 255, 255, .07);
   --btn:       #1c222b;
@@ -420,18 +434,106 @@ input:focus, textarea:focus {
 .timeline {
   flex: 1; overflow-y: auto;
   padding: 22px 20px 8px;
-  display: flex; flex-direction: column; gap: 16px;
+  display: flex; flex-direction: column; gap: 10px;
   scroll-behavior: smooth;
 }
 
-.msg { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 16px; align-items: start; }
+/* Bubbles, as in the inspo: what you said is the darkest thing on the page and
+   what they said is a quiet surface. The author label only draws in a room --
+   in a one-to-one thread the name is already in the header. */
+.msg { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.msg.user { align-items: flex-end; }
 .msg .who {
-  font-size: 12px; color: var(--faint); padding-top: 1px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; color: var(--faint); padding: 0 6px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.msg.user .who { color: var(--dim); }
-.msg .body { white-space: pre-wrap; word-break: break-word; min-width: 0; }
-.msg.user .body { color: var(--text); }
+.msg .body {
+  max-width: min(600px, 88%); min-width: 0; padding: 10px 15px;
+  border-radius: 20px 20px 20px 6px;
+  background: var(--bubble-bot); color: var(--text);
+  line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+}
+.msg.user .body {
+  background: var(--bubble-user); color: var(--bubble-user-ink);
+  border-radius: 20px 20px 6px 20px;
+}
+
+/* One stamp per burst of conversation, not one per message. */
+.time-sep {
+  align-self: center; margin: 8px 0 0;
+  font: var(--t-meta); color: var(--faint); font-variant-numeric: tabular-nums;
+}
+
+/* Closest-fit replies under a Bot's greeting. Buttons, not links: a chip is
+   exactly a message the operator could have typed, so it looks like a thing you
+   press and is quieter than the primary action on the screen. Wrapping, never
+   scrolling sideways -- a row that hides its options off-screen is a menu
+   nobody finds. */
+.suggest-row { display: flex; flex-wrap: wrap; gap: 8px; max-width: min(600px, 92%); }
+.suggest {
+  padding: 8px 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--btn); color: var(--text);
+  font: var(--t-label); cursor: pointer;
+  transition: background-color .13s ease, border-color .13s ease;
+}
+.suggest:hover { background: var(--btn-hover); border-color: var(--accent); }
+.suggest:active { transform: translateY(.5px); }
+.suggest:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Cards: proposals and artifacts, never authority (components/Cards.jsx). */
+.cards { display: grid; gap: 8px; width: min(460px, 92%); }
+.card {
+  display: grid; gap: 12px; padding: 13px 14px;
+  border: 1px solid var(--line); border-radius: 16px; background: var(--panel);
+  color: inherit; text-decoration: none;
+}
+a.card:hover { border-color: var(--btn-line); background: var(--hover); }
+.card-main { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; align-items: start; }
+.card-icon {
+  display: grid; place-items: center; width: 36px; height: 36px;
+  border-radius: 11px; background: var(--raised-2); color: var(--dim);
+}
+.card-text { display: grid; gap: 3px; min-width: 0; }
+.card-text strong { font: var(--t-strong); }
+.card-text span { font: var(--t-label); color: var(--dim); }
+.card-text .card-note { font: var(--t-meta); color: var(--faint); }
+.card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Something that happened, not something said: a routine created, a handoff
+   accepted. Centred and quiet. */
+.event-line {
+  align-self: center; display: inline-flex; align-items: center; gap: 6px;
+  font: var(--t-meta); color: var(--faint);
+}
+
+/* A run's trail, folded to a line and opened on demand. */
+.steps { align-self: flex-start; max-width: min(600px, 92%); }
+.steps-head {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 2px; background: none; border: 0; cursor: pointer;
+  color: var(--dim); font: var(--t-label);
+}
+.steps-head:hover { color: var(--text); }
+.steps-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.steps-mark { display: inline-grid; place-items: center; width: 16px; height: 16px; }
+.steps-check { color: var(--ok); }
+.steps-spin {
+  display: block; width: 12px; height: 12px; border-radius: 999px;
+  border: 2px solid var(--track); border-top-color: var(--accent);
+  animation: steps-spin .8s linear infinite;
+}
+@keyframes steps-spin { to { transform: rotate(360deg); } }
+.steps-list {
+  list-style: none; margin: 4px 0 0 7px; padding: 2px 0 2px 14px;
+  border-left: 1px solid var(--line); display: grid; gap: 7px;
+}
+.steps-list li { display: grid; gap: 1px; font: var(--t-label); color: var(--dim); min-width: 0; }
+.steps-list li.is-current { color: var(--text); }
+.steps-list code { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.steps-list span { overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) {
+  .steps-spin { animation: none; border-right-color: var(--accent); }
+}
 
 /* A tool call is a turn in the conversation, so it sits in the same column
    as speech — just quieter, and foldable. */
@@ -549,7 +651,14 @@ input:focus, textarea:focus {
   display: flex; flex-direction: column; min-width: 0;
 }
 
-.tabs { display: flex; border-bottom: 1px solid var(--hairline); padding: 0 6px; }
+/* Seven tabs do not fit a 340px pane. Scrolls sideways inside its own strip
+   rather than clipping the last one -- the page itself never scrolls. */
+.tabs {
+  display: flex; border-bottom: 1px solid var(--hairline); padding: 0 6px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { flex: none; }
 .tabs button {
   flex: 1; background: none; border: none; border-radius: 0;
   padding: 13px 4px 11px; color: var(--faint); font-size: 12px;
@@ -1783,7 +1892,22 @@ a.row-card:hover { border-color: var(--btn-line); }
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
-.inbox-mark { display: flex; align-items: center; justify-content: center; }
+.inbox-mark {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* Present in a turn right now. Green on a ring the colour of the surface, so it
+   reads as a dot on the avatar rather than a stain on it -- the same idiom the
+   phone inspo uses. Never the only signal: the row's label and the companion's
+   own motion say the same thing. */
+.inbox-presence {
+  position: absolute; right: 2px; bottom: 2px;
+  width: 11px; height: 11px; border-radius: 999px;
+  background: var(--ok); box-shadow: 0 0 0 2px var(--canvas);
+}
+.inbox-row:hover .inbox-presence { box-shadow: 0 0 0 2px var(--hover); }
+.inbox-row[data-open="true"] .inbox-presence { box-shadow: 0 0 0 2px var(--accent-wash); }
 
 /* Three companions at most, overlapped, so a room is legible by who is in
    it. Negative margin rather than absolute positioning keeps the stack a
@@ -1802,7 +1926,17 @@ a.row-card:hover { border-color: var(--btn-line); }
 .inbox-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .inbox-line strong {
   font: var(--t-strong); letter-spacing: -.006em;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* The role, as a tag beside the name: what this Bot is for, at a glance, so a
+   row that says "Sally" also says "Sales". Fixed to its content and never
+   ellipsized -- the name gives way first. */
+.inbox-chip {
+  flex: none; align-self: center;
+  padding: 1px 7px; border-radius: 6px;
+  background: var(--raised-2); color: var(--dim);
+  font: var(--t-meta); letter-spacing: .01em; white-space: nowrap;
 }
 /* Tabular figures so 2:15 and 1:07 occupy the same width and the right edge
    of the column stops shifting as the clock moves. */
@@ -1812,8 +1946,11 @@ a.row-card:hover { border-color: var(--btn-line); }
 }
 .inbox-sub {
   font: var(--t-label); color: var(--dim);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* What it is doing now, in the accent, so a Bot mid-task is distinguishable
+   from one whose last message merely sits there. */
+.inbox-sub.is-live { color: var(--accent); }
 
 .inbox-state {
   margin-left: auto; white-space: nowrap;
@@ -1826,6 +1963,7 @@ a.row-card:hover { border-color: var(--btn-line); }
   background: currentColor;
 }
 .inbox-state.s-approval { color: var(--warn); font-weight: 500; }
+.inbox-state.s-waiting  { color: var(--dim); }
 .inbox-state.s-working,
 .inbox-state.s-thinking { color: var(--accent); }
 .inbox-state.s-blocked  { color: var(--danger); }
@@ -1851,6 +1989,55 @@ a.row-card:hover { border-color: var(--btn-line); }
 .inbox-dot {
   flex: none; width: 8px; height: 8px; margin-left: 8px;
   border-radius: 999px; background: var(--accent);
+}
+
+/* Pinned. A strip of faces, as in the inspo: recognition by shape before the
+   name is read. Wraps rather than scrolls -- twelve is the ceiling, and a row
+   that hides half of them off-screen is a list nobody finds the end of. */
+.pin-strip {
+  list-style: none; margin: 0 0 10px; padding: 0 12px 12px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 4px;
+  border-bottom: 1px solid var(--hairline);
+}
+.pin {
+  display: grid; justify-items: center; gap: 6px;
+  padding: 10px 4px 8px; border-radius: 14px;
+  text-decoration: none; color: inherit;
+  transition: background-color .13s ease;
+}
+.pin:hover { background: var(--hover); }
+.pin:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.pin[data-open="true"] { background: var(--accent-wash); }
+.pin-mark { position: relative; display: inline-flex; }
+.pin-name {
+  max-width: 100%; font: var(--t-meta); color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pin-dot {
+  position: absolute; top: 0; right: 2px;
+  width: 11px; height: 11px; border-radius: 999px;
+  background: var(--accent); box-shadow: 0 0 0 2px var(--canvas);
+}
+.pin-dot--warn { background: var(--warn); }
+@media (min-width: 900px) {
+  .pin-strip { padding-inline: 16px; }
+}
+
+/* The first-Bot offer, above the list. A surface of its own rather than a row:
+   it is an invitation to make something, not a conversation to open, and a row
+   that looked like the others would be tapped expecting a thread. */
+.first-bot {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center;
+  gap: 8px 14px; margin: 0 10px 14px; padding: 14px 16px;
+  border: 1px solid var(--line); border-radius: 16px; background: var(--accent-wash);
+}
+.first-bot-text { display: grid; gap: 3px; min-width: 0; }
+.first-bot-text strong { font: var(--t-strong); letter-spacing: -.006em; }
+.first-bot-text span { font: var(--t-label); color: var(--dim); }
+.first-bot-text .first-bot-error { color: var(--danger); }
+.first-bot .primary { grid-column: 1 / -1; justify-self: stretch; }
+@media (min-width: 900px) {
+  .first-bot { margin-inline: 14px; }
 }
 
 /* Announced to a screen reader, never drawn. The dot is aria-hidden, so
@@ -1988,7 +2175,13 @@ a.row-card:hover { border-color: var(--btn-line); }
 }
 /* The status is the companion's, so it takes the companion's tone colour
    rather than sitting in a chip of its own. */
-.chat-who small { font: var(--t-meta); color: var(--faint); }
+/* The action line can be long ("Reading the 5xx rate, last 6 hours"); it
+   ellipsizes inside the centred column instead of pushing the two equal-width
+   controls either side of it out of true. */
+.chat-who small {
+  font: var(--t-meta); color: var(--faint);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .chat-who small.cc-tone-accent { color: var(--accent); }
 .chat-who small.cc-tone-warn   { color: var(--warn); }
 .chat-who small.cc-tone-danger { color: var(--danger); }
@@ -2148,4 +2341,251 @@ a.row-card:hover { border-color: var(--btn-line); }
   padding: 8px 10px; border-radius: 9px;
   border: 1px solid var(--line); background: var(--panel); color: var(--text);
   font: var(--t-label);
+}
+
+
+/* ----------------------------------------------------- routines, in a pane */
+
+.routine-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 2px; }
+.routine-row {
+  display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto;
+  align-items: center; gap: 6px 10px; padding: 9px 2px;
+}
+.routine-icon {
+  display: grid; place-items: center; width: 32px; height: 32px;
+  border-radius: 999px; background: var(--raised-2); color: var(--dim);
+}
+.routine-text { display: grid; gap: 1px; min-width: 0; }
+.routine-text strong { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.routine-text small { font: var(--t-meta); color: var(--dim); }
+.routine-row[data-paused="true"] .routine-text { opacity: .6; }
+.switch {
+  padding: 3px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--btn); color: var(--dim);
+  font: var(--t-meta);
+}
+.switch[aria-checked="true"] { color: var(--ok); border-color: currentColor; }
+.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch:disabled { opacity: .5; cursor: default; }
+.mem-kind {
+  font: var(--t-meta); font-style: normal; color: var(--faint);
+  padding: 1px 6px; border-radius: 6px; background: var(--raised-2);
+}
+
+/* ------------------------------------------------------------- third pane */
+
+.task-main { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+
+/* Wide enough for list, conversation and a Bot's pane together: the pane stops
+   being a slide-over and stays beside the conversation, as in the inspo. Not
+   earlier -- at 1200px the conversation would be squeezed to under 400px. */
+@media (min-width: 1360px) {
+  .task { flex-direction: row; }
+  .task-side {
+    position: static; transform: none; z-index: auto; flex: none;
+    width: 340px; max-width: none; height: 100%; box-shadow: none;
+  }
+  .task-side-head .ghost { display: none; }
+}
+
+/* ================================================================ composer */
+
+/* One pill, as in the inspo: `+`, the words, and a round action on the right --
+   the microphone when there is nothing to send, the arrow when there is, and
+   "Stop now" beside it whenever a run is going. */
+.cmp { position: relative; flex: 0 0 auto; padding: 8px 16px 14px; display: grid; gap: 8px; }
+.cmp-box {
+  display: flex; align-items: flex-end; gap: 6px;
+  padding: 6px 6px 6px 8px; border-radius: 26px;
+  border: 1px solid var(--line); background: var(--panel);
+  transition: border-color .13s ease, box-shadow .13s ease;
+}
+.cmp-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+.cmp-box.is-busy { border-color: var(--warn-edge); }
+.cmp-box.is-listening { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-wash); }
+.cmp-box textarea {
+  flex: 1; min-width: 0; resize: none; border: 0; outline: 0; background: transparent;
+  padding: 9px 4px; max-height: 168px; font: var(--t-body); line-height: 1.45; color: var(--text);
+}
+/* The global `input:focus, textarea:focus` draws a bordered, tinted field; inside
+   the pill the pill is the field, so its own focus ring (`.cmp-box:focus-within`)
+   is the only one. */
+.cmp-box textarea:focus, .cmp-box textarea:focus-visible {
+  border: 0; box-shadow: none; outline: 0; background: transparent;
+}
+.cmp-box textarea::placeholder { color: var(--faint); }
+.cmp-btn, .cmp-send {
+  flex: none; display: grid; place-items: center; width: 36px; height: 36px;
+  border-radius: 999px; border: 0; cursor: pointer; padding: 0;
+}
+.cmp-btn { background: transparent; color: var(--dim); }
+.cmp-btn:hover { background: var(--hover); color: var(--text); }
+.cmp-send { background: var(--bubble-user); color: var(--bubble-user-ink); }
+.cmp-send:disabled { opacity: .35; cursor: default; }
+.cmp-mic.is-on { background: var(--danger); color: #fff; animation: cmp-pulse 1.4s ease-in-out infinite; }
+@keyframes cmp-pulse { 50% { box-shadow: 0 0 0 6px var(--danger-wash); } }
+.cmp-btn:focus-visible, .cmp-send:focus-visible, .cmp-stop:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.cmp-stop {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 36px;
+  padding: 0 13px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--danger-edge); background: var(--danger-wash); color: var(--danger);
+  font: var(--t-label); font-weight: 600;
+}
+.cmp-stop:hover { background: var(--danger); color: #fff; }
+.cmp-note { margin: 0; padding: 0 10px; font: var(--t-meta); color: var(--dim); }
+.cmp-note.is-error { color: var(--danger); }
+
+.cmp-files { list-style: none; margin: 0; padding: 0 4px; display: flex; flex-wrap: wrap; gap: 6px; }
+.cmp-files li {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 9px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--raised);
+  font: var(--t-label); max-width: 100%;
+}
+.cmp-files li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-files small { color: var(--faint); }
+.cmp-files button { display: grid; place-items: center; width: 20px; height: 20px; border: 0; border-radius: 999px; background: transparent; color: var(--dim); cursor: pointer; padding: 0; }
+.cmp-files button:hover { background: var(--hover); color: var(--text); }
+
+/* Menus open upward from the pill: the composer sits at the bottom of the
+   screen, and a menu that opened downward would be off it. */
+.cmp-menu, .cmp-plus {
+  position: absolute; left: 16px; right: 16px; bottom: calc(100% - 4px); z-index: 40;
+  max-width: 420px; max-height: 280px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 16px; background: var(--panel);
+  box-shadow: var(--pop); padding: 6px;
+}
+.cmp-group { padding: 8px 10px 4px; font: var(--t-meta); text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.cmp-opt, .cmp-plus button {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 8px 10px; border: 0; border-radius: 10px; background: transparent;
+  color: var(--text); cursor: pointer;
+}
+.cmp-opt.is-on, .cmp-opt:hover, .cmp-plus button:hover:not(:disabled) { background: var(--hover); }
+.cmp-plus button:disabled { opacity: .55; cursor: default; }
+.cmp-opt-text, .cmp-plus button span { display: grid; gap: 1px; min-width: 0; }
+.cmp-opt-text strong, .cmp-plus strong { font: var(--t-strong); font-size: 13.5px; }
+.cmp-opt-text small, .cmp-plus small { font: var(--t-meta); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-scrim { position: fixed; inset: 0; z-index: 39; background: transparent; }
+
+.mention {
+  padding: 0 4px; border-radius: 5px; background: var(--accent-wash); color: var(--accent);
+  font-weight: 600;
+}
+.msg.user .mention { background: rgba(255, 255, 255, .18); color: inherit; }
+.msg-actions { display: flex; gap: 4px; opacity: 0; transition: opacity .13s ease; }
+.msg:hover .msg-actions, .msg:focus-within .msg-actions { opacity: 1; }
+.msg-actions button {
+  padding: 3px 8px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--faint); font: var(--t-meta); cursor: pointer;
+}
+.msg-actions button:hover { background: var(--hover); color: var(--text); }
+@media (hover: none) { .msg-actions { opacity: 1; } }
+
+/* ============================================================ auto review */
+
+/* Allowed / Asked / Denied. The word is always drawn: colour is the second
+   signal, never the only one. */
+.step-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.verdict {
+  display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px;
+  border-radius: 999px; font: var(--t-meta); font-weight: 600; line-height: 1.5;
+  border: 1px solid transparent;
+}
+.verdict i { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+.verdict--allowed { color: var(--ok); background: rgba(22, 136, 95, .08); }
+.verdict--asked   { color: var(--warn); background: var(--warn-wash); border-color: var(--warn-edge); }
+.verdict--denied  { color: var(--danger); background: var(--danger-wash); border-color: var(--danger-edge); }
+.step-why { font: var(--t-meta); font-style: normal; color: var(--faint); }
+.steps.has-asked .steps-head { color: var(--warn); }
+.steps.has-denied .steps-head { color: var(--danger); }
+
+/* The rule that stopped the run, on the card that asks. */
+.approval .rule {
+  display: grid; gap: 2px; margin: 0 0 12px; padding: 9px 11px;
+  border-radius: 10px; background: var(--raised); border: 1px solid var(--hairline);
+}
+.rule-label { font: var(--t-meta); text-transform: uppercase; letter-spacing: .05em; color: var(--faint); }
+.rule-text { font: var(--t-label); color: var(--text); }
+.approval.proposal { border-color: var(--btn-line); }
+.proposal-mark { display: flex; margin-bottom: 8px; }
+.proposal-note { margin: 0 0 12px; font: var(--t-meta); color: var(--dim); }
+
+/* ============================================================== info pane */
+
+.task-side-head { gap: 8px; }
+.pane-actions { position: relative; display: inline-flex; align-items: center; gap: 2px; }
+.icon-btn {
+  display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0;
+  border: 0; border-radius: 999px; background: transparent; color: var(--dim);
+  text-decoration: none; cursor: pointer;
+}
+.icon-btn:hover { background: var(--hover); color: var(--text); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pane-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 45; min-width: 250px;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--panel);
+  box-shadow: var(--pop); padding: 6px;
+}
+.pane-menu button {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px;
+  border: 0; border-radius: 9px; background: transparent; color: var(--text);
+  font: var(--t-label); text-align: left; cursor: pointer;
+}
+.pane-menu button:hover:not(:disabled) { background: var(--hover); }
+.pane-menu-note { margin: 4px 10px 6px; font: var(--t-meta); color: var(--ok); }
+@media (min-width: 1360px) { .pane-close { display: none; } }
+
+.seg { display: inline-flex; padding: 3px; margin: 0 0 12px; border-radius: 10px; background: var(--raised-2); gap: 2px; }
+.seg button {
+  padding: 5px 13px; border: 0; border-radius: 8px; background: transparent;
+  color: var(--dim); font: var(--t-label); cursor: pointer;
+}
+.seg button.on { background: var(--panel); color: var(--text); box-shadow: var(--lift); font-weight: 600; }
+.pane-note { margin: 0 0 12px; font: var(--t-meta); color: var(--dim); }
+
+.mem-row { padding: 10px 0; border-bottom: 1px solid var(--hairline); display: grid; gap: 4px; }
+.mem-head { display: flex; align-items: baseline; gap: 8px; }
+.mem-head strong { flex: 1; font-size: 13px; min-width: 0; }
+.mem-body { font-size: 13px; }
+.mem-meta { font: var(--t-meta); color: var(--dim); }
+.mem-actions { display: flex; gap: 6px; margin-top: 4px; }
+.mem-actions .sm { display: inline-flex; align-items: center; gap: 5px; }
+.mem-edit { display: grid; gap: 8px; }
+
+.chan-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.chan-row { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-radius: 10px; color: inherit; text-decoration: none; }
+.chan-row:hover { background: var(--hover); }
+.chan-stack { display: inline-flex; }
+.chan-stack > * + * { margin-left: -8px; }
+.chan-text { display: grid; gap: 1px; min-width: 0; }
+.chan-text strong { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chan-text small { font: var(--t-meta); color: var(--dim); }
+.run-now { color: var(--faint); }
+.run-now:hover:not(:disabled) { color: var(--accent); }
+
+.member-list { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 4px; }
+.member-list li { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 0; }
+.member-text { display: grid; gap: 1px; min-width: 0; }
+.member-text small { font: var(--t-meta); color: var(--dim); }
+.sheet-count { font: var(--t-meta); color: var(--faint); font-weight: 400; margin-left: 6px; }
+
+/* ============================================================ marketplace */
+
+.mk-h { margin: 18px 0 8px; font: var(--t-strong); }
+.mk-bar { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.mk-skill { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 8px; }
+.mk-text { display: grid; gap: 2px; min-width: 0; }
+.mk-text small { color: var(--dim); }
+.mk-text em { font: var(--t-meta); font-style: normal; color: var(--faint); }
+.mk-assign { display: flex; gap: 6px; flex: none; }
+.mk-form { flex-direction: column; align-items: stretch; gap: 4px; }
+.check { display: inline-flex; align-items: center; gap: 8px; font: var(--t-label); }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--hairline); }
+@media (max-width: 640px) { .mk-skill { flex-direction: column; align-items: stretch; } }
+
+@media (max-width: 480px) {
+  .cmp { padding-inline: 10px; }
+  .cmp-stop { padding: 0 10px; }
 }

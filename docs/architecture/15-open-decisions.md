@@ -65,6 +65,41 @@ a `toolResult` for a previously-emitted `inline_function` call on the same
 **Fallback if not:** resume with the decision as a synthetic user turn. Slightly
 less clean, same state machine, roughly a day.
 
+**Status: isolated, not settled.** Everything that can be done without an AWS
+account is done. The choice lives in one place, `services/amazai/continuation.py`
+(`AMAZAI_CONTINUATION`, default `resume_note`, which is what runs today);
+`tool_result` is *refused* until this spike shows the service accepts it, and
+nothing else in the codebase builds a resume turn (a test enforces that).
+
+**The live test -- the one thing that needs you.** It opens two fresh sessions on
+a harness you name, makes the model call `request_approval`, then continues one
+with a `toolResult` and the other with a plain user turn, and reports which the
+service accepted. It creates no agent, writes nothing to DynamoDB, touches no
+connector, and costs a few cents (four short model calls).
+
+    python3 scripts/spike_d4.py --harness-arn <ARN> --model-id <ID>            # prints the plan only
+    python3 scripts/spike_d4.py --harness-arn <ARN> --model-id <ID> --execute  # runs it
+
+`--model-id` is a real inference-profile id from
+`aws bedrock list-inference-profiles` -- never guessed. It needs
+`bedrock-agentcore:InvokeHarness` on that harness and nothing else. It prints
+`AMAZAI_CONTINUATION=<value>`; deploy it with
+`cdk deploy -c continuation=<value>`. Exit code 2 means neither shape was
+accepted: do not deploy the approval flow, and the printed errors are the finding.
+Record the result here.
+
+**What D4 does and does not gate.** Approvals already resume through the
+fallback. What D4 changes is the *shape of the resume turn*. Cards (`request_connector`,
+`propose_routine`) do not depend on it at all: they are made as a turn's last
+action, after the reply, so nothing needs to continue past them.
+
+**Separately: existing harnesses.** Inline tools are declared when a harness is
+created, so the Engineering seat (made before `request_connector` and
+`propose_routine` existed) cannot call them. `scripts/sync_harness_tools.py
+--harness-arn <ARN>` reports what is missing (read-only). `--apply` calls
+`update_harness`, whose parameter shape BUILD_PLAN has not verified -- read the
+report first, and read the error if it refuses.
+
 ---
 
 ### D5 · Package persistence

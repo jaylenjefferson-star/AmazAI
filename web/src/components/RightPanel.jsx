@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
+import Companion from '../characters/Companion';
 import CoordinationFeed from './CoordinationFeed';
+import Icon from './Icon';
+import RoutineList from './RoutineList';
 
 function Activity({ threadId, agents }) {
   const [items, setItems] = useState([]);
@@ -134,46 +138,190 @@ function Usage({ agent }) {
   );
 }
 
+/**
+ * What a Bot knows, and the way to fix it when it is wrong.
+ *
+ * Two lists, kept apart on purpose: what *this* Bot remembers, and what every
+ * Bot is told about you (shared). A correction edits the fact in place and says
+ * so -- "corrected by you" beside "written by the agent" -- because a wrong
+ * memory that is silently fixed is one nobody learns to trust or distrust. The
+ * API refuses to let an edit move a fact between the two, so correcting one can
+ * never quietly publish it to everyone.
+ */
 function Memory({ agent, onChange }) {
+  const [scope, setScope] = useState('agent');
+  const [shared, setShared] = useState(null);
+  const [editing, setEditing] = useState(null);       // { memId, title, body, kind }
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (scope !== 'shared') return;
+    api.sharedMemory().then((r) => setShared(r.memory || [])).catch((e) => setError(e.message));
+  }, [scope]);
+
+  const rows = scope === 'shared'
+    ? (shared || []).filter((m) => m.status !== 'revoked')
+    : (agent.memory || []).filter((m) => m.status !== 'revoked');
+
+  async function refresh() {
+    if (scope === 'shared') setShared((await api.sharedMemory()).memory || []);
+    else onChange();
+  }
 
   async function add(e) {
     e.preventDefault();
     if (!title.trim() || !body.trim()) return;
-    await api.addMemory(agent.agentId, { title: title.trim(), body: body.trim(), pinned: true });
-    setTitle(''); setBody('');
-    onChange();
+    setError('');
+    try {
+      const entry = { title: title.trim(), body: body.trim(), pinned: true };
+      if (scope === 'shared') await api.addSharedMemory(entry);
+      else await api.addMemory(agent.agentId, entry);
+      setTitle(''); setBody('');
+      await refresh();
+    } catch (err) { setError(err.message); }
+  }
+
+  async function saveEdit() {
+    setBusy(true);
+    setError('');
+    try {
+      const changes = { title: editing.title, body: editing.body, kind: editing.kind };
+      if (scope === 'shared') await api.updateSharedMemory(editing.memId, changes);
+      else await api.updateMemory(agent.agentId, editing.memId, changes);
+      setEditing(null);
+      await refresh();
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+
+  async function remove(m) {
+    setError('');
+    try {
+      if (scope === 'shared') await api.deleteSharedMemory(m.memId);
+      else await api.deleteMemory(agent.agentId, m.memId);
+      await refresh();
+    } catch (err) { setError(err.message); }
   }
 
   return (
     <>
-      {(agent.memory || []).length === 0 && (
-        <div className="empty">Nothing remembered yet.</div>
-      )}
-      {(agent.memory || []).map((m) => (
-        <div key={m.memId} style={{ marginBottom: 12 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-            <strong style={{ flex: 1, fontSize: 13 }}>{m.pinned ? '⚲ ' : ''}{m.title}</strong>
-            <button style={{ padding: '2px 6px', fontSize: 11 }}
-                    onClick={async () => { await api.deleteMemory(agent.agentId, m.memId); onChange(); }}>
-              ✕
-            </button>
-          </div>
-          <div style={{ fontSize: 13 }}>{m.body}</div>
-          <div style={{ fontSize: 11, color: 'var(--dim)' }}>
-            {m.source === 'user' ? 'added by you' : 'written by the agent'}
-            {m.usedCount ? ` · used in ${m.usedCount} runs` : ''}
-          </div>
+      <div className="seg" role="tablist" aria-label="Whose memory">
+        {[['agent', `${agent.name}`], ['shared', 'Shared']].map(([key, label]) => (
+          <button key={key} type="button" role="tab" aria-selected={scope === key}
+                  className={scope === key ? 'on' : ''} onClick={() => { setScope(key); setEditing(null); }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className="pane-note">
+        {scope === 'shared'
+          ? 'Facts every Bot is told about you. Nothing reaches this list without your say-so.'
+          : `What ${agent.name} remembers on its own. Correct anything that is wrong.`}
+      </p>
+      {error && <div className="err" style={{ marginBottom: 10 }}><span className="msg-text">{error}</span></div>}
+
+      {rows.length === 0 && <div className="empty">Nothing remembered yet.</div>}
+      {rows.map((m) => (
+        <div key={m.memId} className="mem-row">
+          {editing?.memId === m.memId ? (
+            <div className="mem-edit">
+              <input aria-label="Title" value={editing.title}
+                     onChange={(e) => setEditing({ ...editing, title: e.target.value })} />
+              <textarea aria-label="What is remembered" rows={3} value={editing.body}
+                        onChange={(e) => setEditing({ ...editing, body: e.target.value })} />
+              <select aria-label="Kind" value={editing.kind}
+                      onChange={(e) => setEditing({ ...editing, kind: e.target.value })}>
+                <option value="foundational">Always in context</option>
+                <option value="note">Short-lived note</option>
+                <option value="log">Dated history</option>
+              </select>
+              <div className="mem-actions">
+                <button className="primary sm" disabled={busy} onClick={saveEdit}>Save correction</button>
+                <button className="ghost sm" onClick={() => setEditing(null)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="mem-head">
+                <strong>{m.pinned ? '⚲ ' : ''}{m.title || m.body?.slice(0, 40)}</strong>
+                {m.kind && <em className="mem-kind">{m.kind}</em>}
+              </div>
+              {m.title && <div className="mem-body">{m.body}</div>}
+              <div className="mem-meta">
+                {m.correctedBy ? 'corrected by you' : m.source === 'user' ? 'added by you' : 'written by the agent'}
+                {m.usedCount ? ` · used in ${m.usedCount} runs` : ''}
+              </div>
+              <div className="mem-actions">
+                <button className="ghost sm"
+                        onClick={() => setEditing({ memId: m.memId, title: m.title || '', body: m.body || '', kind: m.kind || 'note' })}>
+                  <Icon name="edit" size={13} />Correct
+                </button>
+                <button className="ghost sm" onClick={() => remove(m)}>Forget</button>
+              </div>
+            </>
+          )}
         </div>
       ))}
+
       <form onSubmit={add} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
         <input placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
-        <textarea placeholder="What should this agent remember?" rows={3}
-                  value={body} onChange={(e) => setBody(e.target.value)} />
-        <button disabled={!title.trim() || !body.trim()}>Add memory</button>
+        <textarea placeholder={scope === 'shared' ? 'What should every Bot know?' : `What should ${agent.name} remember?`}
+                  rows={3} value={body} onChange={(e) => setBody(e.target.value)} />
+        <button disabled={!title.trim() || !body.trim()}>
+          {scope === 'shared' ? 'Add to shared memory' : 'Add memory'}
+        </button>
       </form>
     </>
+  );
+}
+
+/** The channels this Bot is in: where it works alongside other Bots. */
+function Channels({ agent }) {
+  const [rooms, setRooms] = useState(null);
+  const [agentsById, setAgentsById] = useState({});
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    Promise.all([api.threads(), api.agents()]).then(([t, a]) => {
+      if (!live) return;
+      setRooms((t.threads || []).filter((x) => x.kind === 'room' && (x.agentIds || []).includes(agent.agentId)));
+      setAgentsById(Object.fromEntries((a.agents || []).map((x) => [x.agentId, x])));
+    }).catch((e) => live && setError(e.message));
+    return () => { live = false; };
+  }, [agent.agentId]);
+
+  if (error) return <div className="err"><span className="msg-text">{error}</span></div>;
+  if (!rooms) return <div className="empty">Loading…</div>;
+  if (rooms.length === 0) {
+    return (
+      <div className="empty">
+        <span className="title">Not in any channel</span>
+        <span>Make a channel from the + in your inbox and add {agent.name} to it.</span>
+      </div>
+    );
+  }
+  return (
+    <ul className="chan-list">
+      {rooms.map((r) => (
+        <li key={r.threadId}>
+          <Link to={`/rooms/${r.threadId}`} className="chan-row">
+            <span className="chan-stack" aria-hidden="true">
+              {(r.agentIds || []).slice(0, 3).map((id) => agentsById[id] && (
+                <Companion key={id} archetype={agentsById[id].avatar?.shape || 'pebble'}
+                           color={agentsById[id].avatar?.color || '#2f6fe4'} state="idle" size={22} />
+              ))}
+            </span>
+            <span className="chan-text">
+              <strong>{r.title}</strong>
+              <small>{(r.agentIds || []).length} Bots{r.status && r.status !== 'active' ? ` · ${r.status}` : ''}</small>
+            </span>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -283,10 +431,74 @@ function Skills({ agent, onChange }) {
   );
 }
 
-const TABS = ['Computer', 'Memory', 'Skills', 'Access', 'Activity', 'Usage'];
+// Routines first: the question beside a conversation is "what does this one do
+// on its own?". Computer stays where it was built and is otherwise untouched --
+// per-Bot computers are on hold, and this pass adds nothing to them.
+const TABS = ['Routines', 'Channels', 'Memory', 'Skills', 'Access', 'Activity', 'Usage', 'Computer'];
 
-export default function RightPanel({ threadId, agent, agents, onRefreshAgent, open, onClose }) {
-  const [tab, setTab] = useState('Computer');
+/**
+ * The three things a header offers: share the conversation, open the Bot's
+ * settings, close the pane. Share is two real actions -- a link that opens this
+ * conversation, and the conversation as a Markdown file -- not a button that
+ * promises sharing and does nothing.
+ */
+function PaneActions({ agent, onClose, onExport }) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState('');
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}`);
+      setNote('Link copied');
+    } catch { setNote('Copy is blocked here; copy the address bar instead'); }
+  }
+
+  function download() {
+    const blob = new Blob([onExport?.() || ''], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-conversation.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setNote('Downloaded');
+  }
+
+  return (
+    <div className="pane-actions">
+      <button type="button" className="ghost sm icon-btn" aria-label="Share" aria-haspopup="menu"
+              aria-expanded={open} onClick={() => { setOpen((o) => !o); setNote(''); }}>
+        <Icon name="share" size={17} />
+      </button>
+      <Link className="ghost sm icon-btn" to={`/agents/${agent.agentId}/settings`}
+            aria-label={`${agent.name} settings`}>
+        <Icon name="sliders" size={17} />
+      </Link>
+      {onClose && (
+        <button type="button" className="ghost sm icon-btn pane-close" onClick={onClose} aria-label="Close">
+          <Icon name="x" size={17} />
+        </button>
+      )}
+      {open && (
+        <>
+          <div className="cmp-scrim" onClick={() => setOpen(false)} />
+          <div className="pane-menu" role="menu">
+            <button type="button" role="menuitem" onClick={copyLink}>
+              <Icon name="share" size={16} />Copy link to this conversation
+            </button>
+            <button type="button" role="menuitem" onClick={download} disabled={!onExport}>
+              <Icon name="download" size={16} />Download as Markdown
+            </button>
+            {note && <p className="pane-menu-note" role="status">{note}</p>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function RightPanel({ threadId, agent, agents, onRefreshAgent, open, onClose, onExport }) {
+  const [tab, setTab] = useState('Routines');
   const cls = `task-side ${open ? 'open' : ''}`;
   if (!agent) return <aside className={cls} />;
 
@@ -294,7 +506,7 @@ export default function RightPanel({ threadId, agent, agents, onRefreshAgent, op
     <aside className={cls}>
       <div className="task-side-head">
         <strong>{agent.name}</strong>
-        {onClose && <button className="ghost sm" onClick={onClose} aria-label="Close">✕</button>}
+        <PaneActions agent={agent} onClose={onClose} onExport={onExport} />
       </div>
       <div className="tabs">
         {TABS.map((t) => (
@@ -302,6 +514,8 @@ export default function RightPanel({ threadId, agent, agents, onRefreshAgent, op
         ))}
       </div>
       <div className="tabbody">
+        {tab === 'Routines' && <RoutineList agent={agent} />}
+        {tab === 'Channels' && <Channels agent={agent} />}
         {tab === 'Computer' && <Computer threadId={threadId} agent={agent} />}
         {tab === 'Memory' && <Memory agent={agent} onChange={onRefreshAgent} />}
         {tab === 'Skills' && <Skills agent={agent} onChange={onRefreshAgent} />}

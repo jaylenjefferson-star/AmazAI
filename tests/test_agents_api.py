@@ -336,3 +336,152 @@ class TestConsoleReadModel:
         assert [c["kind"] for c in coord] == ["handoff"]
         assert coord[0]["status"] == "proposed"
         assert coord[0]["taskId"] == run["runId"]
+
+
+class TestFirstBot:
+    """Through the real handler: the parts of the first-Bot rule that only the
+    listing and the second request can show."""
+
+    FIRST = {"name": "Chief", "entrypoint": True, "operatorName": "Jaylen",
+             "avatar": {"shape": "pebble", "color": "#2f6fe4"}}
+
+    def test_the_first_bot_opens_its_own_conversation(self, api_table):
+        status, agent = call("POST", "/agents", self.FIRST)
+        assert status == 201
+        assert agent["entrypoint"] is True and agent["title"] == "Chief"
+
+        status, thread = call("GET", "/threads/dm-chief")
+        assert status == 200
+        first = thread["messages"][0]
+        assert first["role"] == "assistant"
+        assert first["text"].startswith("Hey Jaylen — good to meet you.")
+        assert first["suggestions"]
+
+    def test_a_second_first_bot_is_a_conflict_and_leaves_nothing_behind(self, api_table):
+        call("POST", "/agents", self.FIRST)
+        status, body = call("POST", "/agents", {**self.FIRST, "name": "Second"})
+        assert status == 409 and body["error"] == "conflict"
+
+        _, listing = call("GET", "/agents")
+        assert [a["agentId"] for a in listing["agents"]] == ["chief"]
+
+    def test_the_same_key_returns_the_same_first_bot_not_a_conflict(self, api_table):
+        """A retried setup must resolve to the Bot it already made."""
+        headers = {"idempotency-key": "setup-1"}
+        call("POST", "/agents", self.FIRST, headers=headers)
+        status, again = call("POST", "/agents", self.FIRST, headers=headers)
+        assert status == 200 and again["agentId"] == "chief"
+
+    def test_an_archived_first_bot_frees_the_place_for_another(self, api_table):
+        call("POST", "/agents", self.FIRST)
+        call("DELETE", "/agents/chief")
+        status, agent = call("POST", "/agents", {**self.FIRST, "name": "Second"})
+        assert status == 201 and agent["entrypoint"] is True
+
+    def test_entrypoint_cannot_be_patched_onto_an_existing_agent(self, api_table):
+        call("POST", "/agents", NEW_AGENT)
+        status, body = call("PATCH", "/agents/cloud-operations", {"entrypoint": True})
+        assert status == 400 and "not editable" in body["detail"]
+
+
+class TestInboxRows:
+    """What a row in the inbox knows about its conversation, through the real
+    handler. The unread case is the one that was silently broken: a Bot's reply
+    wrote a message and bumped nothing."""
+
+    def _reply(self, monkeypatch, thread_id, agent_id, text, at):
+        import handlers.orchestrator as orchestrator
+        from amazai.cost import RunCost
+        # Second-resolution timestamps: without pinning the clock, a reply in
+        # the same second as the read marker would (correctly) count as read
+        # and make this test pass or fail by the time of day.
+        monkeypatch.setattr(orchestrator.threads, "now_iso", lambda: at)
+        store = Store("owner-a", table=self.table)
+        orchestrator._persist_message(
+            store, {"threadId": thread_id, "runId": "run-1"},
+            {"agentId": agent_id, "name": "Cloud Operations"}, text, RunCost())
+
+    @pytest.fixture(autouse=True)
+    def _table(self, api_table):
+        self.table = api_table
+
+    def test_a_new_bot_reads_as_unread_and_previews_its_greeting(self):
+        call("POST", "/agents", {**NEW_AGENT, "operatorName": "Jaylen"})
+        _, listing = call("GET", "/threads")
+        row = next(t for t in listing["threads"] if t["threadId"] == "dm-cloud-operations")
+        assert row["preview"].startswith("Hey Jaylen")
+        assert row["previewRole"] == "assistant"
+        assert row["unread"] is True
+
+    def test_a_reply_after_the_thread_was_opened_makes_it_unread_again(self, monkeypatch):
+        call("POST", "/agents", NEW_AGENT)
+        call("POST", "/threads/dm-cloud-operations/read", {})
+        _, listing = call("GET", "/threads")
+        assert next(t for t in listing["threads"]
+                    if t["threadId"] == "dm-cloud-operations")["unread"] is False
+
+        self._reply(monkeypatch, "dm-cloud-operations", "cloud-operations",
+                    "Both 5xx spikes came from\n\n  the same deploy.", "2099-01-01T00:00:00Z")
+
+        _, listing = call("GET", "/threads")
+        row = next(t for t in listing["threads"] if t["threadId"] == "dm-cloud-operations")
+        assert row["unread"] is True
+        # One line, whitespace collapsed: a preview must not draw as blank rows.
+        assert row["preview"] == "Both 5xx spikes came from the same deploy."
+        assert row["previewRole"] == "assistant"
+
+    def test_a_long_reply_is_cut_to_a_preview_not_stored_whole(self, monkeypatch):
+        from amazai import threads
+        call("POST", "/agents", NEW_AGENT)
+        self._reply(monkeypatch, "dm-cloud-operations", "cloud-operations",
+                    "word " * 200, "2099-01-01T00:00:00Z")
+        _, listing = call("GET", "/threads")
+        row = next(t for t in listing["threads"] if t["threadId"] == "dm-cloud-operations")
+        assert len(row["preview"]) <= threads.PREVIEW_MAX
+        assert row["preview"].endswith("…")
+
+
+class TestPinned:
+    def test_pins_round_trip_in_the_order_chosen(self, api_table):
+        status, body = call("PUT", "/settings", {"pinned": ["dm-eng", "room-ship", "dm-cos"]})
+        assert status == 200 and body["pinned"] == ["dm-eng", "room-ship", "dm-cos"]
+        _, again = call("GET", "/settings")
+        assert again["pinned"] == ["dm-eng", "room-ship", "dm-cos"]
+
+    def test_a_duplicate_pin_is_kept_once(self, api_table):
+        _, body = call("PUT", "/settings", {"pinned": ["dm-eng", "dm-eng", "dm-ops"]})
+        assert body["pinned"] == ["dm-eng", "dm-ops"]
+
+    def test_pinning_does_not_reset_settings_it_did_not_send(self, api_table):
+        call("PUT", "/settings", {"theme": "dark"})
+        _, body = call("PUT", "/settings", {"pinned": ["dm-eng"]})
+        assert body["theme"] == "dark"
+
+    def test_an_account_that_never_pinned_reads_an_empty_list(self, api_table):
+        _, body = call("GET", "/settings")
+        assert body["pinned"] == []
+
+    @pytest.mark.parametrize("bad", ["dm-eng", [1], ["has space"], ["../x"], [f"t{i}" for i in range(13)]])
+    def test_a_malformed_or_oversized_pin_list_is_refused(self, api_table, bad):
+        status, _ = call("PUT", "/settings", {"pinned": bad})
+        assert status == 400
+
+
+class TestRoomSize:
+    ROOM = {"kind": "room", "title": "Ship it"}
+
+    def test_a_room_of_six_is_allowed(self, api_table):
+        status, room = call("POST", "/threads", {**self.ROOM, "agentIds": [f"a{i}" for i in range(6)]})
+        assert status == 201 and len(room["agentIds"]) == 6
+
+    def test_a_seventh_agent_is_refused(self, api_table):
+        status, body = call("POST", "/threads", {**self.ROOM, "agentIds": [f"a{i}" for i in range(7)]})
+        assert status == 400 and "at most 6" in body["detail"]
+
+    def test_the_same_agent_twice_counts_once(self, api_table):
+        status, _ = call("POST", "/threads", {**self.ROOM, "agentIds": ["a0"] * 9})
+        assert status == 201
+
+    def test_agent_ids_must_be_a_list_of_strings(self, api_table):
+        status, _ = call("POST", "/threads", {**self.ROOM, "agentIds": "eng"})
+        assert status == 400

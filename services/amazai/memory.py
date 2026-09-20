@@ -123,3 +123,28 @@ def revoke(*, superseded_by: str | None = None) -> dict:
     if superseded_by:
         changes["supersededBy"] = superseded_by
     return changes
+
+
+def plan_edit(existing: dict, body: dict) -> dict:
+    """Changes for a person's correction of a memory row.
+
+    Only what a correction can mean: the words, the kind, when it lapses. The
+    scope, the owner and who wrote it are identity and never change here -- an
+    edit that could move a fact between scopes would be a way to publish to every
+    Bot without the publish approval. `correctedAt` is kept beside `source`, so a
+    fact an agent wrote and a person fixed says both.
+    """
+    editable = {k: body[k] for k in ("title", "body", "kind", "expiresAt") if k in body}
+    _require(bool(editable), "no editable fields supplied")
+    merged = {"title": existing.get("title", ""), "body": existing.get("body", ""),
+              "kind": existing.get("kind", "note"), "taskId": existing.get("taskId"),
+              "confidence": existing.get("confidence"),
+              "expiresAt": existing.get("expiresAt"), "reviewAt": existing.get("reviewAt"),
+              **editable}
+    fields = validate(merged, scope=existing.get("scope", "agent"))
+    return {
+        "title": fields["title"], "body": fields["body"], "kind": fields["kind"],
+        "expiresAt": fields["expiresAt"],
+        "pinned": fields["kind"] == "foundational",
+        "correctedAt": now_iso(), "correctedBy": "you",
+    }

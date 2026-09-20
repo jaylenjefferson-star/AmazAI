@@ -78,18 +78,33 @@ EXPIRY: dict[Capability, timedelta] = {
 }
 
 
-def _matches(tool: str, patterns: frozenset[str]) -> bool:
-    for p in patterns:
+def matching_pattern(tool: str, patterns: frozenset[str]) -> str | None:
+    """The pattern in `patterns` that covers `tool`, or None.
+
+    Sorted so the answer is stable when two patterns overlap: a decision that
+    names a different rule on a retry would be a decision nobody could audit.
+    """
+    for p in sorted(patterns):
         if p.endswith(".*"):
             if tool == p[:-2] or tool.startswith(p[:-1]):
-                return True
+                return p
         elif tool == p:
-            return True
-    return False
+            return p
+    return None
+
+
+def _matches(tool: str, patterns: frozenset[str]) -> bool:
+    return matching_pattern(tool, patterns) is not None
 
 
 class Refused(PermissionError):
-    """Raised for a capability that no approval can unlock."""
+    """Raised for a capability that no approval can unlock.
+
+    `matched` is the never-approvable pattern that refused it, so the console can
+    name the rule rather than only say "no".
+    """
+
+    matched: str = ""
 
 
 @dataclass(frozen=True)
@@ -97,6 +112,13 @@ class Decision:
     required: bool
     reason: str
     expires_in: timedelta | None = None
+    #: Which rule decided, as a stable key the console explains in its own
+    #: words: `floor`, `capability`, `read`, `preapproved` or `default`. The
+    #: `reason` string is for a log; this is for a switch statement.
+    rule: str = ""
+    #: What that rule matched: the floor pattern that fired, or the capability
+    #: class. Empty when there is nothing more specific to say.
+    matched: str = ""
 
 
 def evaluate(
@@ -110,22 +132,30 @@ def evaluate(
     `preapproved` is the agent's narrow pre-approved rule set from its Access
     tab. It is consulted last and can never override the floor.
     """
-    if _matches(tool, NEVER_APPROVABLE):
-        raise Refused(f"{tool} is never approvable")
+    never = matching_pattern(tool, NEVER_APPROVABLE)
+    if never:
+        refused = Refused(f"{tool} is never approvable")
+        refused.matched = never
+        raise refused
 
-    if _matches(tool, ALWAYS_APPROVE):
-        return Decision(True, "on the always-approve floor", EXPIRY[capability])
+    floor = matching_pattern(tool, ALWAYS_APPROVE)
+    if floor:
+        return Decision(True, "on the always-approve floor", EXPIRY[capability],
+                        rule="floor", matched=floor)
 
     if capability in NEVER_PREAPPROVABLE:
-        return Decision(True, f"{capability.value} capability", EXPIRY[capability])
+        return Decision(True, f"{capability.value} capability", EXPIRY[capability],
+                        rule="capability", matched=capability.value)
 
     if capability is Capability.READ:
-        return Decision(False, "read-only")
+        return Decision(False, "read-only", rule="read", matched=capability.value)
 
     if tool in preapproved:
-        return Decision(False, "covered by a pre-approved rule")
+        return Decision(False, "covered by a pre-approved rule",
+                        rule="preapproved", matched=tool)
 
-    return Decision(True, "write capability without a pre-approved rule", EXPIRY[capability])
+    return Decision(True, "write capability without a pre-approved rule",
+                    EXPIRY[capability], rule="default", matched=capability.value)
 
 
 def expires_at(capability: Capability, *, now: datetime | None = None) -> datetime:

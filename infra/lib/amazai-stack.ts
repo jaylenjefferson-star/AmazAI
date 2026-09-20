@@ -493,6 +493,17 @@ export class AmazaiStack extends cdk.Stack {
       `arn:aws:lambda:${this.region}:${this.account}:function:amazai-orchestrator`,
     );
     routineFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
+
+    // Decision D4: how a paused run continues. `resume_note` is the documented
+    // fallback and what is verified in code; `tool_result` is refused by the
+    // orchestrator until `scripts/spike_d4.py` has shown the service accepts it.
+    // Set with `cdk deploy -c continuation=<value>`. Anything else is an error at
+    // synth time, not a mystery at 2am.
+    const continuation = String(this.node.tryGetContext('continuation') ?? 'resume_note');
+    if (!['resume_note', 'tool_result'].includes(continuation)) {
+      throw new Error(`context continuation must be resume_note or tool_result, got ${continuation}`);
+    }
+    orchestratorFn.addEnvironment('AMAZAI_CONTINUATION', continuation);
     sweeperFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
 
     // ---------------------------------------------------------------------

@@ -16,8 +16,12 @@ DEFAULT_DEADLINE_MINUTES = 15
 
 
 def create(store: Store, *, agent_id: str, thread_id: str, goal: str,
-           trigger: dict | None = None, deadline_minutes: int = DEFAULT_DEADLINE_MINUTES) -> dict:
-    run_id = new_id("run_")
+           trigger: dict | None = None, deadline_minutes: int = DEFAULT_DEADLINE_MINUTES,
+           run_id: str | None = None) -> dict:
+    """`run_id` is for a caller that has already *claimed* an id (an idempotency
+    key for a routine fire): the id it stored must be the id the run has, or a
+    retried caller is handed the identifier of a run that never existed."""
+    run_id = run_id or new_id("run_")
     deadline = datetime.now(timezone.utc) + timedelta(minutes=deadline_minutes)
 
     item = {

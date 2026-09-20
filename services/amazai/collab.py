@@ -25,6 +25,10 @@ from amazai.store import Store, new_id, now_iso, ordered_suffix
 
 #: Mirrors the handoff loop-prevention depth in
 #: docs/architecture/09-multi-agent.md -- one shared notion of "too deep".
+#: Most agents one room holds. Past this a room stops being a conversation and
+#: becomes a broadcast, and every participant's turn is a run someone pays for.
+MAX_ROOM_MEMBERS = 6
+
 DEFAULT_MAX_HOP_DEPTH = 3
 DEFAULT_MAX_MESSAGES_PER_TASK = 200
 DEFAULT_MAX_PRIORITY_WAKES_PER_WINDOW = 5

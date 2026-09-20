@@ -32,9 +32,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from amazai import keys as K, models
+from amazai import keys as K, models, onboarding, threads
 from amazai.policy import Capability, NEVER_APPROVABLE, _matches
-from amazai.store import now_iso, ordered_suffix
+from amazai.store import Conflict, now_iso, ordered_suffix
 
 # --- vocabulary -------------------------------------------------------------
 
@@ -80,6 +80,9 @@ WORKING_STYLES: tuple[str, ...] = (
     "collaborative",  # proposes, waits for a nudge
     "advisory",     # never acts; drafts and recommends
 )
+
+#: Longest role chip. Sized for a roster row, not a sentence.
+TITLE_MAX = 24
 
 NAME_RE = re.compile(r"^[\w][\w \-'&,.()/]{1,59}$")
 
@@ -173,6 +176,18 @@ def validate_profile(body: dict) -> dict:
     description = (body.get("description") or "").strip()
     _require(len(description) <= 2000, "description must be at most 2000 characters")
 
+    # The short label the roster shows beside the name ("Email", "Sales").
+    # One line and short enough to sit in a chip; `role` is the sentence.
+    title = (body.get("title") or "").strip()
+    _require(len(title) <= TITLE_MAX and title.isprintable(),
+             f"title must be one line of at most {TITLE_MAX} characters")
+
+    # Whether this is the account's first Bot. Read here so a malformed value
+    # is refused with the rest of the profile; *whether it is allowed* is
+    # `plan_create`'s question, because it depends on who else exists.
+    entrypoint = body.get("entrypoint", False)
+    _require(isinstance(entrypoint, bool), "entrypoint must be true or false")
+
     instructions = (body.get("systemPrompt") or "").strip()
     _require(len(instructions) <= 20000,
              "systemPrompt must be at most 20000 characters")
@@ -193,6 +208,7 @@ def validate_profile(body: dict) -> dict:
 
     return {
         "name": name, "role": role, "description": description,
+        "title": title, "entrypoint": entrypoint,
         "systemPrompt": instructions or role,
         "modelTier": tier, "workingStyle": style,
         "avatar": {"shape": shape, "color": color},
@@ -451,18 +467,32 @@ class CreatePlan:
 def plan_create(body: dict, actor: Actor, *,
                 org_connectors: dict[str, OrgConnector] | None = None,
                 active_count: int = 0,
-                max_agents: int = DEFAULT_MAX_AGENTS) -> CreatePlan:
+                max_agents: int = DEFAULT_MAX_AGENTS,
+                has_entrypoint: bool = False) -> CreatePlan:
     """Validate a create request and lay out every row it implies.
 
     Nothing here touches the store. If this returns, the agent is creatable;
     if it raises, nothing was written, because nothing had been.
+
+    `has_entrypoint` is whether the organization already has a first Bot. It is
+    a parameter rather than a lookup so the rule below stays testable without
+    a table, and so the caller -- which already listed the agents to count them
+    -- does not list them twice.
     """
     if actor.is_agent:
         raise Escalation("agents do not create agents; a person does")
 
     check_quota(active_count, max_agents=max_agents)
 
+    # The first Bot's role, title and prompt are the server's to supply. Done
+    # before validation so what is validated is what is stored.
+    if body.get("entrypoint") is True:
+        body = onboarding.apply_defaults(body)
+
     profile = validate_profile(body)
+
+    if profile["entrypoint"] and has_entrypoint:
+        raise Conflict("this organization already has a first Bot")
     budget = validate_limits(body)
     grants = validate_grants(body.get("grants") or [], org_connectors or {})
 
@@ -492,11 +522,16 @@ def plan_create(body: dict, actor: Actor, *,
         # profile — what Create-a-Bot shows
         "name": profile["name"],
         "role": profile["role"],
+        "title": profile["title"],
         "description": profile["description"],
         "systemPrompt": profile["systemPrompt"],
         "workingStyle": profile["workingStyle"],
         "avatar": profile["avatar"],
         "accent": profile["avatar"]["color"],
+        # Identity, like agentId: set once at creation and never patchable. A
+        # first-Bot flag that could be edited later is a flag that could be
+        # moved, and the console reads it to decide whether to offer one.
+        "entrypoint": profile["entrypoint"],
 
         # capability
         "model": models.defaults_for(profile["modelTier"]),
@@ -539,6 +574,15 @@ def plan_create(body: dict, actor: Actor, *,
         "namespace": agent["memoryNamespace"], "entries": 0,
     })
 
+    # A new Bot speaks first. The greeting is a stored row, in the same
+    # transaction as the thread, so it is the same in every browser and cannot
+    # exist without the agent it came from -- which a console that invented it
+    # on screen could not promise. `starter` keeps it out of the model's
+    # history (`agentcore.build_messages`), where a leading assistant turn
+    # would be an invalid conversation.
+    text, suggestions = onboarding.starter_message(
+        entrypoint=profile["entrypoint"], operator=onboarding.operator_name(body))
+
     thread_id = f"dm-{agent_id}"
     items.append({
         "pk": K.thread_pk(thread_id), "sk": "META",
@@ -546,8 +590,21 @@ def plan_create(body: dict, actor: Actor, *,
         "gsi1pk": "THREADS", "gsi1sk": now_iso(),
         "kind": "dm", "title": profile["name"], "agentIds": [agent_id],
         "sessionId": K.session_id(thread_id),
-        "lastActivity": now_iso(),
+        # The greeting is what the thread's row shows until anyone says more,
+        # and its timestamp is what makes a brand-new Bot read as unread.
+        **threads.touch(text, "assistant"),
     })
+
+    greeting = {
+        "pk": K.thread_pk(thread_id),
+        "sk": K.message_sk(now_iso(), ordered_suffix()),
+        "entity": "Message", "role": "assistant",
+        "author": profile["name"], "agentId": agent_id,
+        "text": text, "starter": True,
+    }
+    if suggestions:
+        greeting["suggestions"] = suggestions
+    items.append(greeting)
 
     items.append(audit_event(agent_id, "agent.created", actor,
                              after={"name": profile["name"],
@@ -565,8 +622,8 @@ def plan_create(body: dict, actor: Actor, *,
 #: and `memoryNamespace` are deliberately absent: they are identity, and an
 #: identity that can be edited is not one.
 PATCHABLE: frozenset[str] = frozenset({
-    "name", "role", "description", "systemPrompt", "workingStyle", "avatar",
-    "budget", "allowedTools", "preapproved", "status", "modelTier",
+    "name", "role", "title", "description", "systemPrompt", "workingStyle",
+    "avatar", "budget", "allowedTools", "preapproved", "status", "modelTier",
     "parentAgentId", "toolCapabilities", "timezone", "workingHours",
 })
 
@@ -584,7 +641,7 @@ def plan_update(existing: dict, body: dict, actor: Actor) -> tuple[dict, list[di
 
     changes: dict = {}
 
-    profile_keys = {"name", "role", "description", "systemPrompt",
+    profile_keys = {"name", "role", "title", "description", "systemPrompt",
                     "workingStyle", "avatar"}
     if profile_keys & set(body):
         merged = {**{k: existing.get(k) for k in profile_keys},

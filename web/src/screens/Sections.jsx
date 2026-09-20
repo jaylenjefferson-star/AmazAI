@@ -4,28 +4,9 @@ import Companion, { STATES } from '../characters/Companion';
 import { ARCHETYPES } from '../characters/archetypes';
 import { useAgents } from '../hooks/useAgents';
 import { api } from '../api';
+import { SCHEDULE_PRESETS, describeSchedule } from '../schedules';
 import CreateAgent from '../components/CreateAgent';
 import Icon from '../components/Icon';
-
-//: Concrete EventBridge expressions behind plain-language cadences, so
-//: creating a routine never requires knowing Scheduler's own syntax. Custom
-//: stays available for the one shape these do not cover, and is the only
-//: path that reaches `routines.CRON_RE` / `RATE_RE` directly -- these six
-//: are already known-good.
-const SCHEDULE_PRESETS = [
-  { key: 'every-30-min', label: 'Every 30 minutes', expression: 'rate(30 minutes)' },
-  { key: 'hourly', label: 'Every hour', expression: 'rate(1 hour)' },
-  { key: 'weekday-9', label: 'Weekdays at 9:00 AM', expression: 'cron(0 9 ? * MON-FRI *)' },
-  { key: 'daily-730', label: 'Every day at 7:30 AM', expression: 'cron(30 7 * * ? *)' },
-  { key: 'nightly-2', label: 'Every night at 2:00 AM', expression: 'cron(0 2 * * ? *)' },
-  { key: 'custom', label: 'Custom expression…', expression: '' },
-];
-
-function describeTrigger(trigger) {
-  if (!trigger || trigger.type === 'manual') return 'Runs only when you start it';
-  if (trigger.type === 'webhook') return 'Runs when triggered externally';
-  return trigger.expression || 'Scheduled';
-}
 
 function Page({ title, sub, children, action }) {
   return (
@@ -181,11 +162,17 @@ export function Routines() {
   const [busyId, setBusyId] = useState('');
 
   const [creating, setCreating] = useState(location.pathname === '/routines/new');
-  const [name, setName] = useState('');
-  const [agentId, setAgentId] = useState('');
-  const [prompt, setPrompt] = useState('');
+  // Filled in by a routine card in a conversation (`components/Cards.jsx`). A
+  // proposal can name a preset, never an expression: it opens this form and the
+  // operator still reads it and presses Create.
+  const prefill = location.state?.prefill || {};
+  const [name, setName] = useState(prefill.name || '');
+  const [agentId, setAgentId] = useState(prefill.agentId || '');
+  const [prompt, setPrompt] = useState(prefill.prompt || '');
   const [manual, setManual] = useState(false);
-  const [presetKey, setPresetKey] = useState('weekday-9');
+  const [presetKey, setPresetKey] = useState(
+    SCHEDULE_PRESETS.some((p) => p.key === prefill.preset && p.key !== 'custom')
+      ? prefill.preset : 'weekday-9');
   const [customExpression, setCustomExpression] = useState('');
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
@@ -363,7 +350,7 @@ export function Routines() {
               <div className="row-body">
                 <strong>{r.name}</strong>
                 <span>
-                  {a?.name || r.agentId} · {describeTrigger(r.trigger)}
+                  {a?.name || r.agentId} · {describeSchedule(r.trigger)}
                   {r.lastRun ? ` · last ran ${timeAgo(r.lastRun)}` : ''}
                 </span>
               </div>

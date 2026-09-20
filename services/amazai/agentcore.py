@@ -110,6 +110,47 @@ INLINE_TOOLS = {
             "required": ["to", "text"],
         },
     },
+    "request_connector": {
+        "description": (
+            "Tell the operator a tool you needed is not connected, so they can "
+            "connect it. This never connects anything and grants nothing: "
+            "connecting is the operator's own step in the console, and access "
+            "to it is a separate grant. Write your reply first, using what you "
+            "can do without it, then call this as your last action -- and only "
+            "for a tool you genuinely could not use."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "connectorId": {"type": "string",
+                                "description": "The catalog id, e.g. slack"},
+                "why": {"type": "string",
+                        "description": "One sentence: what you need it to do"},
+            },
+            "required": ["connectorId", "why"],
+        },
+    },
+    "propose_routine": {
+        "description": (
+            "Suggest a routine so a result you just delivered keeps happening "
+            "on its own. This never creates one: it shows the operator the "
+            "routine, pre-filled, and they read and confirm it. Offer it after "
+            "you have delivered the result, as your last action, and only when "
+            "repeating the work is actually useful."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "prompt": {"type": "string",
+                           "description": "What to do each time it runs"},
+                "schedule": {"type": "string",
+                             "enum": ["every-30-min", "hourly", "weekday-9",
+                                      "daily-730", "nightly-2"]},
+            },
+            "required": ["name", "prompt", "schedule"],
+        },
+    },
     "propose_skill": {
         "description": (
             "Propose a reusable skill for the shared library other agents can also "
@@ -259,6 +300,44 @@ class AgentCore:
     def get_harness(self, harness_arn: str) -> dict:
         return self._control.get_harness(harnessArn=harness_arn)
 
+    def missing_inline_tools(self, harness_arn: str) -> dict:
+        """Which of `INLINE_TOOLS` this harness does not have yet. Read-only.
+
+        Inline functions are declared when a harness is created, so a harness made
+        before `request_connector` and `propose_routine` existed cannot call them --
+        the model is simply never offered them. That is the gap this reports; it
+        never guesses the shape of an update.
+        """
+        resp = self._control.get_harness(harnessArn=harness_arn)
+        body = resp.get("harness", resp) if isinstance(resp, dict) else {}
+        tools = body.get("tools")
+        if tools is None:
+            return {"known": False, "have": [], "missing": sorted(INLINE_TOOLS),
+                    "note": f"get_harness returned no `tools`; keys were {sorted(body)}"}
+        have = sorted(t.get("name", "") for t in tools if t.get("type") == "inline_function")
+        return {"known": True, "have": have,
+                "missing": sorted(n for n in INLINE_TOOLS if n not in have)}
+
+    def add_inline_tools(self, harness_arn: str) -> dict:
+        """Add the missing inline tools to an existing harness.
+
+        **The update shape is unverified.** BUILD_PLAN verifies `create_harness`'s
+        tool config and warns that `update_harness` *replaces* what it is given, so
+        this reads the harness, merges, and sends the whole list -- but the exact
+        parameters of `update_harness` have not been confirmed in an account. It is
+        therefore only reachable through `scripts/sync_harness_tools.py --apply`,
+        after a `--check`.
+        """
+        resp = self._control.get_harness(harnessArn=harness_arn)
+        body = resp.get("harness", resp)
+        current = list(body.get("tools") or [])
+        have = {t.get("name") for t in current if t.get("type") == "inline_function"}
+        added = [t for t in harness_tools([]) if t["name"] not in have]
+        if not added:
+            return {"changed": False, "added": []}
+        self._control.update_harness(harnessArn=harness_arn, tools=current + added)
+        return {"changed": True, "added": [t["name"] for t in added]}
+
     def update_filesystem(self, harness_arn: str, mounts: list[dict]) -> dict:
         """Filesystem mounts are not enabled in this deployment."""
         raise NotImplementedError(
@@ -277,6 +356,18 @@ def build_messages(history: list[dict], *, room: bool = False) -> list[dict]:
         role = m.get("role", "user")
         text = m.get("text", "")
         if not text:
+            continue
+        # A first Bot's greeting is for the operator. Sent to the model it
+        # would be a conversation that opens on an assistant turn, which
+        # Converse refuses. The brief lists what the greeting offered, so
+        # nothing the model needs is lost by leaving it out.
+        if m.get("starter"):
+            continue
+        # Transcript bookkeeping ("Routine created", "Saved to memory") is for
+        # the person reading. It is not something anyone said, and sent to the
+        # model it would be a system-role turn the API refuses or, worse, one
+        # it obeys.
+        if m.get("kind") == "event" or role == "system":
             continue
         if room and role == "assistant" and m.get("author"):
             text = f"[{m['author']}] {text}"

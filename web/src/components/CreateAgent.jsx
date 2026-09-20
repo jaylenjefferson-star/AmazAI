@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import Companion from '../characters/Companion';
 import { ARCHETYPES, ARCHETYPE_KEYS } from '../characters/archetypes';
+import { operatorFirstName, useAuth0 } from '../auth0';
 
 /**
  * Create a bot.
@@ -17,11 +18,13 @@ import { ARCHETYPES, ARCHETYPE_KEYS } from '../characters/archetypes';
  * choice, not an oversight.
  */
 export default function CreateAgent({ onClose, onCreated }) {
+  const { user } = useAuth0();
   const [options, setOptions] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const [name, setName] = useState('');
+  const [title, setTitle] = useState('');
   const [role, setRole] = useState('');
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
@@ -85,12 +88,16 @@ export default function CreateAgent({ onClose, onCreated }) {
     try {
       const agent = await api.createAgent({
         name: name.trim(),
+        title: title.trim(),
         role: role.trim(),
         description: description.trim(),
         systemPrompt: systemPrompt.trim(),
         modelTier: tier,
         workingStyle: style,
         avatar: { shape, color },
+        // Every new Bot greets. Sent only so it can say hello by name; it is
+        // read once by the API and stored nowhere.
+        operatorName: operatorFirstName(user),
         tools,
         budget: {
           perRunUsd: Number(perRun),
@@ -161,6 +168,12 @@ export default function CreateAgent({ onClose, onCreated }) {
                           style={{ background: c }} onClick={() => setColor(c)} />
                 ))}
               </div>
+
+              <label className="field">
+                <span>Title <em>optional</em></span>
+                <input placeholder="Email, Sales, Research…" value={title}
+                       maxLength={24} onChange={(e) => setTitle(e.target.value)} />
+              </label>
 
               <label className="field">
                 <span>Role</span>

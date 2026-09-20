@@ -14,7 +14,7 @@ import traceback
 
 import boto3
 
-from amazai import keys as K, runs
+from amazai import dispatch, keys as K, runs, threads
 from amazai.store import Store, new_id, now_iso, ordered_suffix
 
 CONNECTION_TTL_HOURS = 12
@@ -73,9 +73,12 @@ def _default(store: Store, event: dict) -> dict:
         return {"statusCode": 400, "body": "threadId and text are required"}
 
     thread = store.get(K.thread_pk(thread_id), "META")
-    agent_ids = thread.get("agentIds") or []
-    # An @mention wins in a room; otherwise the thread's first agent.
-    agent_id = next((a for a in agent_ids if f"@{a}" in text), agent_ids[0] if agent_ids else None)
+    # An @mention wins in a room; otherwise the thread's first agent. One rule,
+    # shared with the HTTP path (`dispatch.targets_for`); this entry point wakes
+    # only the first target -- the console sends over HTTP, where a room's
+    # mentions wake every Bot named.
+    targets = dispatch.targets_for(thread, text)
+    agent_id = targets[0] if targets else None
     if not agent_id:
         return {"statusCode": 400, "body": "no agent assigned to this thread"}
 
@@ -83,7 +86,7 @@ def _default(store: Store, event: dict) -> dict:
         "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "user", "author": "you", "text": text,
     })
-    store.update(K.thread_pk(thread_id), "META", {"lastActivity": now_iso()})
+    store.update(K.thread_pk(thread_id), "META", threads.touch(text, "user"))
 
     run = runs.create(store, agent_id=agent_id, thread_id=thread_id, goal=text)
 

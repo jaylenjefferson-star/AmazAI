@@ -24,8 +24,15 @@ EXPIRED = "expired"
 def request(store: Store, run: dict, *, action: str, arguments: dict, why: str,
             capability: Capability, tool_use_id: str = "", target: dict | None = None,
             reversible: bool | None = None, preview_key: str | None = None,
-            routine_id: str | None = None) -> dict:
-    """Create a pending approval for one action with one set of arguments."""
+            routine_id: str | None = None,
+            decision: policy.Decision | None = None) -> dict:
+    """Create a pending approval for one action with one set of arguments.
+
+    `decision` is what `policy.evaluate` said. It is stored on the row so the
+    card can name the rule that stopped the run -- "on the always-approve
+    floor, matching `email.send`" -- instead of leaving the operator to guess
+    why this one asked and the last one did not.
+    """
     approval_id = new_id("apv_")
     expires = policy.expires_at(capability)
 
@@ -51,9 +58,15 @@ def request(store: Store, run: dict, *, action: str, arguments: dict, why: str,
         "toolUseId": tool_use_id,
         "requestedBy": {"agentId": run["agentId"], "routineId": routine_id},
 
+        "policy": ({"rule": decision.rule, "matched": decision.matched,
+                    "reason": decision.reason} if decision else None),
+
         "status": PENDING,
         "expiresAt": expires.isoformat(timespec="seconds").replace("+00:00", "Z"),
         "decidedAt": None, "note": None,
+        # An approval is spent once. `None` (not absent) so the spend can be a
+        # conditional write: two calls racing for the same approval, one wins.
+        "consumedAt": None,
     }
     return store.put(item)
 
@@ -99,6 +112,33 @@ def decide(store: Store, run_pk: str, approval_id: str, *, approve: bool,
     }, expect={"status": PENDING})
 
 
+def find_grant(store: Store, run_pk: str, action: str, arguments: dict) -> dict | None:
+    """An approved, unspent approval for exactly this action with exactly these
+    arguments, in this run -- or None.
+
+    This is what turns "the model asked first" into "the code checked": a tool
+    that needs approval runs only if an approval bound to its arguments exists,
+    not because the model chose to call `request_approval` beforehand.
+    """
+    for a in for_run(store, run_pk):
+        if (a.get("status") == APPROVED and a.get("action") == action
+                and a.get("consumedAt") is None
+                and policy.binding_holds(a["binding"], arguments)):
+            return a
+    return None
+
+
+def consume(store: Store, approval: dict) -> bool:
+    """Spend an approval. False if someone else already did."""
+    from amazai.store import Conflict
+    try:
+        store.update(approval["pk"], approval["sk"], {"consumedAt": now_iso()},
+                     expect={"status": APPROVED, "consumedAt": None})
+    except Conflict:
+        return False
+    return True
+
+
 def expire(store: Store, run_pk: str, approval_id: str) -> dict:
     """Expire to DENIED. An undecided approval is stale authority, not consent."""
     return store.update(run_pk, K.approval_sk(approval_id), {
@@ -141,4 +181,7 @@ def to_card(approval: dict) -> dict:
         "requestedBy": approval.get("requestedBy", {}),
         "expiresAt": approval["expiresAt"],
         "status": approval["status"],
+        # Which rule stopped the run, for the card. Absent on approvals written
+        # before it existed; the console says nothing rather than guessing.
+        "policy": approval.get("policy"),
     }
