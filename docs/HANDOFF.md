@@ -1,13 +1,14 @@
 # Conversation-first console — what is done and what is left
 
-Written for whoever picks this up next. Branch: `claude/conversation-first-redesign-u0warq`,
-open as PR #6. Read `CLAUDE.md` first; everything here assumes its conventions.
+Written for whoever picks this up next. Branch: `claude/conversation-first-redesign-u0warq`.
+PR #6 (the original build) and PR #7 (the first-run fix below) are both merged.
+Read `CLAUDE.md` first; everything here assumes its conventions.
 
 Validate with:
 
 ```bash
-.venv/bin/python -m pytest          # 432 pass
-cd infra && npx cdk synth           # clean, 72 resources
+.venv/bin/python -m pytest          # 444 pass
+cd infra && npx cdk synth           # clean, 72 resources / 11 roles
 cd web && npm run build             # clean
 cd web && npm run dev               # http://localhost:5173/?demo=1
 ```
@@ -31,6 +32,9 @@ CI runs all three on every pull request and on main
 | 4 · Companion settings | `screens/CompanionSettings.jsx`, reached from the chat header overflow |
 | 5 · Room chat | Same chat header, participant marks, read-only when finished, collapsed coordination summary |
 | 6 · Account settings | `components/AccountSettings.jsx` — a sheet from the avatar, the same body as `/settings` |
+| First-run setup | Actually creates the companion and saves the workspace name; the guard reads `settings.onboardedAt`, not a browser flag |
+| Routines & Artifacts | Real routes, not fixtures. Create form with plain-language cadence presets, pause/resume, archive |
+| Desktop two-pane | `Shell.jsx` at ≥900px: the inbox stays mounted beside an open conversation instead of being navigated away from |
 
 ### Conventions established in this work
 
@@ -63,32 +67,23 @@ CI runs all three on every pull request and on main
   the `approval` state, so a list cannot disagree with the character about
   whether something needs you.
 - **No mock success UX.** If a route does not exist, do not ship a control that
-  appears to work. Say why it is absent, as the create sheet does for routines.
+  appears to work. Say why it is absent, as the create sheet did for routines
+  until the route existed — a menu item that cannot complete is worse than an
+  absent one, because it reads as a feature until someone depends on it.
+- **Setup is a fact about the account, not the browser.** First-run state
+  belongs in `settings.onboardedAt`, stamped server-side and held across
+  re-runs. A `localStorage` flag looks identical to a brand-new signup on a
+  second machine, a private window, or a cleared cache.
+- **A pane is the same component as the page, not a second one.** `Inbox`
+  takes a `variant` prop rather than existing twice; two implementations of
+  one list is two places for a row to disagree with the API about what is
+  unread.
 
 ---
 
 ## Left to do, in order
 
-### 1 · Routines and Artifacts screens
-
-`screens/Sections.jsx` renders both from `fixtures.js`, which returns `[]`
-outside `?demo=1`. So in production **both screens are permanently empty** and
-always have been. They now have real routes:
-
-- Routines → `api.routines()`, `createRoutine`, `updateRoutine`, `archiveRoutine`.
-- Artifacts → `api.artifacts()` (runs that sealed an evidence bundle).
-
-Add "New routine" to the inbox create sheet once the routine form exists — the
-sheet currently states plainly why it is missing, and that note must come out at
-the same time.
-
-### 2 · Desktop two-pane
-
-At ≥900px: inbox list beside the open conversation, third pane optional for
-companion detail. Today desktop keeps the rail and navigates between them.
-`Shell.jsx` already marks a focused conversation via `data-focused`.
-
-### 3 · Deploy
+### 1 · Deploy
 
 Never deployed. `CLAUDE.md` → "To deploy". Two things will bite:
 

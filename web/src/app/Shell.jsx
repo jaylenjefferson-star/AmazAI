@@ -2,6 +2,8 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import AccountMenu from '../components/AccountMenu';
 import Icon from '../components/Icon';
 import Logo from '../components/Logo';
+import Inbox from '../screens/Inbox';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
 /**
  * The application shell.
@@ -38,9 +40,35 @@ const NAV = [
  */
 const FOCUSED = [/^\/agents\/[^/]+$/, /^\/rooms\/[^/]+$/];
 
+/** The detail pane before a conversation is chosen. Not a route -- picking a
+ *  row does not navigate away from something, it fills a pane beside it. */
+function NothingOpen() {
+  return (
+    <div className="split-empty">
+      <Icon name="inbox" size={28} />
+      <p>Choose a companion or a room to open the conversation here.</p>
+    </div>
+  );
+}
+
 export default function Shell() {
   const { pathname } = useLocation();
   const focused = FOCUSED.some((re) => re.test(pathname));
+  // ≥900px is also where the rail stops being a bottom bar (styles.css), so
+  // a single breakpoint decides both: below it, a phone has room for one
+  // screen at a time and the inbox route and the conversation route already
+  // trade places on their own.
+  const desktop = useMediaQuery('(min-width: 900px)');
+
+  /**
+   * At desktop width, the inbox is a list beside whatever it leads to, not a
+   * screen you leave to open one. `/routines`, `/settings` and the rest are
+   * still full width -- the split is specific to conversations, which is
+   * the thing this was written to fix: today desktop keeps the rail and
+   * navigates between them, so opening a companion loses the list it came
+   * from and there is no way back to it without a second click.
+   */
+  const split = desktop && (pathname === '/' || focused);
 
   return (
     <div className="shell" data-focused={focused ? 'true' : undefined}>
@@ -61,8 +89,19 @@ export default function Shell() {
         ))}
       </nav>
 
-      <main className="shell-main">
-        <Outlet />
+      <main className={`shell-main${split ? ' shell-main--split' : ''}`}>
+        {split ? (
+          <div className="shell-split">
+            <div className="shell-split-list"><Inbox variant="pane" /></div>
+            {/* Not `<Outlet/>` at "/": that route's own element is this same
+                `<Inbox/>`, and mounting it twice would fetch the account's
+                threads and approvals twice for two lists that would then
+                drift the moment one of them re-read. */}
+            <div className="shell-split-detail">{focused ? <Outlet /> : <NothingOpen />}</div>
+          </div>
+        ) : (
+          <Outlet />
+        )}
       </main>
     </div>
   );

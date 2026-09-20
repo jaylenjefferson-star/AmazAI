@@ -47,6 +47,7 @@ export default function AccountSettings({ onNavigate }) {
   const [settings, setSettings] = useState(null);
   const [error, setError] = useState('');
   const [zoneDraft, setZoneDraft] = useState('');
+  const [nameDraft, setNameDraft] = useState('');
 
   useEffect(() => { applyMode(mode); }, [mode]);
 
@@ -55,6 +56,7 @@ export default function AccountSettings({ onNavigate }) {
       .then((s) => {
         setSettings(s);
         setZoneDraft(s.defaultTimezone || '');
+        setNameDraft(s.workspaceName || '');
         // The server is the durable record; localStorage is only what makes
         // the first paint correct. A theme chosen on another device arrives
         // here, and a viewer who has never chosen keeps the local default
@@ -94,6 +96,24 @@ export default function AccountSettings({ onNavigate }) {
              note={[user?.email || user?.sub, config.domain && `Auth0 · ${config.domain}`]
                .filter(Boolean).join(' · ')}>
           <button className="danger" onClick={() => startLogout(logout)}>Sign out</button>
+        </Row>
+      </section>
+
+      <section className="settings-group">
+        <h2 className="section-title">Workspace</h2>
+        {/* Named during setup, and changeable here. It is stored on the
+            account rather than in this browser, which is the whole reason
+            signing in somewhere new no longer looks like a new account. */}
+        <Row title="Name" note="What this workspace is called.">
+          <input className="inline-input" value={nameDraft} placeholder="My workspace"
+                 maxLength={60} aria-label="Workspace name"
+                 onChange={(e) => setNameDraft(e.target.value)}
+                 onBlur={() => {
+                   const next = nameDraft.trim();
+                   if (next !== (settings?.workspaceName || '')) {
+                     patch({ workspaceName: next || null });
+                   }
+                 }} />
         </Row>
       </section>
 

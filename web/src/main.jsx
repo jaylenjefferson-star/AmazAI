@@ -19,7 +19,8 @@ import privacyRaw from './content/privacy-policy.md?raw';
 import securityRaw from './content/security-responsible-disclosure.md?raw';
 import cookieRaw from './content/cookie-policy.md?raw';
 import acceptableUseRaw from './content/acceptable-use-policy.md?raw';
-import Onboarding, { hasOnboarded } from './screens/Onboarding';
+import Onboarding from './screens/Onboarding';
+import { DONE, NEEDED, useFirstRun } from './hooks/useFirstRun';
 import Inbox from './screens/Inbox';
 import { Agents, Artifacts, Rooms, Routines } from './screens/Sections';
 import Settings from './screens/Settings';
@@ -66,12 +67,36 @@ function Protected({ children }) {
   return <AuthGate>{children}</AuthGate>;
 }
 
-/** Send a signed-in visitor who has never set up to onboarding first. */
+/**
+ * Send a signed-in owner who has never set up to setup first.
+ *
+ * "Never set up" is a question about the account, so it is asked of the
+ * server. Asking localStorage, which is what this did, made every new
+ * browser look like a new account.
+ */
 function FirstRunGuard({ children }) {
   const location = useLocation();
-  if (!hasOnboarded() && location.pathname !== '/welcome') {
+  const firstRun = useFirstRun();
+
+  // Nothing is rendered while the answer is outstanding. Guessing would mean
+  // either a flash of setup for an owner who has been here for months, or a
+  // flash of an empty inbox for someone who genuinely has not.
+  if (firstRun !== DONE && firstRun !== NEEDED) return null;
+  if (firstRun === NEEDED && location.pathname !== '/welcome') {
     return <Navigate to="/welcome" replace />;
   }
+  return children;
+}
+
+/**
+ * Setup runs once. Reaching `/welcome` by typing it, with an account that is
+ * already set up, would otherwise walk an owner through creating a second
+ * "first" companion -- now that the last step actually creates one.
+ */
+function SetupOnly({ children }) {
+  const firstRun = useFirstRun();
+  if (firstRun === DONE) return <Navigate to="/" replace />;
+  if (firstRun !== NEEDED) return null;
   return children;
 }
 
@@ -107,7 +132,7 @@ function Router() {
       <Route path="/security-responsible-disclosure" element={<Navigate to="/security-disclosure" replace />} />
 
       {/* First run */}
-      <Route path="/welcome" element={<Protected><Onboarding /></Protected>} />
+      <Route path="/welcome" element={<Protected><SetupOnly><Onboarding /></SetupOnly></Protected>} />
 
       {/* The application */}
       <Route element={<Protected><FirstRunGuard><Shell /></FirstRunGuard></Protected>}>
@@ -120,6 +145,7 @@ function Router() {
         <Route path="/rooms" element={<Rooms />} />
         <Route path="/rooms/:roomId" element={<Room />} />
         <Route path="/routines" element={<Routines />} />
+        <Route path="/routines/new" element={<Routines />} />
         <Route path="/artifacts" element={<Artifacts />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/usage" element={<Usage />} />

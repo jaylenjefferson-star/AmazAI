@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Companion, { STATES } from '../characters/Companion';
 import CreateAgent from '../components/CreateAgent';
 import Icon from '../components/Icon';
@@ -56,15 +56,20 @@ function RoomMark({ members }) {
 /**
  * The create menu.
  *
- * Two entries, not four. A routine and an imported companion template are
- * both in the proposed menu, and the control plane serves neither -- there is
- * no `/routines` route and no template route, so a third and fourth entry
- * here could only open a form whose submit has nowhere to go. A menu item
- * that cannot complete is worse than an absent one: it reads as a feature
- * until the moment someone depends on it. They belong here the day the routes
- * do.
+ * Three entries, not four. An imported companion template is still in the
+ * proposed menu, and the control plane serves no route for it -- a fourth
+ * entry here could only open a form whose submit has nowhere to go. A menu
+ * item that cannot complete is worse than an absent one: it reads as a
+ * feature until the moment someone depends on it. It belongs here the day
+ * the route does, as the routine entry now does below.
+ *
+ * A routine navigates away rather than opening inline. Its trigger and
+ * schedule need more room than a sheet gives a companion or a room, and
+ * `Routines` already owns that form -- reached the same way `/agents/new`
+ * reaches `CreateAgent` from the full Agents page.
  */
 function CreateSheet({ agents, onClose, onCreated }) {
+  const navigate = useNavigate();
   const [mode, setMode] = useState('menu');
   const [title, setTitle] = useState('');
   const [picked, setPicked] = useState([]);
@@ -121,10 +126,20 @@ function CreateSheet({ agents, onClose, onCreated }) {
                   : 'Create a companion first.'}</small>
               </span>
             </button>
+            <button type="button" className="sheet-row" disabled={!agents.length}
+                    onClick={() => { onClose(); navigate('/routines/new'); }}>
+              <Companion archetype="lantern" color="#f0a93b" state="idle" size={30} />
+              <span>
+                <strong>New routine</strong>
+                <small>{agents.length
+                  ? 'Work that runs on its own schedule, whether or not you are here.'
+                  : 'Create a companion first.'}</small>
+              </span>
+            </button>
             <p className="sheet-note">
-              Routines and companion templates are not offered here yet: the
-              control plane serves no route for either, and a form that cannot
-              submit is not a feature.
+              Companion templates are not offered here yet: importing a
+              pre-built companion has no control-plane route, and a form that
+              cannot submit is not a feature.
             </p>
           </>
         ) : (
@@ -166,8 +181,15 @@ function CreateSheet({ agents, onClose, onCreated }) {
   );
 }
 
-export default function Inbox() {
+/**
+ * `variant="pane"` is the same list, rendered by `Shell` beside an open
+ * conversation at desktop width instead of standing alone as the `/` route.
+ * One component either way -- a second implementation of this list is a
+ * second place for a row to disagree with the API about what is unread.
+ */
+export default function Inbox({ variant }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { agents, loading, error, reload } = useAgents();
   const [creating, setCreating] = useState(false);
   const [threads, setThreads] = useState([]);
@@ -260,7 +282,7 @@ export default function Inbox() {
   const unreadCount = rows.filter((r) => r.unread).length;
 
   return (
-    <div className="inbox">
+    <div className={`inbox${variant === 'pane' ? ' inbox--pane' : ''}`}>
       <header className="inbox-head">
         <div className="inbox-head-text">
           <h1>Conversations</h1>
@@ -326,7 +348,8 @@ export default function Inbox() {
         {rows.map((row) => (
           <li key={row.key}>
             <Link className="inbox-row" to={row.to} data-kind={row.kind}
-                  data-unread={row.unread ? 'true' : undefined}>
+                  data-unread={row.unread ? 'true' : undefined}
+                  data-open={row.to === location.pathname ? 'true' : undefined}>
               <span className="inbox-mark">
                 {row.kind === 'room'
                   ? <RoomMark members={row.members} />

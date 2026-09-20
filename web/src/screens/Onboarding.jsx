@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Companion from '../characters/Companion';
 import Logo from '../components/Logo';
 import { ARCHETYPES, ARCHETYPE_KEYS } from '../characters/archetypes';
 import { useAuth0 } from '../auth0';
+import { api } from '../api';
+import { rememberSetupDone } from '../hooks/useFirstRun';
 
 // Six of the ten the API accepts (`agents.AVATAR_COLORS`). The blue and the
 // purple used to be #2b6bff and #8b2fe0, which are not in that list at all --
@@ -11,14 +13,6 @@ import { useAuth0 } from '../auth0';
 // short list rather than the full palette because this is the first screen
 // anyone sees, but every entry has to be one the validator allows.
 const PALETTE = ['#2f6fe4', '#8b5cf6', '#12a594', '#e8833a', '#e93d82', '#3dc98a'];
-const KEY = 'amazai.onboarded';
-
-export function hasOnboarded() {
-  try { return localStorage.getItem(KEY) === '1'; } catch { return false; }
-}
-function markOnboarded() {
-  try { localStorage.setItem(KEY, '1'); } catch { /* private browsing */ }
-}
 
 /**
  * First run.
@@ -27,6 +21,14 @@ function markOnboarded() {
  * is how a workspace stops feeling like someone else's software. The steps
  * before and after it are short so that one does not feel like a chore in a
  * queue.
+ *
+ * The last step is the one that was wrong. It used to set a localStorage flag
+ * and navigate: the workspace name, the companion's name, its job, its shape
+ * and its colour were all read into state and then dropped on the floor. Five
+ * screens of setup produced nothing on the server, so the next browser to sign
+ * in found an account that had never been set up -- and ran the same five
+ * screens to the same end. Setup now creates the companion it spent four
+ * steps designing, and says so if it cannot.
  */
 export default function Onboarding() {
   const nav = useNavigate();
@@ -38,6 +40,14 @@ export default function Onboarding() {
   const [role, setRole] = useState('');
   const [archetype, setArchetype] = useState('pebble');
   const [color, setColor] = useState(PALETTE[0]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  // One key for the whole run of setup, so a retry after a timeout resolves
+  // to the companion the first attempt created rather than a second one.
+  const idempotencyKey = useMemo(
+    () => `setup-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    [],
+  );
 
   const steps = [
     {
@@ -129,9 +139,29 @@ export default function Onboarding() {
   const s = steps[step];
   const last = step === steps.length - 1;
 
-  function finish() {
-    markOnboarded();
-    nav('/', { replace: true });
+  async function finish() {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      // The companion first: it is the thing someone would notice missing,
+      // and the workspace name is worth nothing without it.
+      await api.createAgent({
+        name: name.trim(),
+        role: role.trim(),
+        avatar: { shape: archetype, color },
+      }, idempotencyKey);
+      await api.saveSettings({ workspaceName: workspace.trim(), onboarded: true });
+      rememberSetupDone();
+      nav('/', { replace: true });
+    } catch (err) {
+      // Stays on this step with the reason. Navigating anyway would be the
+      // original bug with a better story: setup that reports success and
+      // leaves the account exactly as empty as it found it.
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -156,13 +186,16 @@ export default function Onboarding() {
 
         <div className="onboard-content">{s.content}</div>
 
+        {error && <div className="err"><span className="msg-text">{error}</span></div>}
+
         <footer className="onboard-foot">
           {step > 0
-            ? <button className="ghost" onClick={() => setStep((n) => n - 1)}>Back</button>
+            ? <button className="ghost" disabled={busy}
+                      onClick={() => setStep((n) => n - 1)}>Back</button>
             : <span />}
-          <button className="primary" disabled={!s.canNext}
+          <button className="primary" disabled={!s.canNext || busy}
                   onClick={() => (last ? finish() : setStep((n) => n + 1))}>
-            {last ? 'Open my workspace' : 'Continue'}
+            {last ? (busy ? 'Setting up…' : 'Open my workspace') : 'Continue'}
           </button>
         </footer>
       </div>

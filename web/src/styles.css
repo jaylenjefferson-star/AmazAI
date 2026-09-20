@@ -983,6 +983,27 @@ input:focus, textarea:focus {
 
 .shell-main { grid-area: main; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
+/* The two panes scroll independently, so the outer area that holds them must
+   not also scroll -- a second scrollbar around both would mean the list
+   could travel out of view along with the conversation next to it. */
+.shell-main--split { overflow: hidden; }
+.shell-split { display: flex; height: 100%; }
+.shell-split-list {
+  flex: 0 0 348px; height: 100%; overflow-y: auto;
+  border-right: 1px solid var(--line);
+  -webkit-overflow-scrolling: touch;
+}
+.shell-split-detail {
+  flex: 1; min-width: 0; height: 100%; overflow-y: auto;
+  display: flex; flex-direction: column;
+  -webkit-overflow-scrolling: touch;
+}
+.split-empty {
+  margin: auto; max-width: 260px; padding: 24px;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  color: var(--faint); text-align: center; font: var(--t-label);
+}
+
 .shell-rail {
   grid-area: rail;
   display: flex;
@@ -1752,6 +1773,15 @@ a.row-card:hover { border-color: var(--btn-line); }
 }
 .inbox-row:hover { background: var(--hover); }
 .inbox-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Only reachable in the split pane -- on a phone, or as the full-width `/`
+   page, the row and the conversation it opens are never on screen together.
+   There, a wash alone would be too quiet to read as "open" rather than
+   "hovered", so the mark carries an edge too. */
+.inbox-row[data-open="true"] {
+  background: var(--accent-wash);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
 
 .inbox-mark { display: flex; align-items: center; justify-content: center; }
 
