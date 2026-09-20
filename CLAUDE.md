@@ -16,7 +16,10 @@ scheduled routines, and an approval gate on risky actions.
 ## Current state
 
 Built and verified locally; **never deployed**. No AgentCore call has run
-against the live service.
+against the live service. CI runs the three commands below on every pull
+request and on main — tests, `cdk synth` and the console build. It holds no
+AWS credentials and never deploys: deployment is a deliberate act, run by a
+person who is signed in.
 
 **Python 3.11+ is required** and macOS ships 3.9. `scripts/_python.sh` resolves
 a usable interpreter and both `doctor.sh` and `deploy.sh` source it; the floor

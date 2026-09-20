@@ -12,9 +12,8 @@ cd web && npm run build             # clean
 cd web && npm run dev               # http://localhost:5173/?demo=1
 ```
 
-**This repo has no CI.** There is no `.github/workflows` directory at all, so
-nothing validates a pull request. Every number above is from a local run. Adding
-a workflow that runs those three commands is itself a task (see 4 below).
+CI runs all three on every pull request and on main
+(`.github/workflows/ci.yml`). It holds no AWS credentials and never deploys.
 
 ---
 
@@ -28,6 +27,7 @@ a workflow that runs those three commands is itself a task (see 4 below).
 | Craft | `components/Icon.jsx` (drawn SVG, replacing Unicode glyphs), six-step type ramp in `styles.css`, no row dividers |
 | Control plane | Read state, routines CRUD, EventBridge schedules, artifacts, settings, agent hours/timezone |
 | Unread | Shown in the inbox, cleared by opening a conversation |
+| CI | Tests, synth and the console build, on every PR — no AWS credentials |
 | 4 · Companion settings | `screens/CompanionSettings.jsx`, reached from the chat header overflow |
 | 5 · Room chat | Same chat header, participant marks, read-only when finished, collapsed coordination summary |
 | 6 · Account settings | `components/AccountSettings.jsx` — a sheet from the avatar, the same body as `/settings` |
@@ -97,11 +97,6 @@ Never deployed. `CLAUDE.md` → "To deploy". Two things will bite:
 - The EventBridge schedule group `amazai` is created by the stack now — it was
   missing, and the first `CreateSchedule` would have failed as a permissions
   error since the IAM policy names `schedule/amazai/*`.
-
-### 4 · CI
-
-Add `.github/workflows/ci.yml` running pytest, `cdk synth` and the web build.
-Nothing validates this repo today.
 
 ---
 
