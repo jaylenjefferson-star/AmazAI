@@ -39,9 +39,9 @@ cd web && npm run dev      # then open http://localhost:5173/?demo=1
 | Phase | State |
 |---|---|
 | 1 · Infrastructure (CDK) | written, `cdk synth` clean |
-| 3 · Enforcement core + store | written, 299 tests |
+| 3 · Enforcement core + store | written, 432 tests |
 | 4 · Handlers | written, never run against AWS |
-| 5 · Console | designed, light + dark, builds clean |
+| 5 · Console | conversation-first inbox and chat, light + dark, builds clean |
 | 2 · Seat provisioning | needs a deploy first |
 | 6 · Agent CRUD + Create-a-Bot | written, never run against AWS |
 | 7 · Connectors (Pipedream) | written; live leg needs the OAuth client |
