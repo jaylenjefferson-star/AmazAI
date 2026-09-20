@@ -64,6 +64,20 @@ def api_table(table, monkeypatch):
 
 
 class TestCreate:
+    def test_new_bot_reuses_an_account_resolved_model(self, api_table):
+        status, existing = call("POST", "/agents", NEW_AGENT)
+        assert status == 201
+        Store("owner-a", table=api_table).update(K.agent_pk(existing["agentId"]), "META", {
+            "model": {"tier": "frontier", "modelId": "us.anthropic.claude-opus-4-6-v1"},
+        })
+
+        status, created = call("POST", "/agents", {
+            "name": "Chief", "entrypoint": True,
+            "avatar": {"shape": "pebble", "color": "#2f6fe4"},
+        })
+        assert status == 201
+        assert created["model"]["modelId"] == "us.anthropic.claude-opus-4-6-v1"
+
     def test_a_created_agent_is_active_and_listed(self, api_table):
         status, agent = call("POST", "/agents", NEW_AGENT)
         assert status == 201
