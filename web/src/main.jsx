@@ -20,7 +20,7 @@ import securityRaw from './content/security-responsible-disclosure.md?raw';
 import cookieRaw from './content/cookie-policy.md?raw';
 import acceptableUseRaw from './content/acceptable-use-policy.md?raw';
 import Onboarding, { hasOnboarded } from './screens/Onboarding';
-import Home from './screens/Home';
+import Inbox from './screens/Inbox';
 import { Agents, Artifacts, Rooms, Routines } from './screens/Sections';
 import Settings from './screens/Settings';
 import Task from './screens/Task';
@@ -110,7 +110,7 @@ function Router() {
 
       {/* The application */}
       <Route element={<Protected><FirstRunGuard><Shell /></FirstRunGuard></Protected>}>
-        <Route path="/" element={<Home />} />
+        <Route path="/" element={<Inbox />} />
         <Route path="/agents" element={<Agents />} />
         <Route path="/agents/new" element={<Agents />} />
         <Route path="/agents/:agentId" element={<Task />} />

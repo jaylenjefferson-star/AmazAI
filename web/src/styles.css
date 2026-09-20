@@ -1668,3 +1668,112 @@ a.row-card:hover { border-color: var(--btn-line); }
 }
 .pick-chip.on { border-color: var(--accent); background: var(--hover); }
 .pick-chip input { margin: 0; }
+
+/* ------------------------------------------------------------------ *
+ * The conversation inbox.
+ *
+ * Every rule here reads a token, so light and dark both work without a
+ * second block to keep in step -- which is the whole reason the tokens
+ * exist. Nothing below hardcodes a surface or an ink colour.
+ * ------------------------------------------------------------------ */
+
+.inbox { display: flex; flex-direction: column; min-height: 100%; }
+
+.inbox-head {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 18px 16px 12px;
+}
+.inbox-head-text { min-width: 0; }
+.inbox-head h1 { margin: 0; font-size: 21px; letter-spacing: -.01em; }
+.inbox-head p { margin: 2px 0 0; color: var(--faint); font-size: 13px; }
+.inbox-head-actions { margin-left: auto; display: flex; gap: 8px; }
+
+.inbox-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--btn); color: var(--dim);
+  font-size: 17px; line-height: 1; text-decoration: none; cursor: pointer;
+}
+.inbox-icon:hover { background: var(--btn-hover); color: var(--text); }
+.inbox-icon[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+.inbox-search { padding: 0 16px 10px; }
+.inbox-search input {
+  width: 100%; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font: inherit; font-size: 14px;
+}
+.inbox-search input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.inbox-list { list-style: none; margin: 0; padding: 0 8px 24px; }
+
+.inbox-row {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  align-items: center; gap: 10px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  text-decoration: none; color: inherit;
+  border-bottom: 1px solid var(--hairline);
+}
+.inbox-row:hover { background: var(--hover); }
+.inbox-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.inbox-mark { display: flex; align-items: center; justify-content: center; }
+
+/* Three companions at most, overlapped, so a room is legible by who is in
+   it. Negative margin rather than absolute positioning keeps the stack a
+   normal grid cell that shrinks with the row.
+
+   The sizes are load-bearing: three 26px marks overlapped by 10px measure
+   58px, which is what the 60px column holds. A stack wider than its column
+   does not clip -- it bleeds left over the row's padding and lands the room
+   avatars out of line with every companion above it. */
+.inbox-stack { display: inline-flex; align-items: center; justify-content: center; }
+.inbox-stack-item + .inbox-stack-item { margin-left: -10px; }
+
+/* `min-width: 0` on both the cell and the line is what lets a long name
+   ellipsize instead of widening the row past the viewport. */
+.inbox-main { min-width: 0; display: grid; gap: 3px; }
+.inbox-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.inbox-line strong {
+  font-size: 15px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.inbox-line small { margin-left: auto; color: var(--faint); font-size: 12px; white-space: nowrap; }
+.inbox-sub {
+  color: var(--dim); font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.inbox-state {
+  margin-left: auto; white-space: nowrap;
+  font-size: 12px; color: var(--faint);
+}
+.inbox-state::before {
+  content: ""; display: inline-block;
+  width: 6px; height: 6px; border-radius: 999px;
+  margin-right: 5px; vertical-align: middle;
+  background: currentColor;
+}
+.inbox-state.s-approval { color: var(--warn); }
+.inbox-state.s-working,
+.inbox-state.s-thinking { color: var(--accent); }
+.inbox-state.s-blocked  { color: var(--danger); }
+.inbox-state.s-complete { color: var(--ok); }
+
+@media (min-width: 900px) {
+  .inbox-list { padding-inline: 16px; }
+  .inbox-row { grid-template-columns: 64px minmax(0, 1fr); }
+}
+
+/* A conversation owns a phone's screen: the rail would otherwise sit over
+   the composer. It returns at desktop width, where there is room for both. */
+.shell[data-focused="true"] .shell-rail { display: none; }
+
+@media (max-width: 899px) {
+  .shell-rail .rail-item:not([data-primary]) { display: none; }
+}
+@media (min-width: 900px) {
+  .shell[data-focused="true"] .shell-rail { display: flex; }
+}

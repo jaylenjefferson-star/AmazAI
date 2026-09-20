@@ -19,6 +19,7 @@ const iso = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString();
 const AGENTS = [
   {
     agentId: 'eng', name: 'Engineering', state: 'active',
+    avatar: { shape: 'paper', color: '#2b6bff' },
     role: 'Repositories, tests, pull requests, application diagnostics.',
     budget: { perMonthUsd: 40, perRunUsd: 2 },
     allowedTools: ['shell', 'file_operations', 'browser'],
@@ -28,6 +29,7 @@ const AGENTS = [
   },
   {
     agentId: 'ops', name: 'Cloud Operations', state: 'active',
+    avatar: { shape: 'cloud', color: '#12a594' },
     role: 'AWS investigations, logs, alarms, controlled deployments.',
     budget: { perMonthUsd: 30, perRunUsd: 1.5 },
     allowedTools: ['shell', 'file_operations'],
@@ -37,6 +39,7 @@ const AGENTS = [
   },
   {
     agentId: 'cos', name: 'Chief of Staff', state: 'active',
+    avatar: { shape: 'lantern', color: '#8b2fe0' },
     role: 'Intake, prioritization, planning, daily briefings, delegation.',
     budget: { perMonthUsd: 25, perRunUsd: 1 },
     allowedTools: ['file_operations'], grants: [],
@@ -44,6 +47,7 @@ const AGENTS = [
   },
   {
     agentId: 'res', name: 'Research', state: 'active',
+    avatar: { shape: 'moth', color: '#e93d82' },
     role: 'Market and technical research, sourcing, synthesis.',
     budget: { perMonthUsd: 20, perRunUsd: 1 },
     allowedTools: ['browser'], grants: [],
@@ -51,6 +55,7 @@ const AGENTS = [
   },
   {
     agentId: 'fin', name: 'Finance', state: 'disabled',
+    avatar: { shape: 'jelly', color: '#e8833a' },
     role: 'Ledger reconciliation and spend reporting.',
     budget: { perMonthUsd: 15, perRunUsd: 0.5 },
     allowedTools: [], grants: [],
@@ -62,6 +67,8 @@ const THREADS = [
   { threadId: 't-deploy', title: 'Ship the console to CloudFront', kind: 'task', agentIds: ['eng'] },
   { threadId: 't-alarm',  title: 'Investigate the 5xx spike', kind: 'task', agentIds: ['ops'] },
   { threadId: 't-brief',  title: 'Monday briefing', kind: 'task', agentIds: ['cos'] },
+  { threadId: 'room-ship', title: 'Ship the console', kind: 'room',
+    agentIds: ['eng', 'ops', 'cos'], status: 'active' },
 ];
 
 const MESSAGES = {

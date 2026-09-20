@@ -1,0 +1,226 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import Companion, { STATES } from '../characters/Companion';
+import { api } from '../api';
+import { useAgents } from '../hooks/useAgents';
+
+/**
+ * One inbox for every conversation.
+ *
+ * The console used to answer "what needs me?" on Home and "who do I have?"
+ * in Agents, and a room was a third place again. On a phone that is three
+ * taps to reach the thing you opened the app for. Here a companion and a
+ * room are the same kind of row -- a conversation -- ordered by whichever
+ * spoke last, so the answer to all three questions is the first screen.
+ *
+ * The companion's own state carries the urgency. An agent waiting on an
+ * approval is drawn in `approval`, the same state the character system
+ * already animates everywhere else, so "needs you" is a property of the
+ * companion rather than a separate list that can disagree with it.
+ */
+
+/** A DM thread is derived from the agent, so a companion with no conversation
+ *  yet still has a row rather than disappearing until it first speaks. */
+const dmThreadId = (agentId) => `dm-${agentId}`;
+
+function timeLabel(value) {
+  if (!value) return '';
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return '';
+  const now = new Date();
+  if (at.toDateString() === now.toDateString()) {
+    return at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+  return at.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+/** Up to three companions, overlapped. A room is legible by who is in it
+ *  before its name is read. */
+function RoomMark({ members }) {
+  const shown = members.slice(0, 3);
+  return (
+    <span className="inbox-stack" aria-hidden="true">
+      {shown.length === 0
+        ? <Companion archetype="pebble" color="#8a8f9c" state="offline" size={26} />
+        : shown.map((m, i) => (
+          <span key={m.agentId} className="inbox-stack-item" style={{ zIndex: shown.length - i }}>
+            <Companion archetype={m.archetype} color={m.color} state={m.state} size={26} />
+          </span>
+        ))}
+    </span>
+  );
+}
+
+export default function Inbox() {
+  const { agents, loading, error } = useAgents();
+  const [threads, setThreads] = useState([]);
+  const [approvals, setApprovals] = useState([]);
+  const [query, setQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [feedError, setFeedError] = useState('');
+
+  useEffect(() => {
+    api.threads().then((r) => setThreads(r.threads || []))
+      .catch((e) => setFeedError(e.message));
+    // Approvals are read once here and re-read by the conversation itself.
+    // The inbox only needs to know which companions are waiting, not the
+    // detail of what they asked for.
+    api.approvals('pending').then((r) => setApprovals(r.approvals || []))
+      .catch(() => { /* the row still renders without it; never block the inbox */ });
+  }, []);
+
+  const waiting = useMemo(() => {
+    const ids = new Set();
+    for (const a of approvals) if (a.requestedBy?.agentId) ids.add(a.requestedBy.agentId);
+    return ids;
+  }, [approvals]);
+
+  const byId = useMemo(() => {
+    const map = new Map();
+    for (const a of agents) map.set(a.agentId, a);
+    return map;
+  }, [agents]);
+
+  /**
+   * Companions and rooms, merged.
+   *
+   * Recency decides the order, and a companion with no thread yet sorts on
+   * nothing rather than on `Date.now()` -- a brand new agent should not
+   * outrank the room you were in a minute ago.
+   */
+  const rows = useMemo(() => {
+    const threadFor = new Map(threads.map((t) => [t.threadId, t]));
+
+    const companionRows = agents.map((agent) => {
+      const thread = threadFor.get(dmThreadId(agent.agentId));
+      const needsYou = waiting.has(agent.agentId);
+      return {
+        key: `agent:${agent.agentId}`,
+        kind: 'companion',
+        to: `/agents/${agent.agentId}`,
+        title: agent.name,
+        subtitle: agent.role || STATES[agent.state]?.verb || '',
+        state: needsYou ? 'approval' : agent.state,
+        at: thread?.lastActivity || agent.updatedAt || '',
+        agent,
+      };
+    });
+
+    const roomRows = threads
+      .filter((t) => t.kind === 'room')
+      .map((room) => {
+        const members = (room.agentIds || []).map((id) => byId.get(id)).filter(Boolean);
+        const needsYou = members.some((m) => waiting.has(m.agentId));
+        return {
+          key: `room:${room.threadId}`,
+          kind: 'room',
+          to: `/rooms/${room.threadId}`,
+          title: room.title || 'Room',
+          subtitle: members.length
+            ? members.map((m) => m.name).join(', ')
+            : 'No companions in this room yet',
+          state: needsYou ? 'approval' : (room.status === 'active' ? 'working' : 'idle'),
+          at: room.lastActivity || '',
+          members,
+        };
+      });
+
+    const all = [...companionRows, ...roomRows];
+    const needle = query.trim().toLowerCase();
+    const filtered = needle
+      ? all.filter((r) => `${r.title} ${r.subtitle}`.toLowerCase().includes(needle))
+      : all;
+
+    return filtered.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  }, [agents, threads, byId, waiting, query]);
+
+  const needsYouCount = rows.filter((r) => r.state === 'approval').length;
+
+  return (
+    <div className="inbox">
+      <header className="inbox-head">
+        <div className="inbox-head-text">
+          <h1>Conversations</h1>
+          <p>{needsYouCount
+            ? `${needsYouCount} waiting on you`
+            : 'Nothing is waiting on you'}</p>
+        </div>
+        <div className="inbox-head-actions">
+          <button type="button" className="inbox-icon" aria-label="Search"
+                  aria-pressed={searching} onClick={() => setSearching((s) => !s)}>
+            <span aria-hidden="true">⌕</span>
+          </button>
+          <Link className="inbox-icon" to="/agents/new" aria-label="Create">
+            <span aria-hidden="true">+</span>
+          </Link>
+        </div>
+      </header>
+
+      {searching && (
+        <div className="inbox-search">
+          <input
+            type="search" value={query} autoFocus
+            placeholder="Search companions and rooms"
+            aria-label="Search companions and rooms"
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+      )}
+
+      {error && (
+        <div className="empty">
+          <strong>Control plane unavailable</strong>
+          <span>{error}</span>
+        </div>
+      )}
+      {feedError && !error && (
+        <div className="empty">
+          <strong>Conversations unavailable</strong>
+          <span>{feedError}</span>
+        </div>
+      )}
+
+      {loading && !rows.length && <div className="empty">Opening your inbox…</div>}
+
+      {!loading && !error && rows.length === 0 && (
+        <div className="rest-state">
+          <Companion archetype="pebble" color="#12a594" state="idle" size={56} />
+          <div>
+            <strong>{query ? 'Nothing matches that' : 'No companions yet'}</strong>
+            <span>{query
+              ? 'Try a different name.'
+              : 'Create your first companion to start a conversation. Nothing here is pre-filled or simulated.'}</span>
+          </div>
+        </div>
+      )}
+
+      <ul className="inbox-list">
+        {rows.map((row) => (
+          <li key={row.key}>
+            <Link className="inbox-row" to={row.to} data-kind={row.kind}>
+              <span className="inbox-mark">
+                {row.kind === 'room'
+                  ? <RoomMark members={row.members} />
+                  : <Companion archetype={row.agent.archetype} color={row.agent.color}
+                               state={row.state} size={40} name={row.title} />}
+              </span>
+
+              <span className="inbox-main">
+                <span className="inbox-line">
+                  <strong>{row.title}</strong>
+                  <small>{timeLabel(row.at)}</small>
+                </span>
+                <span className="inbox-line">
+                  <span className="inbox-sub">{row.subtitle}</span>
+                  <span className={`inbox-state s-${row.state}`}>
+                    {STATES[row.state]?.label || 'Idle'}
+                  </span>
+                </span>
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
