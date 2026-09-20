@@ -67,8 +67,16 @@ const THREADS = [
   { threadId: 't-deploy', title: 'Ship the console to CloudFront', kind: 'task', agentIds: ['eng'] },
   { threadId: 't-alarm',  title: 'Investigate the 5xx spike', kind: 'task', agentIds: ['ops'] },
   { threadId: 't-brief',  title: 'Monday briefing', kind: 'task', agentIds: ['cos'] },
+  // The inbox orders on lastActivity, so the fixtures have to carry it or
+  // every row sorts on the empty string and the ordering cannot be reviewed.
+  { threadId: 'dm-eng', title: 'Engineering',      kind: 'dm', agentIds: ['eng'], lastActivity: iso(-4 * 60_000) },
+  { threadId: 'dm-ops', title: 'Cloud Operations', kind: 'dm', agentIds: ['ops'], lastActivity: iso(-38 * 60_000) },
+  { threadId: 'dm-cos', title: 'Chief of Staff',   kind: 'dm', agentIds: ['cos'], lastActivity: iso(-3 * 3600_000) },
+  { threadId: 'dm-res', title: 'Research',         kind: 'dm', agentIds: ['res'], lastActivity: iso(-26 * 3600_000) },
+  { threadId: 'dm-fin', title: 'Finance',          kind: 'dm', agentIds: ['fin'], lastActivity: iso(-3 * 86400_000) },
   { threadId: 'room-ship', title: 'Ship the console', kind: 'room',
-    agentIds: ['eng', 'ops', 'cos'], status: 'active' },
+    agentIds: ['eng', 'ops', 'cos'], status: 'active',
+    lastActivity: iso(-11 * 60_000) },
 ];
 
 const MESSAGES = {

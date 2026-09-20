@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import AccountMenu from '../components/AccountMenu';
+import Icon from '../components/Icon';
 import Logo from '../components/Logo';
 
 /**
@@ -20,11 +21,11 @@ import Logo from '../components/Logo';
  * something a run produced and sealed.
  */
 const NAV = [
-  { to: '/',           label: 'Inbox',      end: true, glyph: '◉', primary: true },
-  { to: '/connectors', label: 'Connectors', glyph: '⌁', primary: true },
-  { to: '/routines',   label: 'Routines',   glyph: '◐' },
-  { to: '/artifacts',  label: 'Artifacts',  glyph: '▤' },
-  { to: '/settings',   label: 'Settings',   glyph: '⚙', primary: true },
+  { to: '/',           label: 'Inbox',      end: true, icon: 'inbox',   primary: true },
+  { to: '/connectors', label: 'Connectors', icon: 'plug',    primary: true },
+  { to: '/routines',   label: 'Routines',   icon: 'clock' },
+  { to: '/artifacts',  label: 'Artifacts',  icon: 'layers' },
+  { to: '/settings',   label: 'Settings',   icon: 'sliders', primary: true },
 ];
 
 /**
@@ -54,7 +55,7 @@ export default function Shell() {
           <NavLink key={n.to} to={n.to} end={n.end}
                    data-primary={n.primary ? 'true' : undefined}
                    className={({ isActive }) => `rail-item ${isActive ? 'on' : ''}`}>
-            <span className="rail-glyph" aria-hidden="true">{n.glyph}</span>
+            <Icon name={n.icon} size={21} className="rail-glyph" />
             <span className="rail-label">{n.label}</span>
           </NavLink>
         ))}

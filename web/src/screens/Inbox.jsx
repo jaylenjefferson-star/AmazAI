@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Companion, { STATES } from '../characters/Companion';
 import CreateAgent from '../components/CreateAgent';
+import Icon from '../components/Icon';
 import { api } from '../api';
 import { useAgents } from '../hooks/useAgents';
 
@@ -264,11 +265,11 @@ export default function Inbox() {
         <div className="inbox-head-actions">
           <button type="button" className="inbox-icon" aria-label="Search"
                   aria-pressed={searching} onClick={() => setSearching((s) => !s)}>
-            <span aria-hidden="true">⌕</span>
+            <Icon name="search" size={19} />
           </button>
           <button type="button" className="inbox-icon" aria-label="Create"
                   onClick={() => setCreating(true)}>
-            <span aria-hidden="true">+</span>
+            <Icon name="plus" size={20} />
           </button>
         </div>
       </header>
@@ -319,7 +320,7 @@ export default function Inbox() {
                 {row.kind === 'room'
                   ? <RoomMark members={row.members} />
                   : <Companion archetype={row.agent.archetype} color={row.agent.color}
-                               state={row.state} size={40} name={row.title} />}
+                               state={row.state} size={44} name={row.title} />}
               </span>
 
               <span className="inbox-main">
