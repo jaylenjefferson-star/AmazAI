@@ -145,6 +145,7 @@ function Router() {
         <Route path="/rooms" element={<Rooms />} />
         <Route path="/rooms/:roomId" element={<Room />} />
         <Route path="/routines" element={<Routines />} />
+        <Route path="/routines/new" element={<Routines />} />
         <Route path="/artifacts" element={<Artifacts />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/usage" element={<Usage />} />

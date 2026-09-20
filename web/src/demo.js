@@ -84,6 +84,52 @@ const THREADS = [
     createdBy: 'you', lastActivity: iso(-5 * 86400_000) },
 ];
 
+const ROUTINES = [
+  {
+    routineId: 'rt_brief', name: 'Morning brief', agentId: 'cos',
+    prompt: 'Draft the day from open threads and yesterday\'s activity.',
+    trigger: { type: 'schedule', expression: 'cron(30 7 ? * MON-FRI *)' },
+    limits: { maxDurationSec: 600 }, threadId: null, enabled: true, status: 'active',
+    lastRun: iso(-18 * 3600_000), timezone: 'America/Los_Angeles',
+    createdAt: iso(-30 * 86400_000), updatedAt: iso(-18 * 3600_000),
+  },
+  {
+    routineId: 'rt_alarms', name: 'Overnight alarm sweep', agentId: 'ops',
+    prompt: 'Check overnight alarms. Open a room with Engineering if anything needs attention.',
+    trigger: { type: 'schedule', expression: 'cron(0 2 * * ? *)' },
+    limits: { maxDurationSec: 900 }, threadId: null, enabled: true, status: 'active',
+    lastRun: iso(-6 * 3600_000), timezone: 'America/Los_Angeles',
+    createdAt: iso(-20 * 86400_000), updatedAt: iso(-6 * 3600_000),
+  },
+  {
+    routineId: 'rt_ledger', name: 'Weekly ledger close', agentId: 'fin',
+    prompt: 'Reconcile the week\'s spend against budget and flag anything over.',
+    trigger: { type: 'schedule', expression: 'rate(7 days)' },
+    limits: { maxDurationSec: 600 }, threadId: null, enabled: false, status: 'active',
+    lastRun: null, timezone: 'America/Los_Angeles',
+    createdAt: iso(-9 * 86400_000), updatedAt: iso(-2 * 86400_000),
+  },
+];
+
+const ARTIFACTS = [
+  { runId: 'run_9a22', agentId: 'eng', threadId: 't-deploy',
+    goal: 'Ship the console to CloudFront',
+    outcome: 'completed', summary: 'Synced 14 objects and invalidated the cache.',
+    evidenceKey: 'runs/run_9a22/manifest.json',
+    startedAt: iso(-2 * 3600_000 - 6 * 60_000), endedAt: iso(-2 * 3600_000), costUsd: 0.128 },
+  { runId: 'run_5xx', agentId: 'ops', threadId: 't-alarm',
+    goal: 'Investigate the 5xx spike',
+    outcome: 'completed',
+    summary: 'Root cause was a stale cache entry from the previous deploy. Documented in the report.',
+    evidenceKey: 'runs/run_5xx/manifest.json',
+    startedAt: iso(-26 * 3600_000 - 40 * 60_000), endedAt: iso(-26 * 3600_000), costUsd: 0.41 },
+  { runId: 'run_fail1', agentId: 'res', threadId: null,
+    goal: 'Source vendors for the Q3 renewal',
+    outcome: 'failed', summary: 'Stopped after the browser connector hit its rate limit twice.',
+    evidenceKey: 'runs/run_fail1/manifest.json',
+    startedAt: iso(-4 * 86400_000 - 12 * 60_000), endedAt: iso(-4 * 86400_000), costUsd: 0.06 },
+];
+
 const MESSAGES = {
   't-deploy': [
     { role: 'user', author: 'you', text: 'Build the console and push it to the CloudFront distribution. Tell me before anything touches production.' },
@@ -305,6 +351,55 @@ export const demoApi = {
   cancel: async () => ({}),
   decide: async () => (await wait(200), {}),
   approvals: async () => (await wait(80), { approvals: [APPROVAL] }),
+
+  // Routines and artifacts, kept to the shape `amazai/routines.py` and the
+  // `/artifacts` route actually return. Both screens went un-reviewable the
+  // day they were wired to real routes, because this file had no matching
+  // stub -- calling `api.routines()` under `?demo=1` would have thrown.
+  routines: async () => (await wait(100), {
+    routines: [...ROUTINES].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  }),
+  routine: async (id) => (await wait(80), ROUTINES.find((r) => r.routineId === id)),
+  createRoutine: async (body) => {
+    await wait(300);
+    const name = (body.name || '').trim();
+    if (name.length < 2 || name.length > 80) throw new Error('name must be 2-80 characters');
+    const agent = AGENTS.find((a) => a.agentId === body.agentId);
+    if (!agent) throw new Error('agentId is required');
+    const prompt = (body.prompt || '').trim();
+    if (prompt.length < 2) throw new Error('prompt must be 2-8000 characters');
+    const trigger = body.trigger || { type: 'manual' };
+    if (trigger.type === 'schedule' && !trigger.expression) {
+      throw new Error('a schedule trigger needs trigger.expression');
+    }
+    const routine = {
+      routineId: `rt_${Math.random().toString(36).slice(2, 8)}`,
+      name, agentId: body.agentId, prompt, trigger,
+      limits: { maxDurationSec: body.limits?.maxDurationSec || 600 },
+      threadId: null, enabled: body.enabled !== false, status: 'active', lastRun: null,
+      timezone: agent.timezone || null,
+      createdAt: iso(), updatedAt: iso(),
+    };
+    ROUTINES.push(routine);
+    return routine;
+  },
+  updateRoutine: async (id, changes) => {
+    await wait(200);
+    const routine = ROUTINES.find((r) => r.routineId === id);
+    if (!routine) throw new Error('No such routine');
+    Object.assign(routine, changes, { updatedAt: iso() });
+    return { ...routine };
+  },
+  archiveRoutine: async (id) => {
+    await wait(150);
+    const routine = ROUTINES.find((r) => r.routineId === id);
+    if (routine) Object.assign(routine, { enabled: false, status: 'archived', updatedAt: iso() });
+    return { ...(routine || {}) };
+  },
+
+  artifacts: async () => (await wait(100), {
+    artifacts: [...ARTIFACTS].sort((a, b) => (b.endedAt || '').localeCompare(a.endedAt || '')),
+  }),
 
   skills: async () => (await wait(80), { skills: [] }),
   skillVersions: async () => (await wait(60), { versions: [] }),
