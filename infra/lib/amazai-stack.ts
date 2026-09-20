@@ -13,6 +13,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 
 export interface SeatConfig {
   key: string;
@@ -429,6 +430,16 @@ export class AmazaiStack extends cdk.Stack {
     });
     routineFn.grantInvoke(schedulerRole);
 
+    // The group the schedules live in. It has to exist before the first
+    // CreateSchedule call: Scheduler does not create one implicitly, and the
+    // policy below is scoped to `schedule/amazai/*`, so a schedule written
+    // anywhere else would be created and then be unmanageable. Nothing
+    // called Scheduler until the routine routes did, which is why an absent
+    // group had never failed anything.
+    const scheduleGroup = new scheduler.CfnScheduleGroup(this, 'RoutineScheduleGroup', {
+      name: 'amazai',
+    });
+
     apiFn.addToRolePolicy(new iam.PolicyStatement({
       sid: 'ManageRoutineSchedules',
       actions: [
@@ -448,6 +459,7 @@ export class AmazaiStack extends cdk.Stack {
         StringEquals: { 'iam:PassedToService': 'scheduler.amazonaws.com' },
       },
     }));
+    apiFn.addEnvironment('SCHEDULE_GROUP', scheduleGroup.name!);
     apiFn.addEnvironment('SCHEDULER_ROLE_ARN', schedulerRole.roleArn);
     apiFn.addEnvironment('ROUTINE_FN_ARN', routineFn.functionArn);
     apiFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);

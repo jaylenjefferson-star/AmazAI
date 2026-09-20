@@ -25,8 +25,8 @@ exists because the code reads its own `...Z` timestamps with
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest                 # 299 tests
-cd infra && npm install && npx cdk synth   # 76 resources
+.venv/bin/python -m pytest                 # 432 tests
+cd infra && npm install && npx cdk synth   # 72 resources
 cd web   && npm install && npm run build
 ```
 
