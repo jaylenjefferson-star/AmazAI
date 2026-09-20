@@ -76,15 +76,21 @@ export default function Task() {
     pollRef.current = setInterval(async () => {
       try {
         const run = await api.run(runId);
-        setRunState(run.state);
+        // The control plane stores canonical state values as uppercase enum
+        // strings (for example, `COMPLETED`), while this view uses lowercase
+        // presentation states. Normalize at the boundary so a completed run
+        // refreshes its persisted assistant message instead of looking like
+        // it is still thinking indefinitely.
+        const state = String(run.state || '').toLowerCase();
+        setRunState(state);
         const runApprovals = (run.approvals || []).filter((a) => a.status === 'pending');
         setPendingApprovals((current) => {
           const others = current.filter((a) => a.runId !== runId);
           return [...others, ...runApprovals];
         });
-        if (TERMINAL_STATES.has(run.state) || runApprovals.length > 0) {
-          if (TERMINAL_STATES.has(run.state)) stopPolling();
-          if (run.state === 'completed' || run.state === 'partial') loadThread();
+        if (TERMINAL_STATES.has(state) || runApprovals.length > 0) {
+          if (TERMINAL_STATES.has(state)) stopPolling();
+          if (state === 'completed' || state === 'partial') loadThread();
         }
       } catch {
         stopPolling();

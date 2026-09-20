@@ -174,6 +174,19 @@ export class AmazaiStack extends cdk.Stack {
         actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
         resources: ['*'],
       }));
+      // AgentCore's harness keeps the conversation state in a harness-owned
+      // memory resource. The execution role must be able to read that event
+      // stream before it can continue a turn.
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ReadOwnHarnessMemoryEvents',
+        actions: [
+          'bedrock-agentcore:CreateEvent',
+          'bedrock-agentcore:ListEvents',
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:memory/amazai_${seat.key}-*`,
+        ],
+      }));
       role.addToPolicy(new iam.PolicyStatement({
         sid: 'OwnLogGroupOnly',
         actions: ['logs:CreateLogStream', 'logs:PutLogEvents'],
@@ -318,6 +331,7 @@ export class AmazaiStack extends cdk.Stack {
         sid: 'AgentCore',
         actions: [
           'bedrock-agentcore:InvokeHarness',
+          'bedrock-agentcore:InvokeAgentRuntime',
           'bedrock-agentcore:InvokeAgentRuntimeCommand',
           'bedrock-agentcore:GetHarness',
         ],
@@ -333,6 +347,16 @@ export class AmazaiStack extends cdk.Stack {
       conditions: {
         StringEquals: { 'iam:PassedToService': 'bedrock-agentcore.amazonaws.com' },
       },
+    }));
+    // Retries are asynchronous invocations of this same worker. Use the
+    // deterministic function ARN rather than the construct token, which
+    // would introduce a Lambda-role circular dependency in CloudFormation.
+    orchestratorFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'InvokeSelfForRetry',
+      actions: ['lambda:InvokeFunction'],
+      resources: [
+        `arn:aws:lambda:${this.region}:${this.account}:function:amazai-orchestrator`,
+      ],
     }));
 
     apiFn.grantInvoke(wsFn);
@@ -464,6 +488,10 @@ export class AmazaiStack extends cdk.Stack {
     apiFn.addEnvironment('ROUTINE_FN_ARN', routineFn.functionArn);
     apiFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
     wsFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
+    orchestratorFn.addEnvironment(
+      'ORCHESTRATOR_FN_ARN',
+      `arn:aws:lambda:${this.region}:${this.account}:function:amazai-orchestrator`,
+    );
     routineFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
     sweeperFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
 
