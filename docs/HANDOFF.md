@@ -14,7 +14,7 @@ cd web && npm run dev               # http://localhost:5173/?demo=1
 
 **This repo has no CI.** There is no `.github/workflows` directory at all, so
 nothing validates a pull request. Every number above is from a local run. Adding
-a workflow that runs those three commands is itself a task (see 7 below).
+a workflow that runs those three commands is itself a task (see 6 below).
 
 ---
 
@@ -28,8 +28,17 @@ a workflow that runs those three commands is itself a task (see 7 below).
 | Craft | `components/Icon.jsx` (drawn SVG, replacing Unicode glyphs), six-step type ramp in `styles.css`, no row dividers |
 | Control plane | Read state, routines CRUD, EventBridge schedules, artifacts, settings, agent hours/timezone |
 | Unread | Shown in the inbox, cleared by opening a conversation |
+| 4 · Companion settings | `screens/CompanionSettings.jsx`, reached from the chat header overflow |
 
 ### Conventions established in this work
+
+- **The console and the API share one avatar vocabulary.** The six character
+  archetypes are `agents.AVATAR_SHAPES`; the palette is `agents.AVATAR_COLORS`.
+  `test_character_parity.py` reads the console's own source and fails if either
+  side drifts. It was written because they had drifted completely: five of six
+  characters would have been refused on create.
+- **Never build a control the API will refuse.** Companion settings deliberately
+  omits the agent's computer, duplicate and save-as-template for this reason.
 
 - **Every CSS rule reads a token.** Light and dark both work from one block.
   Do not hardcode a surface or an ink colour — that is exactly what broke light
@@ -48,31 +57,7 @@ a workflow that runs those three commands is itself a task (see 7 below).
 
 ## Left to do, in order
 
-### 1 · Companion settings (plan step 4)
-
-A profile/editor screen reached from the chat header's overflow (`more` icon in
-`Task.jsx`, currently opens `RightPanel`). Grouped sections:
-
-| Group | Backing | Route |
-|---|---|---|
-| Identity — name, title, mark, colour, shape | ✅ | `PATCH /agents/{id}` → `name`, `role`, `description`, `avatar` |
-| Intelligence — instructions, personality, model, memory, knowledge | ✅ | `systemPrompt`, `workingStyle`, `modelTier`, `/agents/{id}/memory`, `/skills` |
-| Work — capabilities, routines, budget, hours, timezone | ✅ | `allowedTools`, `toolCapabilities`, `budget`, `timezone`, `workingHours`, `/routines` |
-| Access — connectors, grants, approval rules | ✅ | `/connectors/*`, `preapproved` |
-| Notifications | ✅ account-level only | `PUT /settings` — there is no per-agent preference, by design |
-| Management — archive | ✅ | `DELETE /agents/{id}` (archives) |
-
-**Not available, do not invent:** the agent's "computer" (`workspace` is not in
-`PATCHABLE`), duplicate, and save-as-template. Either leave them out or add the
-routes first.
-
-Reuse `CreateAgent.jsx` — it already renders the character picker, the tool and
-grant pickers and the budget fields. Prefer extracting from it over duplicating.
-
-Thread-level read state exists; a **per-message** marker does not, so the
-plan's "unread divider" *inside* a conversation is still not buildable.
-
-### 2 · Room chat (plan step 5)
+### 1 · Room chat (plan step 5)
 
 `screens/Room.jsx` still uses the **old** `task-head` header and has none of the
 step-3 treatment.
@@ -85,7 +70,7 @@ step-3 treatment.
 - Read-only state for a finished room (`thread.status !== 'active'`): hide the
   composer rather than disabling it silently.
 
-### 3 · Account settings (plan step 6)
+### 2 · Account settings (plan step 6)
 
 A bottom sheet opened from the avatar, over the inbox. Reuse the `.sheet`
 styles added for the create menu.
@@ -96,7 +81,7 @@ styles added for the create menu.
 Writes are partial — send only what changed. **`approval` is deliberately not a
 switchable notification**; the API refuses it by name. Do not add a toggle.
 
-### 4 · Routines and Artifacts screens
+### 3 · Routines and Artifacts screens
 
 `screens/Sections.jsx` renders both from `fixtures.js`, which returns `[]`
 outside `?demo=1`. So in production **both screens are permanently empty** and
@@ -109,13 +94,13 @@ Add "New routine" to the inbox create sheet once the routine form exists — the
 sheet currently states plainly why it is missing, and that note must come out at
 the same time.
 
-### 5 · Desktop two-pane
+### 4 · Desktop two-pane
 
 At ≥900px: inbox list beside the open conversation, third pane optional for
 companion detail. Today desktop keeps the rail and navigates between them.
 `Shell.jsx` already marks a focused conversation via `data-focused`.
 
-### 6 · Deploy
+### 5 · Deploy
 
 Never deployed. `CLAUDE.md` → "To deploy". Two things will bite:
 
@@ -125,7 +110,7 @@ Never deployed. `CLAUDE.md` → "To deploy". Two things will bite:
   missing, and the first `CreateSchedule` would have failed as a permissions
   error since the IAM policy names `schedule/amazai/*`.
 
-### 7 · CI
+### 6 · CI
 
 Add `.github/workflows/ci.yml` running pytest, `cdk synth` and the web build.
 Nothing validates this repo today.
@@ -137,6 +122,5 @@ Nothing validates this repo today.
 **Decision D4** (`CLAUDE.md`, "The one open spike") — whether `invoke_harness`
 accepts a native `toolResult` continuation when resuming after an
 `inline_function` call. `CLAUDE.md` says settle it **before touching the
-approval UI**. Step 1 above touches approval *rules*, not the approval card, so
-it is clear; anything that changes how an approval is presented in the timeline
-is not.
+approval UI**. Nothing shipped so far changes how an approval is *presented* —
+the card in the timeline is untouched — but anything that does is gated on D4.

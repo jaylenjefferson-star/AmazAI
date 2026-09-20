@@ -75,3 +75,23 @@ def test_every_palette_the_console_offers_is_a_colour_the_api_accepts():
         f"Onboarding offers {sorted(offered - set(A.AVATAR_COLORS))}, which "
         f"the API refuses"
     )
+
+
+def test_the_demo_backend_speaks_the_same_vocabulary():
+    """The fixture backend is what the console is reviewed against before a
+    deploy. When it offers an avatar the API would refuse, the review passes
+    and the first real create still fails -- which is exactly how the shape
+    and colour drift survived this long."""
+    demo = (WEB / "demo.js").read_text()
+
+    shapes = set(re.findall(r"shape:\s*'([a-z]+)'", demo))
+    assert shapes - set(A.AVATAR_SHAPES) == set(), (
+        f"demo.js uses avatar shapes {sorted(shapes - set(A.AVATAR_SHAPES))} "
+        f"that the API refuses"
+    )
+
+    colors = set(re.findall(r"color:\s*'(#[0-9a-fA-F]{6})'", demo))
+    assert colors - set(A.AVATAR_COLORS) == set(), (
+        f"demo.js uses avatar colours {sorted(colors - set(A.AVATAR_COLORS))} "
+        f"that the API refuses"
+    )

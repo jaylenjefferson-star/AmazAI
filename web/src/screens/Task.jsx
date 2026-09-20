@@ -28,6 +28,7 @@ export default function Task() {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [panelOpen, setPanelOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const pollRef = useRef(null);
   const threadId = `dm-${agentId}`;
 
@@ -152,8 +153,8 @@ export default function Task() {
           </span>
         </div>
 
-        <button type="button" className="chat-icon" onClick={() => setPanelOpen((o) => !o)}
-                aria-label={`${agent.name}'s computer and settings`} aria-expanded={panelOpen}>
+        <button type="button" className="chat-icon" onClick={() => setMenuOpen(true)}
+                aria-label={`More about ${agent.name}`} aria-haspopup="menu">
           <Icon name="more" size={20} />
         </button>
       </header>
@@ -173,6 +174,33 @@ export default function Task() {
           <span className="hint">⏎ send</span>
         </div>
       </form>
+
+      {/* The overflow: the two things a conversation leads to. Settings is a
+          screen because it is long; the computer stays a panel because it is
+          read beside the conversation, not instead of it. */}
+      {menuOpen && (
+        <>
+          <div className="scrim" onClick={() => setMenuOpen(false)} />
+          <div className="sheet" role="menu" aria-label={`${agent.name} options`}>
+            <h2 className="sheet-title">{agent.name}</h2>
+            <Link className="sheet-row" role="menuitem" to={`/agents/${agentId}/settings`}>
+              <Companion archetype={agent.archetype} color={agent.color} state="idle" size={30} />
+              <span>
+                <strong>Companion settings</strong>
+                <small>Identity, instructions, model, budget and hours.</small>
+              </span>
+            </Link>
+            <button type="button" className="sheet-row" role="menuitem"
+                    onClick={() => { setMenuOpen(false); setPanelOpen(true); }}>
+              <Icon name="layers" size={26} />
+              <span>
+                <strong>Computer and activity</strong>
+                <small>Its drive, memory, skills and what it has spent.</small>
+              </span>
+            </button>
+          </div>
+        </>
+      )}
 
       <RightPanel threadId={threadId} agent={agent} agents={agents}
                   onRefreshAgent={loadAgent} open={panelOpen}

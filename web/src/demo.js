@@ -19,7 +19,7 @@ const iso = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString();
 const AGENTS = [
   {
     agentId: 'eng', name: 'Engineering', state: 'active',
-    avatar: { shape: 'paper', color: '#2b6bff' },
+    avatar: { shape: 'paper', color: '#2f6fe4' },
     role: 'Repositories, tests, pull requests, application diagnostics.',
     budget: { perMonthUsd: 40, perRunUsd: 2 },
     allowedTools: ['shell', 'file_operations', 'browser'],
@@ -39,7 +39,7 @@ const AGENTS = [
   },
   {
     agentId: 'cos', name: 'Chief of Staff', state: 'active',
-    avatar: { shape: 'lantern', color: '#8b2fe0' },
+    avatar: { shape: 'lantern', color: '#8b5cf6' },
     role: 'Intake, prioritization, planning, daily briefings, delegation.',
     budget: { perMonthUsd: 25, perRunUsd: 1 },
     allowedTools: ['file_operations'], grants: [],
@@ -126,7 +126,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
    here only so the form can be driven without a deployed control plane; the
    shipped console reads it from GET /agents/options. */
 const OPTIONS = {
-  shapes: ['circle', 'squircle', 'square', 'pill', 'triangle', 'hex', 'cloud', 'drop'],
+  // The character archetypes, matching agents.AVATAR_SHAPES. These were the
+  // old geometric names, which no longer exist on either side.
+  shapes: ['pebble', 'paper', 'jelly', 'cloud', 'lantern', 'moth'],
   colors: ['#e5484d', '#e8833a', '#f0a93b', '#3dc98a', '#12a594',
            '#2f6fe4', '#8b5cf6', '#e93d82', '#8b6c4e', '#8a909c'],
   workingStyles: ['autonomous', 'collaborative', 'advisory'],
@@ -163,9 +165,27 @@ export const demoApi = {
     MESSAGES[`dm-${agentId}`] = [];
     return created;
   },
-  archiveAgent: async () => ({}),
+  archiveAgent: async (id) => {
+    await wait(150);
+    const agent = AGENTS.find((a) => a.agentId === id);
+    if (agent) { agent.status = 'archived'; agent.state = 'offline'; }
+    return { ...(agent || {}) };
+  },
   agent: async (id) => (await wait(80), AGENTS.find((a) => a.agentId === id) || AGENTS[0]),
-  updateAgent: async () => ({}),
+  updateAgent: async (id, changes) => {
+    await wait(200);
+    const agent = AGENTS.find((a) => a.agentId === id);
+    if (!agent) throw new Error('No such agent');
+    // Applied rather than acknowledged. Returning {} was a fake success --
+    // the settings screen renders what comes back, so a save would have
+    // blanked the companion it had just written.
+    const { avatar, budget, modelTier, ...rest } = changes;
+    Object.assign(agent, rest);
+    if (avatar) agent.avatar = { ...agent.avatar, ...avatar };
+    if (budget) agent.budget = { ...agent.budget, ...budget };
+    if (modelTier) agent.model = { ...(agent.model || {}), tier: modelTier };
+    return { ...agent };
+  },
   addMemory: async () => ({}),
   deleteMemory: async () => ({}),
 
