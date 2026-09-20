@@ -1777,3 +1777,60 @@ a.row-card:hover { border-color: var(--btn-line); }
 @media (min-width: 900px) {
   .shell[data-focused="true"] .shell-rail { display: flex; }
 }
+
+/* The create sheet.
+ *
+ * A bottom sheet on a phone and a centred card on a desktop: the same
+ * element, because the thing it holds is the same and a phone's thumb
+ * reaches the bottom of the screen, not the middle of it. */
+.sheet {
+  position: fixed; z-index: 60;
+  left: 0; right: 0; bottom: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  border-radius: 16px 16px 0 0;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  box-shadow: var(--lift);
+  max-height: 86vh; overflow-y: auto;
+}
+.sheet-title { margin: 0 0 10px; font-size: 17px; }
+
+.sheet-row {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 12px; margin-bottom: 8px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: 12px;
+  color: inherit; text-align: left; cursor: pointer;
+  min-height: 44px;
+}
+.sheet-row:hover:not(:disabled) { background: var(--raised-2); }
+.sheet-row:disabled { opacity: .55; cursor: not-allowed; }
+.sheet-row span { display: grid; gap: 2px; min-width: 0; }
+.sheet-row strong { font-size: 14px; }
+.sheet-row small { color: var(--faint); font-size: 12.5px; }
+
+.sheet-note {
+  margin: 4px 0 0; color: var(--faint);
+  font-size: 12.5px; line-height: 1.5;
+}
+
+.sheet-field { display: block; margin-bottom: 12px; border: 0; padding: 0; }
+.sheet-field > span, .sheet-field > legend {
+  display: block; margin-bottom: 6px; font-size: 13px; color: var(--dim);
+}
+.sheet-field input[type="text"], .sheet-field input:not([type]) {
+  width: 100%; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font: inherit;
+}
+.sheet-picks { display: flex; flex-wrap: wrap; gap: 8px; }
+.sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+@media (min-width: 700px) {
+  .sheet {
+    left: 50%; right: auto; bottom: auto; top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(520px, calc(100vw - 32px));
+    border-radius: 14px; border: 1px solid var(--line);
+    padding-bottom: 16px;
+  }
+}

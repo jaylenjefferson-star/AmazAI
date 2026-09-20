@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Companion, { STATES } from '../characters/Companion';
+import CreateAgent from '../components/CreateAgent';
 import { api } from '../api';
 import { useAgents } from '../hooks/useAgents';
 
@@ -51,8 +52,123 @@ function RoomMark({ members }) {
   );
 }
 
+/**
+ * The create menu.
+ *
+ * Two entries, not four. A routine and an imported companion template are
+ * both in the proposed menu, and the control plane serves neither -- there is
+ * no `/routines` route and no template route, so a third and fourth entry
+ * here could only open a form whose submit has nowhere to go. A menu item
+ * that cannot complete is worse than an absent one: it reads as a feature
+ * until the moment someone depends on it. They belong here the day the routes
+ * do.
+ */
+function CreateSheet({ agents, onClose, onCreated }) {
+  const [mode, setMode] = useState('menu');
+  const [title, setTitle] = useState('');
+  const [picked, setPicked] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function createRoom(e) {
+    e.preventDefault();
+    if (busy || !title.trim() || !picked.length) return;
+    setBusy(true);
+    setError('');
+    try {
+      const room = await api.createThread({
+        kind: 'room', title: title.trim(), agentIds: picked,
+      });
+      onCreated(`/rooms/${room.threadId}`);
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
+  if (mode === 'companion') {
+    return (
+      <CreateAgent
+        onClose={onClose}
+        onCreated={(agent) => onCreated(`/agents/${agent.agentId}`)}
+      />
+    );
+  }
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose} />
+      <div className="sheet" role="dialog" aria-modal="true"
+           aria-label={mode === 'room' ? 'New room' : 'Create'}>
+        {mode === 'menu' ? (
+          <>
+            <h2 className="sheet-title">Create</h2>
+            <button type="button" className="sheet-row" onClick={() => setMode('companion')}>
+              <Companion archetype="pebble" color="#2b6bff" state="idle" size={30} />
+              <span>
+                <strong>New companion</strong>
+                <small>Pick a character, give it work and a budget.</small>
+              </span>
+            </button>
+            <button type="button" className="sheet-row" onClick={() => setMode('room')}
+                    disabled={!agents.length}>
+              <Companion archetype="cloud" color="#12a594" state="idle" size={30} />
+              <span>
+                <strong>New room</strong>
+                <small>{agents.length
+                  ? 'Several companions on one task-bound thread.'
+                  : 'Create a companion first.'}</small>
+              </span>
+            </button>
+            <p className="sheet-note">
+              Routines and companion templates are not offered here yet: the
+              control plane serves no route for either, and a form that cannot
+              submit is not a feature.
+            </p>
+          </>
+        ) : (
+          <form onSubmit={createRoom}>
+            <h2 className="sheet-title">New room</h2>
+            <label className="sheet-field">
+              <span>What is this room for?</span>
+              <input value={title} autoFocus onChange={(e) => setTitle(e.target.value)}
+                     placeholder="Ship the console" />
+            </label>
+            <fieldset className="sheet-field">
+              <legend>Who is in it?</legend>
+              <div className="sheet-picks">
+                {agents.map((a) => {
+                  const on = picked.includes(a.agentId);
+                  return (
+                    <label key={a.agentId} className={`pick-chip ${on ? 'on' : ''}`}>
+                      <input type="checkbox" checked={on} onChange={() => setPicked((cur) => (
+                        on ? cur.filter((x) => x !== a.agentId) : [...cur, a.agentId]
+                      ))} />
+                      <Companion archetype={a.archetype} color={a.color} state="idle" size={20} />
+                      {a.name}
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
+            {error && <div className="err"><span className="msg-text">{error}</span></div>}
+            <div className="sheet-actions">
+              <button type="button" className="ghost" onClick={() => setMode('menu')}>Back</button>
+              <button className="primary" disabled={busy || !title.trim() || !picked.length}>
+                {busy ? 'Creating…' : 'Create room'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </>
+  );
+}
+
 export default function Inbox() {
-  const { agents, loading, error } = useAgents();
+  const navigate = useNavigate();
+  const { agents, loading, error, reload } = useAgents();
+  const [creating, setCreating] = useState(false);
   const [threads, setThreads] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [query, setQuery] = useState('');
@@ -150,9 +266,10 @@ export default function Inbox() {
                   aria-pressed={searching} onClick={() => setSearching((s) => !s)}>
             <span aria-hidden="true">⌕</span>
           </button>
-          <Link className="inbox-icon" to="/agents/new" aria-label="Create">
+          <button type="button" className="inbox-icon" aria-label="Create"
+                  onClick={() => setCreating(true)}>
             <span aria-hidden="true">+</span>
-          </Link>
+          </button>
         </div>
       </header>
 
@@ -221,6 +338,21 @@ export default function Inbox() {
           </li>
         ))}
       </ul>
+
+      {creating && (
+        <CreateSheet
+          agents={agents}
+          onClose={() => setCreating(false)}
+          onCreated={(to) => {
+            setCreating(false);
+            // Re-read rather than splice: the server decides the final id and
+            // status, and a created companion brings a thread with it.
+            reload();
+            api.threads().then((r) => setThreads(r.threads || [])).catch(() => {});
+            navigate(to);
+          }}
+        />
+      )}
     </div>
   );
 }
