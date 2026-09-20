@@ -195,7 +195,10 @@ class TestTheRecord:
             a_body(grants=[{"connectorId": "slack", "allowedTools": ["slack.read"]}]),
             PERSON, org_connectors=ORG)
         entities = sorted(i["entity"] for i in plan.items)
-        assert entities == ["Agent", "AuditEvent", "Grant", "MemoryNamespace", "Thread"]
+        # "Message" is the new Bot's greeting: stored with the thread, so it
+        # exists exactly when the agent does.
+        assert entities == ["Agent", "AuditEvent", "Grant", "MemoryNamespace",
+                            "Message", "Thread"]
 
     def test_ownership_records_both_the_org_and_the_person(self):
         plan = A.plan_create(a_body(), PERSON, org_connectors=ORG)

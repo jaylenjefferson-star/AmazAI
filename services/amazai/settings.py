@@ -18,6 +18,8 @@ than a way to be less disturbed. `approval` is therefore not switchable.
 
 from __future__ import annotations
 
+import re
+
 from amazai import keys as K
 from amazai.store import now_iso
 
@@ -45,7 +47,16 @@ DEFAULTS: dict = {
     #: the flag was a fact about the device, and setup is a fact about the
     #: account.
     "onboardedAt": None,
+    #: Conversations pinned to the top of the inbox, in the order chosen. An
+    #: account fact rather than a browser one, for the same reason
+    #: `onboardedAt` is: a pin made on the laptop should be on the phone.
+    "pinned": [],
 }
+
+#: More than this is a second inbox. The strip they sit in is one row wide.
+MAX_PINNED = 12
+
+_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 THEMES: frozenset[str] = frozenset({"system", "light", "dark"})
 
@@ -69,6 +80,7 @@ def read(store) -> dict:
         "defaultTimezone": stored.get("defaultTimezone", DEFAULTS["defaultTimezone"]),
         "workspaceName": stored.get("workspaceName", DEFAULTS["workspaceName"]),
         "onboardedAt": stored.get("onboardedAt", DEFAULTS["onboardedAt"]),
+        "pinned": list(stored.get("pinned", DEFAULTS["pinned"])),
         "updatedAt": stored.get("updatedAt"),
     }
 
@@ -80,7 +92,7 @@ def write(store, body: dict) -> dict:
     silently reset a theme it never showed.
     """
     unknown = sorted(set(body) - {"notifications", "theme", "defaultTimezone",
-                                  "workspaceName", "onboarded"})
+                                  "workspaceName", "onboarded", "pinned"})
     _require(not unknown, f"not a setting: {unknown}")
 
     current = read(store)
@@ -88,7 +100,8 @@ def write(store, body: dict) -> dict:
            "theme": current["theme"],
            "defaultTimezone": current["defaultTimezone"],
            "workspaceName": current["workspaceName"],
-           "onboardedAt": current["onboardedAt"]}
+           "onboardedAt": current["onboardedAt"],
+           "pinned": list(current["pinned"])}
 
     if "notifications" in body:
         supplied = body["notifications"] or {}
@@ -131,6 +144,19 @@ def write(store, body: dict) -> dict:
             _require(2 <= len(name) <= 60,
                      "workspaceName must be between 2 and 60 characters")
             nxt["workspaceName"] = name
+
+    if "pinned" in body:
+        # Replaced whole, not merged: the client sends the order it wants, and
+        # a merge could not express "unpin". Shape-checked rather than checked
+        # against real threads -- a pin to a thread that was since archived is
+        # harmless, and a lookup here would put a scan on every settings write.
+        pins = body["pinned"]
+        _require(isinstance(pins, list), "pinned must be a list of conversation ids")
+        _require(all(isinstance(p, str) and _THREAD_ID_RE.match(p) for p in pins),
+                 "pinned entries must be conversation ids")
+        deduped = list(dict.fromkeys(pins))
+        _require(len(deduped) <= MAX_PINNED, f"at most {MAX_PINNED} conversations can be pinned")
+        nxt["pinned"] = deduped
 
     if "onboarded" in body:
         # Asserted, never supplied as a time: the client says setup finished

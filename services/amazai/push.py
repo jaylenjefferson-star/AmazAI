@@ -59,9 +59,14 @@ class Push:
     def delta(self, run_id: str, thread_id: str, text: str) -> None:
         self.send({"type": "delta", "runId": run_id, "threadId": thread_id, "text": text})
 
-    def tool(self, run_id: str, thread_id: str, name: str, summary: str = "") -> None:
-        self.send({"type": "tool", "runId": run_id, "threadId": thread_id,
-                   "name": name, "summary": summary})
+    def tool(self, run_id: str, thread_id: str, name: str, summary: str = "",
+             review: dict | None = None) -> None:
+        """One step. `review` is Auto Review's verdict on it (`review.Review`)."""
+        event = {"type": "tool", "runId": run_id, "threadId": thread_id,
+                 "name": name, "summary": summary}
+        if review:
+            event["review"] = review
+        self.send(event)
 
     def state(self, run_id: str, thread_id: str, state: str, cost_usd: float = 0.0) -> None:
         self.send({"type": "run.state", "runId": run_id, "threadId": thread_id,

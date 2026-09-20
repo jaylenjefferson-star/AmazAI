@@ -161,3 +161,133 @@ def plan_update(existing: dict, body: dict) -> dict:
 
     changes["updatedAt"] = now_iso()
     return changes
+
+
+
+# --- what a Bot may propose ---------------------------------------------------
+
+#: The cadences a Bot's proposal may name, by key. A proposal carries a key and
+#: never an expression: the schedule an operator confirms is one they can read,
+#: not a string a model composed. Kept identical to the console's presets
+#: (`web/src/schedules.js`); `test_routine_presets_match_the_console` enforces it.
+PRESETS: dict[str, str] = {
+    "every-30-min": "rate(30 minutes)",
+    "hourly": "rate(1 hour)",
+    "weekday-9": "cron(0 9 ? * MON-FRI *)",
+    "daily-730": "cron(30 7 * * ? *)",
+    "nightly-2": "cron(0 2 * * ? *)",
+}
+
+
+def validate_proposal(args: dict) -> dict:
+    """A routine a Bot suggests. Display-only: nothing is created from it."""
+    name = (args.get("name") or "").strip()
+    _require(bool(NAME_RE.match(name)),
+             "name must be 2-80 characters of letters, digits or - ' & , . ( ) /")
+    prompt = (args.get("prompt") or "").strip()
+    _require(2 <= len(prompt) <= 2000, "prompt must be 2-2000 characters")
+    preset = (args.get("schedule") or args.get("preset") or "").strip()
+    _require(preset in PRESETS, f"schedule must be one of {sorted(PRESETS)}")
+    return {"name": name, "prompt": prompt, "preset": preset}
+
+
+def _clock(hour: str, minute: str) -> str:
+    h = int(hour)
+    return f"{(h % 12) or 12}:{int(minute):02d} {'AM' if h < 12 else 'PM'}"
+
+
+def describe_schedule(trigger: dict | None) -> str:
+    """A trigger in words, for the transcript's own history lines. Falls back to
+    the expression as written: a wrong paraphrase of a schedule is worse than
+    the raw string."""
+    if not trigger or trigger.get("type") == "manual":
+        return "runs only when you start it"
+    if trigger.get("type") == "webhook":
+        return "runs when triggered externally"
+    expr = (trigger.get("expression") or "").strip()
+    cron = re.match(r"^cron\((\d+) (\d+) (\S+) (\S+) (\S+) (\S+)\)$", expr)
+    if cron:
+        minute, hour, dom, month, dow = cron.groups()[:5]
+        any_day = lambda v: v in ("*", "?")  # noqa: E731
+        if month == "*" and dow == "MON-FRI" and any_day(dom):
+            return f"weekdays at {_clock(hour, minute)}"
+        if month == "*" and any_day(dom) and any_day(dow):
+            return f"every day at {_clock(hour, minute)}"
+    rate = re.match(r"^rate\((\d+) (minute|minutes|hour|hours|day|days)\)$", expr)
+    if rate:
+        unit = rate.group(2).rstrip("s")
+        return f"every {unit}" if rate.group(1) == "1" else f"every {rate.group(1)} {unit}s"
+    return expr or "on a schedule"
+
+
+# --- firing -------------------------------------------------------------------
+
+def fire(store, routine: dict, *, invoke, trigger_type: str | None = None,
+         fired_at: str | None = None, idempotency_key: str | None = None) -> dict:
+    """Start one run of a routine. The one way a routine runs.
+
+    Scheduled fires (`handlers/routine.py`) and "Run now" (the API) both come
+    through here, so a routine cannot behave differently depending on who
+    pressed the button -- same idempotency claim, same thread, same limits.
+
+    `invoke(run_id)` starts the orchestrator; it is a parameter so this module
+    stays free of AWS and testable without an account.
+    """
+    from amazai import runs
+
+    routine_id = routine["routineId"]
+    fired = fired_at or now_iso()
+    idem = idempotency_key or K.schedule_idempotency_key(routine_id, fired)
+
+    # Claim the fire. A second delivery -- EventBridge is at-least-once, and a
+    # person can double-click -- returns the first run's id instead of a second run.
+    run_id = new_id("run_")
+    existing = store.claim(idem, run_id)
+    if existing:
+        return {"ok": True, "deduplicated": True, "runId": existing,
+                "threadId": routine.get("threadId")}
+
+    thread_id = routine.get("threadId")
+    if not thread_id:
+        thread_id = new_id("th_")
+        store.put({
+            "pk": K.thread_pk(thread_id), "sk": "META",
+            "entity": "Thread", "threadId": thread_id,
+            "gsi1pk": "THREADS", "gsi1sk": now_iso(),
+            "kind": "routine", "title": routine.get("name", "Routine"),
+            "agentIds": [routine["agentId"]],
+            "sessionId": K.session_id(thread_id),
+            "lastActivity": now_iso(),
+        })
+        store.update(K.routine_pk(routine_id), "META", {"threadId": thread_id})
+
+    from amazai.store import ordered_suffix
+    prompt = routine.get("prompt") or routine.get("purpose", "")
+    store.put({
+        "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
+        "entity": "Message", "role": "user", "author": "routine",
+        "routineId": routine_id, "text": prompt,
+    })
+
+    limits = routine.get("limits", {}) or {}
+    try:
+        run = runs.create(
+            store, agent_id=routine["agentId"], thread_id=thread_id, goal=prompt,
+            trigger={"type": trigger_type or routine.get("trigger", {}).get("type", "schedule"),
+                     "routineId": routine_id, "idempotencyKey": idem},
+            deadline_minutes=max(1, int(limits.get("maxDurationSec", 600)) // 60),
+            # The id claimed above, not a fresh one. The handler used to claim a
+            # throwaway id and let `runs.create` invent another, so a duplicate
+            # delivery returned the id of a run that did not exist.
+            run_id=run_id,
+        )
+    except Exception:
+        # Release the claim: a retry must be able to try again, not be told a
+        # run exists when creating it failed.
+        store.delete(K.idempotency_pk(idem), "META")
+        raise
+    invoke(run["runId"])
+    store.update(K.routine_pk(routine_id), "META", {
+        "lastRun": {"runId": run["runId"], "at": now_iso(), "status": "started"},
+    })
+    return {"ok": True, "runId": run["runId"], "threadId": thread_id}

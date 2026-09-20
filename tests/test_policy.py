@@ -134,3 +134,35 @@ class TestDecisionShape:
 
     def test_read_decisions_carry_no_expiry(self):
         assert policy.evaluate("issue.search", Capability.READ).expires_in is None
+
+
+class TestWhichRuleDecided:
+    """The decision names its rule, so the console can say why this one asked."""
+
+    def test_a_floor_tool_names_the_pattern_that_caught_it(self):
+        d = policy.evaluate("aws.iam.attach_policy", Capability.WRITE)
+        assert (d.required, d.rule, d.matched) == (True, "floor", "aws.iam.*")
+
+    def test_an_exact_floor_entry_names_itself(self):
+        d = policy.evaluate("slack.post", Capability.WRITE)
+        assert (d.rule, d.matched) == ("floor", "slack.post")
+
+    def test_a_dangerous_capability_names_the_class(self):
+        d = policy.evaluate("db.drop_table", Capability.DESTRUCTIVE)
+        assert (d.rule, d.matched) == ("capability", "destructive")
+
+    def test_a_read_says_read(self):
+        assert policy.evaluate("slack.read", Capability.READ).rule == "read"
+
+    def test_a_write_with_no_rule_says_default(self):
+        d = policy.evaluate("notes.append", Capability.WRITE)
+        assert (d.required, d.rule) == (True, "default")
+
+    def test_a_preapproved_write_says_so(self):
+        d = policy.evaluate("notes.append", Capability.WRITE, preapproved={"notes.append"})
+        assert (d.required, d.rule, d.matched) == (False, "preapproved", "notes.append")
+
+    def test_a_refusal_carries_the_pattern_that_refused(self):
+        with pytest.raises(Refused) as exc:
+            policy.evaluate("aws.admin_credential", Capability.ADMIN)
+        assert exc.value.matched == "aws.admin_credential"

@@ -20,8 +20,11 @@ import traceback
 
 import boto3
 
-from amazai import (agentcore, agents as A, approvals, collab, connectors, cost,
-                    keys as K, memory, policy, redact, router, runs, skills)
+from dataclasses import dataclass, field
+
+from amazai import (agentcore, agents as A, approvals, collab, connectors,
+                    continuation, cost, keys as K, memory, policy, redact, review,
+                    router, routines, runs, skills, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
@@ -32,6 +35,28 @@ from amazai.store import Store, new_id, now_iso, ordered_suffix
 from amazai.stream import EventKind, StreamParser
 
 MAX_HISTORY = 40
+
+
+@dataclass
+class Turn:
+    """What one invocation of the loop did, gathered as it happens.
+
+    `steps` become the "Worked for 14s · 5 steps" trail and are stored on the
+    assistant's message, so they survive a reload; `cards` are the proposals the
+    run made (a connector to connect, a routine to set up). Both are written by
+    code from the tool calls the run actually made, never from anything the model
+    says about itself.
+    """
+    steps: list = field(default_factory=list)
+    cards: list = field(default_factory=list)
+
+
+def _step(push, run, turn, tool: str, summary: str, verdict) -> None:
+    """Record one step and tell the console, with Auto Review's verdict on it."""
+    entry = {"name": tool, "summary": summary, "at": now_iso(),
+             "review": verdict.to_dict() if verdict else None}
+    turn.steps.append(entry)
+    push.tool(run["runId"], run["threadId"], tool, summary, review=entry["review"])
 
 
 def _owner() -> str:
@@ -45,11 +70,31 @@ def handler(event, context):  # noqa: ARG001
     run = store.get(K.run_pk(run_id), "META")
 
     try:
+        if event.get("cancel"):
+            return _settle_paused_cancel(store, run)
         return _drive(store, run, event)
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         _fail(store, run, f"{type(exc).__name__}: {exc}")
         return {"ok": False, "runId": run_id, "error": str(exc)}
+
+
+def _settle_paused_cancel(store: Store, run: dict) -> dict:
+    """Settle a run that was stopped while it was paused.
+
+    A paused run is parked on a row and a session id; no orchestrator is watching
+    it, so nobody would ever notice the stop flag. The API invokes this to do the
+    settling a live loop would have done -- seal the evidence, land in CANCELLED,
+    and start the redirect if the operator sent one.
+    """
+    fresh = store.get(run["pk"], "META")
+    if RunState(fresh["state"]) is not RunState.CANCELLING:
+        return {"ok": True, "skipped": f"run is {fresh['state']}"}
+    agent = store.try_get(K.agent_pk(fresh["agentId"]), "META") or {"name": fresh["agentId"]}
+    _finish(store, fresh, RunState.CANCELLED, "cancelled by you while it was waiting",
+            Push(store))
+    _chain_redirect(store, fresh["pk"], agent)
+    return {"ok": True, "state": RunState.CANCELLED.value}
 
 
 def _fail(store: Store, run: dict, message: str) -> None:
@@ -139,13 +184,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     assigned_skills = skills.assigned_active_skills(store, run["agentId"])
 
     messages = agentcore.build_messages(history, room=thread.get("kind") == "room")
-    if event.get("resume") and event.get("resumeNote"):
-        # D4 fallback path: if invoke_harness cannot take a native toolResult
-        # continuation, the decision is delivered as a user turn instead. Same
-        # state machine either way.
-        messages.append({"role": "user", "content": [{"text": event["resumeNote"]}]})
+    # Decision D4 lives behind `continuation`: how a paused run resumes is the one
+    # thing that cannot be verified without AWS, so nothing here knows the shape.
+    messages.extend(continuation.resume_messages(event))
 
     system_prompt = agentcore.build_system_prompt(agent, memories, skills=assigned_skills)
+    system_prompt += _request_notes(run, agent, thread)
 
 
     run = runs.advance(store, run, RunState.PLANNING) if run["state"] == RunState.QUEUED.value else run
@@ -156,11 +200,13 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     core = agentcore.AgentCore()
     parser = StreamParser()
     ev = EvidenceWriter(run["runId"])
-    cost = RunCost()
+    spend = RunCost()
     seq = run.get("cursor", {}).get("lastEventSeq", 0)
     buffer: list[str] = []
     pending_approval: dict | None = None
     stream_error: str | None = None
+    turn = Turn()
+    started_at = now_iso()
 
     try:
         stream = core.invoke_stream(
@@ -187,7 +233,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
                 if parsed.kind is EventKind.TOOL_USE:
                     result = _handle_tool(store, run, agent, ev, push, resolution,
-                                          parsed, seq, cost)
+                                          parsed, seq, spend, turn)
                     if result.get("pause"):
                         pending_approval = result["approval"]
                         break
@@ -196,29 +242,27 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                 break
 
             if runs.is_cancelled(store, run):
-                _finish(store, run, RunState.CANCELLED,
-                        "cancelled by you; the in-flight action was allowed to finish",
-                        push, ev=ev, cost=cost, text="".join(buffer))
-                return {"ok": True, "state": RunState.CANCELLED.value}
+                return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at)
 
         for parsed in parser.flush():
             if parsed.kind is EventKind.TOOL_USE:
                 seq += 1
-                _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost)
+                _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, spend, turn)
 
     except Exception as exc:  # noqa: BLE001
         stream_error = f"{type(exc).__name__}: {exc}"
 
     text = "".join(buffer).strip()
-    if text:
-        _persist_message(store, run, agent, text, cost)
+    if text or turn.steps or turn.cards:
+        _persist_message(store, run, agent, text, spend, steps=turn.steps,
+                         cards=turn.cards, started_at=started_at)
 
     run = store.get(run["pk"], "META")
     run = store.update(run["pk"], "META", {
         "cursor": {"turn": run.get("cursor", {}).get("turn", 0) + 1, "lastEventSeq": seq},
-        "costUsd": run.get("costUsd", 0.0) + cost.total_usd,
+        "costUsd": run.get("costUsd", 0.0) + spend.total_usd,
     })
-    _write_cost(store, run, agent, cost)
+    _write_cost(store, run, agent, spend)
 
     # --- settle ------------------------------------------------------------
     if pending_approval:
@@ -242,18 +286,109 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             _reinvoke(run["runId"], store.owner_id, delay_note=cls.reason)
             return {"ok": True, "state": RunState.RETRYING.value, "retry": cls.reason}
 
-        _finish(store, run, RunState.FAILED, stream_error, push, ev=ev, cost=cost, text=text)
+        _finish(store, run, RunState.FAILED, stream_error, push, ev=ev, cost=spend, text=text)
         return {"ok": False, "state": RunState.FAILED.value}
 
+    # A stop that arrived after the last stream event still has to stop the run:
+    # without this a cancelled run would settle as COMPLETED, and a redirect
+    # waiting behind it would never be picked up.
+    if runs.is_cancelled(store, run):
+        return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at,
+                                 persisted=True)
+
     _finish(store, run, RunState.COMPLETED, text or "done", push,
-            ev=ev, cost=cost, text=text)
+            ev=ev, cost=spend, text=text)
     return {"ok": True, "state": RunState.COMPLETED.value}
 
 
-def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> dict:
-    """Answer an inline function call, or record an in-harness tool call."""
+def _settle_cancelled(store, run, agent, push, ev, cost, buffer, turn, started_at,
+                      *, persisted: bool = False) -> dict:
+    """A stop, and -- if the operator sent something new while it ran -- the
+    redirect that follows it.
+
+    The in-flight action is allowed to finish (the state machine says so); what
+    was already said and done is kept, because a run stopped halfway still
+    happened and its trail is still evidence.
+    """
+    text = "".join(buffer).strip()
+    if not persisted and (text or turn.steps or turn.cards):
+        _persist_message(store, run, agent, text, cost, steps=turn.steps,
+                         cards=turn.cards, started_at=started_at)
+    _finish(store, run, RunState.CANCELLED,
+            "cancelled by you; the in-flight action was allowed to finish",
+            push, ev=ev, cost=cost, text=text)
+    _chain_redirect(store, run["pk"], agent)
+    return {"ok": True, "state": RunState.CANCELLED.value}
+
+
+def _chain_redirect(store: Store, run_pk: str, agent: dict) -> dict | None:
+    """Start the run the operator redirected to, once the old one has stopped.
+
+    One run per thread and agent at a time: two concurrent runs on one session
+    would interleave their turns. So a redirect does not start the new run
+    beside the old one; it records what to do next on the old run
+    (`redirect`, written by the API) and this starts it when the old one is
+    really over.
+    """
+    fresh = store.try_get(run_pk, "META")
+    pending = (fresh or {}).get("redirect")
+    if not pending or fresh.get("redirectedTo"):
+        return None
+    carried = {k: v for k, v in (fresh.get("trigger") or {}).items()
+               if k in ("skill", "mentions", "woke")}
+    new_run = runs.create(store, agent_id=fresh["agentId"], thread_id=fresh["threadId"],
+                          goal=pending["text"],
+                          trigger={"type": "user", "redirectOf": fresh["runId"], **carried})
+    store.update(run_pk, "META", {"redirectedTo": new_run["runId"]})
+    threads.event(store, fresh["threadId"],
+                  f"Redirected: {agent.get('name', 'the Bot')} stopped and picked up your new message",
+                  icon="check")
+    _invoke_orchestrator_async(new_run["runId"], store.owner_id)
+    return new_run
+
+
+def _request_notes(run: dict, agent: dict, thread: dict) -> str:
+    """What is true of *this* request, appended to the system prompt.
+
+    Behaviour, not enforcement: it tells the model why it was woken. The skill it
+    was told to use was already checked against the Bot's assignments by the API
+    before the run existed, and a handoff it is nudged toward still goes through
+    the handoff machinery -- which is what actually gates it.
+    """
+    trig = run.get("trigger") or {}
+    notes = []
+    skill = trig.get("skill")
+    if skill:
+        notes.append(f'The operator invoked the skill "{skill.get("name")}" for this '
+                     "request. Follow it.")
+    woke = [w for w in (trig.get("woke") or []) if w]
+    if thread.get("kind") == "room" and len(woke) > 1:
+        notes.append("Several Bots were woken by this message (" + ", ".join(woke) + "). "
+                     "Answer only for your own lane; do not repeat what another will cover.")
+    mentions = [m for m in (trig.get("mentions") or []) if m and m != agent["agentId"]]
+    if mentions and thread.get("kind") != "room":
+        notes.append("The operator mentioned " + ", ".join("@" + m for m in mentions)
+                     + ". If that Bot owns this work, use the handoff tool to give it "
+                     "to them rather than doing it yourself.")
+    if not notes:
+        return ""
+    return "\n\n## This request\n" + "\n".join(f"- {n}" for n in notes)
+
+
+def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
+                 turn: Turn | None = None) -> dict:
+    """Answer an inline function call, or record an in-harness tool call.
+
+    Every branch ends by recording a step with Auto Review's verdict on it
+    (`review`): allowed, asked or denied, and by which rule. The verdicts are
+    *descriptions of decisions made here* -- by `policy`, by `router`, by a
+    matched approval -- never a second opinion that could disagree with the gate
+    it labels.
+    """
+    turn = turn if turn is not None else Turn()
     name = parsed.tool_name
     args = parsed.tool_input
+    preapproved = frozenset(agent.get("preapproved", []))
 
     if name == "propose_agent":
         # This is deliberately a proposal rather than an agent-originated
@@ -264,7 +399,7 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
         A.validate_profile(proposal)
         # The always-approve floor includes agent.create. Calling the central
         # policy gate here keeps that invariant explicit if the policy evolves.
-        policy.evaluate("agent.create", Capability.ADMIN)
+        decision = policy.evaluate("agent.create", Capability.ADMIN)
         approval = approvals.request(
             store, run,
             action="agent.create", arguments=proposal,
@@ -272,9 +407,11 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
             capability=Capability.ADMIN,
             tool_use_id=parsed.tool_use_id,
             target={"parentAgentId": agent["agentId"]},
-            reversible=False,
+            reversible=False, decision=decision,
         )
         ev.action(seq, "agent.create", "agent creation proposed", approvalId=approval["approvalId"])
+        _step(push, run, turn, "agent.create", f"proposed {proposal['name']}",
+              review.from_decision(decision))
         return {"pause": True, "approval": approval}
 
     if name == "request_approval":
@@ -283,19 +420,16 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
         capability = _capability_for(action, agent)
 
         try:
-            decision = policy.evaluate(
-                action, capability,
-                preapproved=frozenset(agent.get("preapproved", [])),
-            )
+            decision = policy.evaluate(action, capability, preapproved=preapproved)
         except policy.Refused as exc:
             ev.error(seq, "terminal", str(exc))
-            push.tool(run["runId"], run["threadId"], action, f"refused: {exc}")
+            _step(push, run, turn, action, f"refused: {exc}", review.refused(exc))
             return {"pause": False}
 
         if not decision.required:
             # Already covered; tell the agent to proceed rather than pausing.
-            push.tool(run["runId"], run["threadId"], action,
-                      f"pre-approved ({decision.reason})")
+            _step(push, run, turn, action, f"pre-approved ({decision.reason})",
+                  review.from_decision(decision))
             return {"pause": False}
 
         approval = approvals.request(
@@ -304,15 +438,18 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
             why=args.get("why", ""), capability=capability,
             tool_use_id=parsed.tool_use_id,
             target=args.get("target") or {},
-            reversible=args.get("reversible"),
+            reversible=args.get("reversible"), decision=decision,
         )
         ev.action(seq, action, "approval requested", approvalId=approval["approvalId"])
+        _step(push, run, turn, action, "waiting for your approval", review.from_decision(decision))
         return {"pause": True, "approval": approval}
 
     if name == "handoff":
         handoff = _record_handoff(store, run, args)
         ev.action(seq, "handoff", f"to {args.get('to')}", handoffId=handoff["handoffId"])
         push.handoff(run["runId"], run["threadId"], handoff)
+        _step(push, run, turn, "handoff", f"to {args.get('to')}",
+              review.scoped("handoff", "you stay the owner, and no access travels with it"))
         return {"pause": False}
 
     if name == "message_agent":
@@ -320,13 +457,15 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
             result = _message_agent(store, run, agent, args)
         except collab.MessagingError as exc:
             ev.error(seq, "terminal", str(exc))
-            push.tool(run["runId"], run["threadId"], "message_agent", f"blocked: {exc}")
+            _step(push, run, turn, "message_agent", f"blocked: {exc}",
+                  review.Review(review.DENIED, "collab", str(exc)))
             return {"pause": False}
         ev.action(seq, "message_agent", f"to {args.get('to')}"
                  f" ({'priority' if result['priorityGranted'] else 'deferred'})",
                  messageId=result["message"]["messageId"])
-        push.tool(run["runId"], run["threadId"], "message_agent",
-                 f"-> {args.get('to')}: {args.get('text','')[:120]}")
+        _step(push, run, turn, "message_agent",
+              f"-> {args.get('to')}: {args.get('text','')[:120]}",
+              review.scoped("collab", "bound to this task; the recipient's own limits still apply"))
         return {"pause": False}
 
     if name == "remember":
@@ -346,9 +485,18 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
             row = memory.plan_write(args, pk, scope=scope, source="agent", author=agent["agentId"])
         except memory.ValidationError as exc:
             ev.error(seq, "terminal", str(exc))
+            _step(push, run, turn, "remember", f"not saved: {exc}",
+                  review.Review(review.DENIED, "memory", str(exc)))
             return {"pause": False}
         store.put(row)
         ev.action(seq, "remember", f"{scope} memory saved", memId=row["memId"])
+        label = (row.get("title") or row.get("body") or "")[:80]
+        _step(push, run, turn, "remember", f"saved: {label}",
+              review.scoped("memory", "writes only to this Bot's own memory"))
+        # A real event, written by the action itself -- not something the
+        # console noticed. It is what lets the operator see the save happened.
+        threads.event(store, run["threadId"], f"{agent['name']} saved to memory: {label}",
+                      icon="layers", memId=row["memId"])
         return {"pause": False}
 
     if name == "propose_shared_memory":
@@ -359,18 +507,22 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
             fields = memory.validate(args, scope="shared_user")
         except memory.ValidationError as exc:
             ev.error(seq, "terminal", str(exc))
+            _step(push, run, turn, "memory.publish", f"not proposed: {exc}",
+                  review.Review(review.DENIED, "memory", str(exc)))
             return {"pause": False}
         proposal = {**fields, "proposedBy": agent["agentId"]}
-        policy.evaluate("memory.publish", Capability.WRITE)
+        decision = policy.evaluate("memory.publish", Capability.WRITE, preapproved=preapproved)
         approval = approvals.request(
             store, run,
             action="memory.publish", arguments=proposal,
             why=args.get("why", "The operator should know this."),
             capability=Capability.WRITE,
             tool_use_id=parsed.tool_use_id,
-            reversible=True,
+            reversible=True, decision=decision,
         )
         ev.action(seq, "memory.publish", "shared memory proposed", approvalId=approval["approvalId"])
+        _step(push, run, turn, "memory.publish", "proposed for every Bot",
+              review.from_decision(decision))
         return {"pause": True, "approval": approval}
 
     if name == "propose_skill":
@@ -381,40 +533,126 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost) -> 
             proposal = skills.validate_skill(args)
         except skills.ValidationError as exc:
             ev.error(seq, "terminal", str(exc))
+            _step(push, run, turn, "skill.create", f"not proposed: {exc}",
+                  review.Review(review.DENIED, "skill", str(exc)))
             return {"pause": False}
         proposal["proposedBy"] = agent["agentId"]
-        policy.evaluate("skill.create", Capability.ADMIN)
+        decision = policy.evaluate("skill.create", Capability.ADMIN)
         approval = approvals.request(
             store, run,
             action="skill.create", arguments=proposal,
             why=args.get("why", "A reusable skill would help future runs."),
             capability=Capability.ADMIN,
             tool_use_id=parsed.tool_use_id,
-            reversible=True,
+            reversible=True, decision=decision,
         )
         ev.action(seq, "skill.create", "skill proposed", approvalId=approval["approvalId"])
+        _step(push, run, turn, "skill.create", f"proposed {proposal['name']}",
+              review.from_decision(decision))
         return {"pause": True, "approval": approval}
 
-    # In-harness tool (shell, browser, gateway target). We observe, not execute.
+    # --- proposals that are cards, not approvals -----------------------------
+    # Nothing here changes anything. A card is a suggestion the operator acts on
+    # with the console's own forms, so there is no approval to wait for and the
+    # run carries on -- and because it carries on, the model is told to make
+    # these its last action, after the result they follow.
+    if name == "request_connector":
+        connector_id = (args.get("connectorId") or "").strip()
+        spec = connectors.CATALOG.get(connector_id)
+        if spec is None:
+            ev.error(seq, "terminal", f"request_connector: no such connector {connector_id!r}")
+            _step(push, run, turn, "request_connector", f"unknown connector {connector_id!r}",
+                  review.Review(review.DENIED, "unknown_connector",
+                                "that connector is not in the catalog", connector_id))
+            return {"pause": False}
+        granted = {g.connector_id for g in connectors.router_grants(store, run["agentId"])}
+        if connector_id in granted:
+            _step(push, run, turn, "request_connector", f"{spec.name} is already connected",
+                  review.scoped("proposal", "already connected and granted; nothing to ask for"))
+            return {"pause": False}
+        turn.cards.append({"type": "connect", "connectorId": connector_id, "name": spec.name,
+                           "why": (args.get("why") or "")[:200]})
+        ev.action(seq, "request_connector", f"asked to connect {spec.name}")
+        _step(push, run, turn, "request_connector", f"asked you to connect {spec.name}",
+              review.scoped("proposal", "a suggestion; nothing is connected until you do it"))
+        return {"pause": False}
+
+    if name == "propose_routine":
+        try:
+            proposal = routines.validate_proposal(args)
+        except routines.ValidationError as exc:
+            ev.error(seq, "terminal", str(exc))
+            _step(push, run, turn, "propose_routine", f"not proposed: {exc}",
+                  review.Review(review.DENIED, "routine", str(exc)))
+            return {"pause": False}
+        turn.cards.append({"type": "routine", **proposal, "agentId": agent["agentId"]})
+        ev.action(seq, "propose_routine", f"proposed {proposal['name']}")
+        _step(push, run, turn, "propose_routine", f"suggested {proposal['name']}",
+              review.scoped("proposal", "a suggestion; you review it before it exists"))
+        return {"pause": False}
+
+    # --- in-harness tool, or a connector tool we execute ----------------------
     if not router.may_call(name, resolution):
         # Should be unreachable: unresolved tools are absent from the schema.
         ev.error(seq, "terminal", f"{name} called without a grant")
+        _step(push, run, turn, name, "no grant", review.ungranted(name))
         return {"pause": False}
 
     safe_args, redacted = redact.redact(args)
     summary = _summarise(name, safe_args)
+    is_connector = _is_connector_tool(name, resolution)
+    verdict = review.sandbox(name)
+
+    if is_connector:
+        # The gate. `connectors.invoke` documents that `policy.evaluate` has
+        # already run by the time it is called; until this branch existed, it
+        # had not -- a connector write on the always-approve floor ran if the
+        # model simply did not call `request_approval` first. Enforcement is
+        # code, never prompt: the decision is made here, from the tool's own
+        # declared capability, whatever the model did or did not ask for.
+        live_grants = connectors.router_grants(store, run["agentId"])
+        try:
+            _spec, action = connectors.action_for(name, live_grants)
+            decision = policy.evaluate(name, action.capability, preapproved=preapproved)
+        except policy.Refused as exc:
+            ev.error(seq, "terminal", str(exc))
+            _step(push, run, turn, name, f"refused: {exc}", review.refused(exc))
+            return {"pause": False, "toolResult": {"error": str(exc)}}
+        except Exception as exc:  # noqa: BLE001
+            ev.error(seq, "retryable", f"{name} failed: {type(exc).__name__}")
+            _step(push, run, turn, name, f"failed: {type(exc).__name__}", review.ungranted(name))
+            return {"pause": False, "toolResult": {"error": f"{name} failed: {exc}"}}
+
+        if decision.required:
+            granted = approvals.find_grant(store, run["pk"], name, args)
+            if granted and approvals.consume(store, granted):
+                verdict = review.approved(granted["approvalId"])
+            else:
+                approval = approvals.request(
+                    store, run, action=name, arguments=args,
+                    why=f"{name} needs your approval ({decision.reason})",
+                    capability=action.capability, tool_use_id=parsed.tool_use_id,
+                    reversible=None, decision=decision,
+                )
+                ev.action(seq, name, "held for approval before running",
+                          approvalId=approval["approvalId"])
+                _step(push, run, turn, name, "waiting for your approval",
+                      review.from_decision(decision))
+                return {"pause": True, "approval": approval}
+        else:
+            verdict = review.from_decision(decision)
+
     runs.record_event(store, run, seq, "tool", tool=name, args=safe_args,
-                      redactions=redacted)
-    ev.action(seq, name, summary, redactions=redacted)
+                      redactions=redacted, review=verdict.to_dict())
+    ev.action(seq, name, summary, redactions=redacted, review=verdict.to_dict())
     cost.add_connector(name.split(".")[0], calls=1)
-    push.tool(run["runId"], run["threadId"], name, summary)
+    _step(push, run, turn, name, summary, verdict)
 
     # A connector tool is executed here, through the Pipedream proxy, rather
     # than inside the harness. The proxy injects the third party's credential
     # on its side, so the token never enters this process and cannot reach
-    # model context. Everything that decided this call was allowed already
-    # ran: the org install, the agent grant, and policy.evaluate.
-    if _is_connector_tool(name, resolution):
+    # model context. The gate above is what decided this call was allowed.
+    if is_connector:
         try:
             # Re-read the grants here rather than reusing the ones resolution
             # was built from. A revoke that lands mid-run is then honoured on
@@ -578,15 +816,41 @@ def _invoke_orchestrator_async(run_id: str, owner_id: str) -> None:
     )
 
 
-def _persist_message(store: Store, run: dict, agent: dict, text: str, cost: RunCost) -> None:
-    store.put({
+def _persist_message(store: Store, run: dict, agent: dict, text: str, cost: RunCost,
+                     *, steps: list | None = None, cards: list | None = None,
+                     started_at: str | None = None) -> None:
+    """Write what this turn produced: words, the trail behind them, and any cards.
+
+    A turn can have steps and cards and no words (it paused on an approval
+    before saying anything), so the row is written for any of the three;
+    `build_messages` skips a row with no text, so the model never sees the empty
+    ones.
+    """
+    row = {
         "pk": K.thread_pk(run["threadId"]),
         "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "assistant",
         "author": agent.get("name"), "agentId": agent["agentId"],
         "runId": run["runId"], "text": text,
         "usage": cost.to_item(),
-    })
+    }
+    if steps:
+        row["steps"] = steps
+        row["startedAt"] = started_at or steps[0]["at"]
+        row["endedAt"] = now_iso()
+    if cards:
+        row["cards"] = cards
+    store.put(row)
+    if not text:
+        return
+    # A reply is activity. Without this the thread's `lastActivity` stays at
+    # the operator's own message, so a Bot answering after the thread was
+    # opened could never make it unread. Cosmetic to the run, so a failure
+    # here is logged and never allowed to fail the run that just succeeded.
+    try:
+        store.update(K.thread_pk(run["threadId"]), "META", threads.touch(text, "assistant"))
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
 
 
 def _write_cost(store: Store, run: dict, agent: dict, cost: RunCost) -> None:

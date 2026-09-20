@@ -19,16 +19,17 @@ import boto3
 
 from amazai import (agentcore, agents as A, approvals, collab, connectors as C,
                     identity, keys as K, memory, models, pipedream, routines as R,
-                    runs, schedules, settings as S, skills)
+                    runs, schedules, settings as S, skills, threads)
+from amazai import dispatch
 from amazai.policy import Capability
-from amazai.states import RunState
+from amazai.states import PAUSED, RunState, TERMINAL
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
 
 CORS = {
     "content-type": "application/json",
     "access-control-allow-origin": "*",
     "access-control-allow-headers": "authorization,content-type",
-    "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
+    "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 }
 
 
@@ -311,8 +312,17 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     # --- memory ------------------------------------------------------------
     if (p := _match(path, "/agents/{id}/memory")) and method == "POST":
-        return _resp(201, _write_memory(store, K.agent_pk(p[0]), body, scope="agent",
-                                        actor=_actor(event)))
+        row = _write_memory(store, K.agent_pk(p[0]), body, scope="agent", actor=_actor(event))
+        _event_in_dm(store, p[0], f"Saved to memory: {_label(row)}", icon="layers",
+                     memId=row["memId"])
+        return _resp(201, row)
+
+    if (p := _match(path, "/agents/{id}/memory/{memId}")) and method == "PATCH":
+        existing = store.get(K.agent_pk(p[0]), K.memory_sk(p[1]))
+        updated = store.update(K.agent_pk(p[0]), K.memory_sk(p[1]), memory.plan_edit(existing, body))
+        _event_in_dm(store, p[0], f"Memory corrected: {_label(updated)}", icon="layers",
+                     memId=p[1])
+        return _resp(200, updated)
 
     if (p := _match(path, "/agents/{id}/memory/{memId}")) and method == "DELETE":
         store.delete(K.agent_pk(p[0]), K.memory_sk(p[1]))
@@ -334,6 +344,11 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     if path == "/memory" and method == "POST":
         return _resp(201, _write_memory(store, K.user_pk(store.owner_id), body,
                                         scope="shared_user", actor=_actor(event)))
+
+    if (p := _match(path, "/memory/{memId}")) and method == "PATCH":
+        existing = store.get(K.user_pk(store.owner_id), K.memory_sk(p[0]))
+        return _resp(200, store.update(K.user_pk(store.owner_id), K.memory_sk(p[0]),
+                                       memory.plan_edit(existing, body)))
 
     if (p := _match(path, "/memory/{memId}")) and method == "DELETE":
         store.delete(K.user_pk(store.owner_id), K.memory_sk(p[0]))
@@ -366,7 +381,14 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         # version 1; only an agent's `propose_skill` call produces a
         # `proposed` row awaiting this same approval gate agent creation
         # uses. Written atomically -- META + V1 or neither.
-        return _resp(201, skills.create(store, body, created_by=_owner(event)))
+        source = body.get("sourceThreadId")
+        created = skills.create(store, {k: v for k, v in body.items() if k != "sourceThreadId"},
+                                created_by=_owner(event))
+        # Saved *from* a conversation (the console's "Save as skill" on a message):
+        # the history line is written by the save itself, in that conversation.
+        if isinstance(source, str) and store.try_get(K.thread_pk(source), "META"):
+            threads.event(store, source, f"Saved as a skill: {created['name']}", icon="file")
+        return _resp(201, created)
 
     if (p := _match(path, "/skills/{id}")) and method == "PATCH":
         existing = store.get(K.skill_pk(p[0]), "META")
@@ -427,7 +449,10 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     # --- threads -----------------------------------------------------------
     if path == "/threads" and method == "GET":
-        threads = store.query_index("gsi1", "gsi1pk", "THREADS")
+        # Not named `threads`: that would make the `threads` module a *local* of
+        # this whole function, and every other branch that calls `threads.event`
+        # would fail with UnboundLocalError.
+        rows = store.query_index("gsi1", "gsi1pk", "THREADS")
         # Derived, not stored: a cached boolean would disagree with
         # lastActivity the moment a run wrote to a thread nobody has opened.
         #
@@ -435,15 +460,21 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         # on. Timestamps are second-resolution, which means activity landing
         # in the same second as the marker counts as read -- the alternative,
         # `>=`, makes a read never clear anything.
-        for thread in threads:
+        for thread in rows:
             marker = store.try_get(K.thread_pk(thread["threadId"]), "READ") or {}
             thread["readAt"] = marker.get("readAt")
             thread["unread"] = bool(
                 thread.get("lastActivity")
                 and thread["lastActivity"] > (marker.get("readAt") or ""))
-        return _resp(200, {"threads": threads})
+        return _resp(200, {"threads": rows})
 
     if path == "/threads" and method == "POST":
+        agent_ids = body.get("agentIds", [])
+        if not isinstance(agent_ids, list) or not all(isinstance(a, str) for a in agent_ids):
+            raise A.ValidationError("agentIds must be a list of agent ids")
+        if len(set(agent_ids)) > collab.MAX_ROOM_MEMBERS:
+            raise A.ValidationError(
+                f"a room holds at most {collab.MAX_ROOM_MEMBERS} agents")
         thread_id = new_id("th_")
         actor = _actor(event)
         return _resp(201, store.put({
@@ -461,6 +492,9 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
             "createdBy": actor.user_id,
             "status": body.get("status", "active"),
         }))
+
+    if (p := _match(path, "/threads/{id}")) and method == "PATCH":
+        return _patch_room(store, p[0], body)
 
     if (p := _match(path, "/threads/{id}")) and method == "GET":
         thread = store.get(K.thread_pk(p[0]), "META")
@@ -520,13 +554,9 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     if (p := _match(path, "/runs/{id}/cancel")) and method == "POST":
         run = store.get(K.run_pk(p[0]), "META")
-        if RunState(run["state"]) in {RunState.COMPLETED, RunState.FAILED,
-                                      RunState.CANCELLED, RunState.EXPIRED,
-                                      RunState.PARTIAL}:
+        if RunState(run["state"]) in TERMINAL:
             return _resp(409, {"error": "run already finished", "state": run["state"]})
-        # The in-flight tool call is allowed to finish; the orchestrator sees
-        # this flag between events and settles the run.
-        return _resp(202, runs.advance(store, run, RunState.CANCELLING))
+        return _resp(202, _stop_run(store, run))
 
     # --- approvals ---------------------------------------------------------
     # Global, across every run -- what the Home inbox needs. The per-run
@@ -589,7 +619,27 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
                 "detail": f"{type(exc).__name__}: {exc}",
                 "note": "nothing was left behind; the same request can be retried",
             })
+        # Written by the action itself, after it succeeded -- so the transcript
+        # never claims a routine that a refused schedule did not leave behind.
+        _event_in_dm(store, written["agentId"],
+                     f"Routine created: {written['name']} · {R.describe_schedule(written.get('trigger'))}",
+                     icon="clock", routineId=written["routineId"])
         return _resp(201, written)
+
+    # Run now. The same `routines.fire` a scheduled fire uses -- same claim, same
+    # thread, same limits -- so it cannot behave differently for having been
+    # pressed by a person. A paused routine may still be run by hand: pausing
+    # stops the schedule, not the operator.
+    if (p := _match(path, "/routines/{id}/run")) and method == "POST":
+        routine = store.get(K.routine_pk(p[0]), "META")
+        if routine.get("status") == "archived":
+            return _resp(409, {"error": "conflict", "detail": "an archived routine cannot be run"})
+        key = _header(event, "idempotency-key") or now_iso()
+        result = R.fire(store, routine,
+                        invoke=lambda run_id: _invoke_orchestrator(run_id, store.owner_id),
+                        trigger_type="manual",
+                        idempotency_key=f"manual:{routine['routineId']}:{key}")
+        return _resp(202, result)
 
     if (p := _match(path, "/routines/{id}")) and method == "GET":
         return _resp(200, store.get(K.routine_pk(p[0]), "META"))
@@ -722,6 +772,7 @@ def _create_agent(store: Store, body: dict, event: dict):
         org_connectors=_org_connectors(store),
         active_count=len(active),
         max_agents=int(os.environ.get("MAX_AGENTS", A.DEFAULT_MAX_AGENTS)),
+        has_entrypoint=any(r.get("entrypoint") for r in active),
     )
 
     if store.try_get(K.agent_pk(plan.agent_id), "META"):
@@ -808,33 +859,203 @@ def _priority_label(agent_message: dict) -> str:
 
 
 def _post_message(store: Store, thread_id: str, body: dict):
+    """A message from the operator, and every run it starts.
+
+    Three things beyond "save it and start a run":
+
+    * **Who wakes.** A room wakes every Bot it `@`-mentions, each on its own run,
+      in parallel (`dispatch.targets_for`); a direct thread wakes its one Bot.
+    * **`/skill`.** A leading `/name` that names a skill *this Bot has* -- active
+      and assigned -- rides on the run so the Bot is told to use it. A `/name`
+      that names nothing is ordinary text, never an error.
+    * **Redirect.** `redirectRunId` names a run to stop in favour of this message.
+      It is stopped, not raced: a new run does not start beside the old one on
+      the same session, it starts when the old one has actually ended.
+    """
     text = (body.get("text") or "").strip()
     if not text:
         return _resp(400, {"error": "text is required"})
 
     thread = store.get(K.thread_pk(thread_id), "META")
-    agent_id = body.get("agentId") or _pick_agent(thread, text)
-    if not agent_id:
+    explicit = body.get("agentId")
+    targets = [explicit] if explicit else dispatch.targets_for(thread, text)
+    if not targets:
         return _resp(400, {"error": "no agent assigned to this thread"})
+
+    # A mention in a direct thread is an ask to hand off, not a wake -- the Bot
+    # is told who was named and the handoff machinery decides what happens.
+    mentions: list[str] = []
+    if thread.get("kind") != "room" and "@" in text:
+        active = [r["agentId"] for r in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
+                  if r.get("status", r.get("state")) in A.SEATED and r["agentId"] != targets[0]]
+        mentions = dispatch.mentioned(active, text)
+
+    skill = None
+    command = dispatch.slash_command(text)
+    if command and len(targets) == 1:
+        wanted = command[0].lower()
+        for row in skills.assigned_active_skills(store, targets[0]):
+            if wanted in (row["skillId"].lower(), skills.normalize_skill_id(row["name"])):
+                skill = {"skillId": row["skillId"], "name": row["name"]}
+                break
 
     store.put({
         "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "user", "author": "you", "text": text,
+        **({"skill": skill["name"]} if skill else {}),
     })
-    store.update(K.thread_pk(thread_id), "META", {"lastActivity": now_iso()})
+    store.update(K.thread_pk(thread_id), "META", threads.touch(text, "user"))
 
-    run = runs.create(store, agent_id=agent_id, thread_id=thread_id, goal=text)
-    _invoke_orchestrator(run["runId"], store.owner_id)
-    return _resp(202, {"runId": run["runId"], "state": run["state"]})
+    names = {}
+    if len(targets) > 1:
+        for a in targets:
+            row = store.try_get(K.agent_pk(a), "META")
+            names[a] = (row or {}).get("name", a)
+        threads.event(store, thread_id, "Woke " + " and ".join(names[a] for a in targets)
+                      if len(targets) == 2 else "Woke " + ", ".join(names[a] for a in targets),
+                      icon="check")
+
+    redirect = None
+    if body.get("redirectRunId"):
+        old = store.try_get(K.run_pk(body["redirectRunId"]), "META")
+        if (old and old.get("threadId") == thread_id and old.get("agentId") in targets
+                and RunState(old["state"]) not in TERMINAL
+                and RunState(old["state"]) is not RunState.CANCELLING):
+            redirect = old
+
+    started = []
+    for agent_id in targets:
+        if redirect and redirect["agentId"] == agent_id:
+            _stop_run(store, redirect, redirect_text=text)
+            started.append({"runId": redirect["runId"], "agentId": agent_id,
+                            "state": RunState.CANCELLING.value, "redirected": True})
+            continue
+        trigger = {"type": "user"}
+        if skill:
+            trigger["skill"] = skill
+        if mentions:
+            trigger["mentions"] = mentions
+        if len(targets) > 1:
+            trigger["woke"] = [names[a] for a in targets]
+            trigger["mentions"] = targets
+        run = runs.create(store, agent_id=agent_id, thread_id=thread_id, goal=text,
+                          trigger=trigger)
+        _invoke_orchestrator(run["runId"], store.owner_id)
+        started.append({"runId": run["runId"], "agentId": agent_id, "state": run["state"]})
+
+    return _resp(202, {"runId": started[0]["runId"], "state": started[0]["state"],
+                       "runs": started})
+
+
+def _stop_run(store: Store, run: dict, *, redirect_text: str | None = None) -> dict:
+    """Stop a run, and optionally record what to do once it has stopped.
+
+    A running run is stopped by flagging it: the orchestrator sees the flag
+    between stream events and settles it. A *paused* run has no orchestrator
+    watching -- nothing is held open while it waits -- so it is settled by
+    invoking the orchestrator to do exactly that. Before this, stopping a run
+    that was waiting on an approval flagged it `CANCELLING` and left it there
+    for good: the one state a stop most needs to work in was the one where it
+    silently did not.
+    """
+    state = RunState(run["state"])
+    if state in TERMINAL or state is RunState.CANCELLING:
+        return run
+    if redirect_text:
+        store.update(run["pk"], "META", {"redirect": {"text": redirect_text, "at": now_iso()}})
+    stopped = runs.advance(store, run, RunState.CANCELLING)
+    if state in PAUSED:
+        pending = (run.get("pending") or {}).get("approvalId")
+        if pending:
+            try:   # what it was waiting on is denied, not left dangling
+                approvals.decide(store, run["pk"], pending, approve=False,
+                                 note="the run was stopped")
+            except Exception:  # noqa: BLE001 -- already decided or expired: fine
+                pass
+        _invoke_orchestrator(run["runId"], store.owner_id, cancel=True)
+    return stopped
+
+
+def _label(row: dict) -> str:
+    return (row.get("title") or row.get("body") or "").strip()[:80] or "an entry"
+
+
+def _event_in_dm(store: Store, agent_id: str, text: str, *, icon: str = "check", **extra) -> None:
+    """A history line in an agent's direct thread -- if it has one. Best effort:
+    the action it records has already happened, and a missing thread must not
+    turn a success into an error."""
+    thread_id = f"dm-{agent_id}"
+    try:
+        if store.try_get(K.thread_pk(thread_id), "META"):
+            threads.event(store, thread_id, text, icon=icon, **extra)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
+def _patch_room(store: Store, thread_id: str, body: dict):
+    """Change a room's title or who is in it.
+
+    The cap (`collab.MAX_ROOM_MEMBERS`) and the "must be a real, seated agent"
+    check are the same ones creating a room applies -- membership is not a way
+    round either.
+    """
+    thread = store.get(K.thread_pk(thread_id), "META")
+    if thread.get("kind") != "room":
+        return _resp(400, {"error": "invalid_request",
+                           "detail": "only a room's members can be changed"})
+    if thread.get("readOnly") or thread.get("status") == "completed":
+        return _resp(409, {"error": "conflict", "detail": "this room has finished"})
+
+    changes: dict = {}
+    if "title" in body:
+        title = (body.get("title") or "").strip()
+        if not 2 <= len(title) <= 80:
+            raise A.ValidationError("title must be 2-80 characters")
+        changes["title"] = title
+
+    added: list[str] = []
+    removed: list[str] = []
+    if "agentIds" in body:
+        ids = body["agentIds"]
+        if not isinstance(ids, list) or not all(isinstance(a, str) for a in ids):
+            raise A.ValidationError("agentIds must be a list of agent ids")
+        ids = list(dict.fromkeys(ids))
+        if not ids:
+            raise A.ValidationError("a room needs at least one agent")
+        if len(ids) > collab.MAX_ROOM_MEMBERS:
+            raise A.ValidationError(f"a room holds at most {collab.MAX_ROOM_MEMBERS} agents")
+        for agent_id in ids:
+            row = store.try_get(K.agent_pk(agent_id), "META")
+            if not row or row.get("status", row.get("state")) not in A.SEATED:
+                raise A.ValidationError(f"no such agent {agent_id!r}")
+        before = thread.get("agentIds") or []
+        added = [a for a in ids if a not in before]
+        removed = [a for a in before if a not in ids]
+        changes["agentIds"] = ids
+
+    if not changes:
+        raise A.ValidationError("no editable fields supplied")
+
+    updated = store.update(K.thread_pk(thread_id), "META", changes)
+
+    def name(agent_id: str) -> str:
+        return (store.try_get(K.agent_pk(agent_id), "META") or {}).get("name", agent_id)
+
+    for agent_id in added:
+        threads.event(store, thread_id, f"{name(agent_id)} joined", icon="check")
+    for agent_id in removed:
+        threads.event(store, thread_id, f"{name(agent_id)} left", icon="check")
+    return _resp(200, updated)
 
 
 def _pick_agent(thread: dict, text: str) -> str | None:
-    """An @mention wins in a room; otherwise the thread's first agent."""
-    ids = thread.get("agentIds") or []
-    for agent_id in ids:
-        if f"@{agent_id}" in text:
-            return agent_id
-    return ids[0] if ids else None
+    """An @mention wins in a room; otherwise the thread's first agent.
+
+    Kept for callers that want exactly one agent; `_post_message` uses
+    `dispatch.targets_for`, which can wake several.
+    """
+    targets = dispatch.targets_for(thread, text)
+    return targets[0] if targets else None
 
 
 def _exec(store: Store, thread_id: str, body: dict):
@@ -900,6 +1121,16 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict,
         note += f" Note: {body['note']}"
     if not approve:
         note += " Do not attempt this action again; find another way or stop and explain."
+
+    if created:
+        # Written by the approval that did it: the transcript only ever says a
+        # Bot was created, a skill saved or a fact shared after it happened.
+        if decided["action"] == "agent.create":
+            threads.event(store, decided["threadId"], f"Created {created['name']}", icon="check")
+        elif decided["action"] == "skill.create":
+            threads.event(store, decided["threadId"], f"Saved as a skill: {created['name']}", icon="file")
+        elif decided["action"] == "memory.publish":
+            threads.event(store, decided["threadId"], f"Shared with every Bot: {_label(created)}", icon="layers")
 
     runs.advance(store, run, RunState.EXECUTING, pending=None)
     _invoke_orchestrator(run_id, store.owner_id, resume=True, resume_note=note)
@@ -972,13 +1203,16 @@ def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict
 
 
 def _invoke_orchestrator(run_id: str, owner_id: str, *, resume: bool = False,
-                         resume_note: str = "") -> None:
+                         resume_note: str = "", cancel: bool = False) -> None:
     fn = os.environ.get("ORCHESTRATOR_FN_ARN")
     if not fn:
         return
     payload = {"runId": run_id, "ownerId": owner_id}
     if resume:
         payload.update({"resume": True, "resumeNote": resume_note})
+    if cancel:
+        # Settle a paused run that was stopped: nothing is watching it.
+        payload["cancel"] = True
     boto3.client("lambda").invoke(
         FunctionName=fn, InvocationType="Event",
         Payload=json.dumps(payload).encode(),
