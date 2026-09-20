@@ -298,7 +298,11 @@ class AgentCore:
         return resp.get("harnessArn") or resp.get("arn") or resp["harness"]["harnessArn"]
 
     def get_harness(self, harness_arn: str) -> dict:
-        return self._control.get_harness(harnessArn=harness_arn)
+        # The runtime accepts the harness ARN, while the control plane's
+        # Get/UpdateHarness API accepts its final resource component as
+        # `harnessId`. Keeping the conversion here stops callers from mixing
+        # the two service shapes.
+        return self._control.get_harness(harnessId=_harness_id(harness_arn))
 
     def missing_inline_tools(self, harness_arn: str) -> dict:
         """Which of `INLINE_TOOLS` this harness does not have yet. Read-only.
@@ -308,7 +312,7 @@ class AgentCore:
         the model is simply never offered them. That is the gap this reports; it
         never guesses the shape of an update.
         """
-        resp = self._control.get_harness(harnessArn=harness_arn)
+        resp = self.get_harness(harness_arn)
         body = resp.get("harness", resp) if isinstance(resp, dict) else {}
         tools = body.get("tools")
         if tools is None:
@@ -328,15 +332,24 @@ class AgentCore:
         therefore only reachable through `scripts/sync_harness_tools.py --apply`,
         after a `--check`.
         """
-        resp = self._control.get_harness(harnessArn=harness_arn)
+        resp = self.get_harness(harness_arn)
         body = resp.get("harness", resp)
         current = list(body.get("tools") or [])
         have = {t.get("name") for t in current if t.get("type") == "inline_function"}
         added = [t for t in harness_tools([]) if t["name"] not in have]
         if not added:
             return {"changed": False, "added": []}
-        self._control.update_harness(harnessArn=harness_arn, tools=current + added)
+        self._control.update_harness(harnessId=_harness_id(harness_arn), tools=current + added)
         return {"changed": True, "added": [t["name"] for t in added]}
+
+
+def _harness_id(harness_arn: str) -> str:
+    """Return the control-plane identifier from an ARN or an id.
+
+    Local tests and callers that already have the id may pass it directly;
+    deployed records deliberately retain the ARN because the runtime needs it.
+    """
+    return harness_arn.rsplit("/", 1)[-1]
 
     def update_filesystem(self, harness_arn: str, mounts: list[dict]) -> dict:
         """Filesystem mounts are not enabled in this deployment."""

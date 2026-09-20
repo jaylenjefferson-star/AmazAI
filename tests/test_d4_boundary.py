@@ -163,7 +163,7 @@ class FakeControl:
     def __init__(self, tools):
         self.tools, self.updated = tools, []
 
-    def get_harness(self, harnessArn):
+    def get_harness(self, harnessId):
         return {"harness": {"tools": self.tools}}
 
     def update_harness(self, **kw):
@@ -191,7 +191,7 @@ class TestExistingHarnessesAreReportedNotGuessedAt:
 
     def test_a_response_without_tools_is_reported_as_unknown_not_as_empty(self):
         core = agentcore.AgentCore(runtime=object(), control=type("C", (), {
-            "get_harness": lambda self, harnessArn: {"harness": {"name": "x"}}})())
+            "get_harness": lambda self, harnessId: {"harness": {"name": "x"}}})())
         report = core.missing_inline_tools("arn")
         assert report["known"] is False and "keys were ['name']" in report["note"]
 
@@ -203,6 +203,13 @@ class TestExistingHarnessesAreReportedNotGuessedAt:
         names = [t["name"] for t in sent]
         assert "browser" in names and "propose_routine" in names and "request_connector" in names
         assert len(names) == len(set(names)), "a tool was declared twice"
+        assert control.updated[0]["harnessId"] == "arn"
+
+    def test_an_arn_is_converted_to_the_control_plane_harness_id(self):
+        control = FakeControl(self.OLD)
+        core = agentcore.AgentCore(runtime=object(), control=control)
+        core.add_inline_tools("arn:aws:bedrock-agentcore:us-west-2:1:harness/eng-123")
+        assert control.updated[0]["harnessId"] == "eng-123"
 
     def test_the_report_alone_never_calls_update(self):
         script = load_script("sync_harness_tools")
