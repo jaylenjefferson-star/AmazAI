@@ -69,6 +69,22 @@
   --brand-sweep: linear-gradient(115deg, var(--brand-1), var(--brand-2) 45%,
                                  var(--brand-3) 78%, var(--brand-4));
 
+
+  /* ---- type ----
+     A ramp, not a pile. The console had fourteen sizes including 11.5,
+     12.5, 13.5 and 14.5 -- half-steps that no eye reads as deliberate and
+     that guarantee two adjacent things are almost the same size. Six steps,
+     each far enough from its neighbour to look chosen, with tracking that
+     tightens as the size grows because large text set at body tracking
+     reads loose. */
+  --t-display: 600 26px/1.18 var(--sans);
+  --t-display-track: -.021em;
+  --t-title:   600 17px/1.3 var(--sans);
+  --t-title-track: -.013em;
+  --t-body:    400 15px/1.45 var(--sans);
+  --t-strong:  550 15px/1.35 var(--sans);
+  --t-label:   500 13px/1.4 var(--sans);
+  --t-meta:    400 12px/1.35 var(--sans);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 
@@ -167,6 +183,10 @@ body {
   font: 14px/1.55 var(--sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Contextual alternates and proper kerning are off by default in several
+     UI stacks; both are free here and both are visible at title sizes. */
+  font-feature-settings: "kern" 1, "calt" 1;
+  font-optical-sizing: auto;
 }
 
 /* Every number that can change under the eye is tabular, so digits do not
@@ -1668,3 +1688,434 @@ a.row-card:hover { border-color: var(--btn-line); }
 }
 .pick-chip.on { border-color: var(--accent); background: var(--hover); }
 .pick-chip input { margin: 0; }
+
+/* ------------------------------------------------------------------ *
+ * The conversation inbox.
+ *
+ * Every rule here reads a token, so light and dark both work without a
+ * second block to keep in step -- which is the whole reason the tokens
+ * exist. Nothing below hardcodes a surface or an ink colour.
+ * ------------------------------------------------------------------ */
+
+.inbox { display: flex; flex-direction: column; min-height: 100%; }
+
+/* Air above the first row is what says "this list was laid out" rather than
+   "this list was printed". The head gets more of it than a card grid would. */
+.inbox-head {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 26px 20px 16px;
+}
+.inbox-head-text { min-width: 0; }
+.inbox-head h1 {
+  margin: 0; font: var(--t-display); letter-spacing: var(--t-display-track);
+}
+.inbox-head p { margin: 5px 0 0; font: var(--t-label); color: var(--faint); }
+.inbox-head-actions { margin-left: auto; display: flex; gap: 8px; }
+
+/* 40px, not 38: a round control reads smaller than its box, and 44 is the
+   touch target the padding around it supplies. */
+.inbox-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--btn); color: var(--dim);
+  text-decoration: none; cursor: pointer;
+  transition: background-color .13s ease, color .13s ease, border-color .13s ease;
+}
+.inbox-icon:hover { background: var(--btn-hover); color: var(--text); }
+.inbox-icon:active { transform: translateY(.5px); }
+.inbox-icon[aria-pressed="true"] {
+  border-color: var(--accent); color: var(--accent); background: var(--accent-wash);
+}
+
+.inbox-search { padding: 0 20px 12px; }
+.inbox-search input {
+  width: 100%; padding: 11px 13px; border-radius: 11px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font: var(--t-body);
+}
+.inbox-search input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.inbox-list { list-style: none; margin: 0; padding: 0 10px 28px; }
+
+/* No rule between rows. A hairline under every item turns a list of people
+   into a table of records, and the eye already groups these by the mark on
+   the left and the gap between them. Separation is space and a hover
+   surface, which is also what every messaging app a phone already has does. */
+.inbox-row {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  align-items: center; gap: 13px;
+  padding: 13px 10px;
+  border-radius: 14px;
+  text-decoration: none; color: inherit;
+  transition: background-color .13s ease;
+}
+.inbox-row:hover { background: var(--hover); }
+.inbox-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.inbox-mark { display: flex; align-items: center; justify-content: center; }
+
+/* Three companions at most, overlapped, so a room is legible by who is in
+   it. Negative margin rather than absolute positioning keeps the stack a
+   normal grid cell that shrinks with the row.
+
+   The sizes are load-bearing: three 26px marks overlapped by 10px measure
+   58px, which is what the 60px column holds. A stack wider than its column
+   does not clip -- it bleeds left over the row's padding and lands the room
+   avatars out of line with every companion above it. */
+.inbox-stack { display: inline-flex; align-items: center; justify-content: center; }
+.inbox-stack-item + .inbox-stack-item { margin-left: -10px; }
+
+/* `min-width: 0` on both the cell and the line is what lets a long name
+   ellipsize instead of widening the row past the viewport. */
+.inbox-main { min-width: 0; display: grid; gap: 4px; }
+.inbox-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.inbox-line strong {
+  font: var(--t-strong); letter-spacing: -.006em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Tabular figures so 2:15 and 1:07 occupy the same width and the right edge
+   of the column stops shifting as the clock moves. */
+.inbox-line small {
+  margin-left: auto; font: var(--t-meta); color: var(--faint);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.inbox-sub {
+  font: var(--t-label); color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.inbox-state {
+  margin-left: auto; white-space: nowrap;
+  font: var(--t-meta); color: var(--faint);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.inbox-state::before {
+  content: ""; display: block;
+  width: 6px; height: 6px; border-radius: 999px;
+  background: currentColor;
+}
+.inbox-state.s-approval { color: var(--warn); font-weight: 500; }
+.inbox-state.s-working,
+.inbox-state.s-thinking { color: var(--accent); }
+.inbox-state.s-blocked  { color: var(--danger); }
+.inbox-state.s-complete { color: var(--ok); }
+
+@media (min-width: 900px) {
+  .inbox-head { padding-inline: 24px; }
+  .inbox-search { padding-inline: 24px; }
+  .inbox-list { padding-inline: 14px; }
+  .inbox-row { grid-template-columns: 64px minmax(0, 1fr); }
+}
+
+/* Unread.
+ *
+ * Two signals, not one: a dot carries it at a glance, and the name takes the
+ * full ink and a heavier weight. A dot alone is a single small coloured mark
+ * -- the first thing lost to a colour-vision difference, to a dim screen, or
+ * to a glance that did not linger. */
+/* The name takes the weight; the subtitle stays where it was. Darkening both
+   flattens the row -- the name stops being the first thing read, which is the
+   hierarchy the list depends on. */
+.inbox-row[data-unread="true"] .inbox-line strong { font-weight: 680; color: var(--text); }
+.inbox-dot {
+  flex: none; width: 8px; height: 8px; margin-left: 8px;
+  border-radius: 999px; background: var(--accent);
+}
+
+/* Announced to a screen reader, never drawn. The dot is aria-hidden, so
+   without this the fact is carried only by colour and weight -- neither of
+   which reaches someone listening to the page. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* An icon inherits its ink and never carries the text's own metrics. */
+.icon { display: block; flex: none; }
+.rail-item .rail-glyph { font-size: 0; }
+
+/* A conversation owns a phone's screen: the rail would otherwise sit over
+   the composer. It returns at desktop width, where there is room for both. */
+.shell[data-focused="true"] .shell-rail { display: none; }
+
+@media (max-width: 899px) {
+  .shell-rail .rail-item:not([data-primary]) { display: none; }
+
+  /* The app bar goes too, and its grid row with it -- hiding the element
+     alone would leave a 52px band of nothing above the conversation. The
+     chat header already carries the identity and the way back, so keeping
+     both is one header too many on a screen this size. */
+  .shell[data-focused="true"] { grid-template-rows: 0 minmax(0, 1fr) auto; }
+  .shell[data-focused="true"] .shell-top { display: none; }
+}
+@media (min-width: 900px) {
+  .shell[data-focused="true"] .shell-rail { display: flex; }
+}
+
+/* The create sheet.
+ *
+ * A bottom sheet on a phone and a centred card on a desktop: the same
+ * element, because the thing it holds is the same and a phone's thumb
+ * reaches the bottom of the screen, not the middle of it. */
+.sheet {
+  position: fixed; z-index: 60;
+  left: 0; right: 0; bottom: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  border-radius: 16px 16px 0 0;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  box-shadow: var(--lift);
+  max-height: 86vh; overflow-y: auto;
+}
+.sheet-title {
+  margin: 0 0 12px; font: var(--t-title);
+  letter-spacing: var(--t-title-track);
+}
+
+.sheet-row {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 12px; margin-bottom: 8px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: 12px;
+  color: inherit; text-align: left; cursor: pointer;
+  min-height: 44px;
+}
+.sheet-row:hover:not(:disabled) { background: var(--raised-2); }
+.sheet-row:disabled { opacity: .55; cursor: not-allowed; }
+.sheet-row span { display: grid; gap: 2px; min-width: 0; }
+.sheet-row strong { font: var(--t-strong); letter-spacing: -.006em; }
+.sheet-row small { font: var(--t-label); color: var(--faint); }
+
+.sheet-note {
+  margin: 6px 2px 0; color: var(--faint);
+  font: var(--t-meta); line-height: 1.55;
+}
+
+.sheet-field { display: block; margin-bottom: 12px; border: 0; padding: 0; }
+.sheet-field > span, .sheet-field > legend {
+  display: block; margin-bottom: 6px; font-size: 13px; color: var(--dim);
+}
+.sheet-field input[type="text"], .sheet-field input:not([type]) {
+  width: 100%; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font: inherit;
+}
+.sheet-picks { display: flex; flex-wrap: wrap; gap: 8px; }
+.sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+@media (min-width: 700px) {
+  .sheet {
+    left: 50%; right: auto; bottom: auto; top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(520px, calc(100vw - 32px));
+    border-radius: 14px; border: 1px solid var(--line);
+    padding-bottom: 16px;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * The conversation screen.
+ *
+ * Full height, with only the timeline scrolling: the header and the
+ * composer are the two things that must never move while reading.
+ * ------------------------------------------------------------------ */
+
+/* Three columns, the outer two equal and fixed, so the identity is centred
+   on the screen rather than centred on whatever is left after a long name.
+   A header whose contents shift as the title grows is the tell that it was
+   laid out as a row. */
+.chat-head {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center; gap: 8px;
+  padding: 8px 12px;
+  /* Opaque: with the app bar hidden on a phone this IS the top bar, and a
+     transparent one would let the timeline show through as it scrolls. */
+  background: var(--panel);
+  border-bottom: 1px solid var(--hairline);
+  padding-top: max(8px, env(safe-area-inset-top));
+  flex: 0 0 auto;
+}
+
+.chat-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 999px;
+  color: var(--dim); text-decoration: none; cursor: pointer;
+  background: none; border: 0;
+}
+.chat-icon:hover { background: var(--hover); color: var(--text); }
+.chat-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.chat-identity {
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  min-width: 0;
+}
+.chat-who { display: grid; justify-items: center; min-width: 0; }
+.chat-who strong {
+  font: var(--t-title); letter-spacing: var(--t-title-track);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+/* The status is the companion's, so it takes the companion's tone colour
+   rather than sitting in a chip of its own. */
+.chat-who small { font: var(--t-meta); color: var(--faint); }
+.chat-who small.cc-tone-accent { color: var(--accent); }
+.chat-who small.cc-tone-warn   { color: var(--warn); }
+.chat-who small.cc-tone-danger { color: var(--danger); }
+.chat-who small.cc-tone-ok     { color: var(--ok); }
+
+/* The composer is the one element a phone will try to bury. The home
+   indicator sits over the bottom ~34px on a modern iPhone, so the padding
+   has to carry `env(safe-area-inset-bottom)` or the send control lands
+   underneath it. `max()` keeps the desktop padding when the inset is 0. */
+.task .composer {
+  padding-bottom: max(16px, calc(10px + env(safe-area-inset-bottom)));
+}
+.task .composer textarea { font: var(--t-body); }
+.task .composer .hint { font: var(--t-meta); color: var(--faint); }
+
+/* ------------------------------------------------------------------ *
+ * Companion settings.
+ *
+ * Grouped cards rather than one long form: the groups are the model of the
+ * thing — who it is, how it thinks, when it works, what it may reach — and
+ * a flat list of twenty fields does not carry that.
+ * ------------------------------------------------------------------ */
+
+.settings-page { padding-top: 0; }
+
+.setgroup {
+  margin: 18px 0;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.setgroup > h2 {
+  margin: 0; padding: 14px 16px 0;
+  font: var(--t-title); letter-spacing: var(--t-title-track);
+}
+.setgroup-note {
+  margin: 6px 16px 0; color: var(--faint);
+  font: var(--t-meta); line-height: 1.55;
+}
+.setgroup-body { padding: 4px 16px 16px; }
+.setgroup-body > .field:first-child { margin-top: 12px; }
+
+.setgroup-link {
+  margin: 10px 0 0; color: var(--faint);
+  font: var(--t-meta); line-height: 1.55;
+}
+.setgroup-link a { color: var(--accent); }
+
+/* Two fields on one line where they are a pair — a range, a from/to. They
+   stack on a phone rather than shrinking into two unusable halves. */
+.field-row { display: grid; gap: 0 12px; grid-template-columns: 1fr; }
+@media (min-width: 560px) { .field-row { grid-template-columns: 1fr 1fr; } }
+
+.danger-btn {
+  margin-top: 12px; padding: 10px 14px;
+  border-radius: 10px; border: 1px solid var(--danger-edge);
+  background: var(--danger-wash); color: var(--danger);
+  font: var(--t-label); cursor: pointer; min-height: 44px;
+}
+.danger-btn:hover { border-color: var(--danger); }
+
+/* Sticky, because the fields above it are longer than a screen and a save
+   control you have to scroll back to find gets used less than one that is
+   simply there. Only rendered when there is something to save. */
+.savebar {
+  position: sticky; bottom: 0;
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 18px; padding: 12px 16px;
+  padding-bottom: max(12px, calc(8px + env(safe-area-inset-bottom)));
+  background: var(--panel); border-top: 1px solid var(--line);
+  border-radius: 12px 12px 0 0;
+  box-shadow: var(--lift);
+}
+.savebar span { font: var(--t-label); color: var(--dim); }
+.savebar .primary { margin-left: auto; }
+
+/* A room's participants in its header, same geometry as the inbox stack:
+   three 26px marks overlapped by 10px fit the space without bleeding. */
+.chat-stack { display: inline-flex; align-items: center; flex: none; }
+.chat-stack-item + .chat-stack-item { margin-left: -10px; }
+
+/* The coordination summary. A count and a way in, never the traffic: the
+   owner is a reader of what the companions said to each other, not a party
+   to it, and rendering it inline would say otherwise. */
+.activity-summary {
+  display: flex; align-items: center; gap: 10px;
+  width: calc(100% - 32px); margin: 0 16px 12px;
+  padding: 11px 13px; min-height: 44px;
+  border: 1px dashed var(--line); border-radius: 12px;
+  background: none; color: var(--dim);
+  font: var(--t-label); text-align: left; cursor: pointer;
+}
+.activity-summary:hover { background: var(--hover); color: var(--text); }
+.activity-summary span { flex: 1; min-width: 0; }
+.activity-summary em { font-style: normal; color: var(--accent); }
+
+/* A finished room. Sized like the composer it replaces, so the timeline
+   above it does not jump when a room closes while being read. */
+.room-closed {
+  display: grid; gap: 4px;
+  padding: 14px 20px;
+  padding-bottom: max(16px, calc(10px + env(safe-area-inset-bottom)));
+  border-top: 1px solid var(--hairline);
+  background: var(--raised);
+}
+.room-closed strong { font: var(--t-strong); }
+.room-closed span { font: var(--t-meta); color: var(--dim); line-height: 1.55; }
+
+/* A sheet that holds a whole settings surface rather than a short menu.
+   Capped so the scrim stays visible: a sheet at full height is a page, and
+   the thing it is over stops being the thing you will go back to. */
+.sheet-tall { max-height: 88vh; }
+.sheet-head { display: flex; align-items: center; gap: 8px; }
+.sheet-head .sheet-title { margin-bottom: 0; }
+.sheet-head .chat-icon { margin-left: auto; font-size: 15px; }
+.sheet-tall .settings-group:first-of-type { margin-top: 10px; }
+
+/* The platform switch, drawn rather than borrowed: a bare checkbox in a
+   settings row reads as a form field, and this is a thing that takes effect
+   the moment it moves. */
+.native-toggle { position: relative; display: inline-flex; flex: none; cursor: pointer; }
+.native-toggle input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer;
+}
+.native-toggle > span[aria-hidden] {
+  width: 46px; height: 28px; border-radius: 999px;
+  background: var(--track); transition: background-color .16s ease;
+}
+.native-toggle > span[aria-hidden]::after {
+  content: ""; display: block;
+  width: 24px; height: 24px; margin: 2px; border-radius: 999px;
+  background: var(--panel); box-shadow: var(--lift);
+  transition: transform .16s ease;
+}
+.native-toggle input:checked + span[aria-hidden] { background: var(--accent); }
+.native-toggle input:checked + span[aria-hidden]::after { transform: translateX(18px); }
+.native-toggle input:focus-visible + span[aria-hidden] {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+/* A settings row stacks on a phone. Side by side, a control with three
+   words in it squeezes the label into a column two words wide, and both
+   halves become harder to read than either would be alone. */
+@media (max-width: 520px) {
+  .setting-row { align-items: stretch; flex-direction: column; gap: 10px; }
+  .setting-row .seg,
+  .setting-row .inline-input { width: 100%; max-width: none; }
+  /* The toggle is the exception: it is small enough to stay on the line,
+     and a switch on its own row reads as a heading with nothing under it. */
+  .setting-row:has(.native-toggle) { flex-direction: row; align-items: center; }
+}
+
+/* An input that sits in a settings row rather than in a form. */
+.inline-input {
+  flex: none; width: 180px; max-width: 45vw;
+  padding: 8px 10px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font: var(--t-label);
+}

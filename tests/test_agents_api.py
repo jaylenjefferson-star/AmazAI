@@ -37,7 +37,7 @@ NEW_AGENT = {
     "name": "Cloud Operations",
     "role": "AWS investigations, logs, alarms.",
     "modelTier": "frontier",
-    "avatar": {"shape": "hex", "color": "#2f6fe4"},
+    "avatar": {"shape": "paper", "color": "#2f6fe4"},
     "budget": {"perRunUsd": 1.5, "perMonthUsd": 30.0},
 }
 

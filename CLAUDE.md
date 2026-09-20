@@ -16,7 +16,10 @@ scheduled routines, and an approval gate on risky actions.
 ## Current state
 
 Built and verified locally; **never deployed**. No AgentCore call has run
-against the live service.
+against the live service. CI runs the three commands below on every pull
+request and on main — tests, `cdk synth` and the console build. It holds no
+AWS credentials and never deploys: deployment is a deliberate act, run by a
+person who is signed in.
 
 **Python 3.11+ is required** and macOS ships 3.9. `scripts/_python.sh` resolves
 a usable interpreter and both `doctor.sh` and `deploy.sh` source it; the floor
@@ -25,8 +28,8 @@ exists because the code reads its own `...Z` timestamps with
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest                 # 299 tests
-cd infra && npm install && npx cdk synth   # 76 resources
+.venv/bin/python -m pytest                 # 432 tests
+cd infra && npm install && npx cdk synth   # 72 resources
 cd web   && npm install && npm run build
 ```
 
@@ -39,9 +42,9 @@ cd web && npm run dev      # then open http://localhost:5173/?demo=1
 | Phase | State |
 |---|---|
 | 1 · Infrastructure (CDK) | written, `cdk synth` clean |
-| 3 · Enforcement core + store | written, 299 tests |
+| 3 · Enforcement core + store | written, 432 tests |
 | 4 · Handlers | written, never run against AWS |
-| 5 · Console | designed, light + dark, builds clean |
+| 5 · Console | conversation-first inbox and chat, light + dark, builds clean |
 | 2 · Seat provisioning | needs a deploy first |
 | 6 · Agent CRUD + Create-a-Bot | written, never run against AWS |
 | 7 · Connectors (Pipedream) | written; live leg needs the OAuth client |

@@ -18,7 +18,8 @@ import traceback
 import boto3
 
 from amazai import (agentcore, agents as A, approvals, collab, connectors as C,
-                    identity, keys as K, memory, models, pipedream, runs, skills)
+                    identity, keys as K, memory, models, pipedream, routines as R,
+                    runs, schedules, settings as S, skills)
 from amazai.policy import Capability
 from amazai.states import RunState
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
@@ -426,7 +427,21 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     # --- threads -----------------------------------------------------------
     if path == "/threads" and method == "GET":
-        return _resp(200, {"threads": store.query_index("gsi1", "gsi1pk", "THREADS")})
+        threads = store.query_index("gsi1", "gsi1pk", "THREADS")
+        # Derived, not stored: a cached boolean would disagree with
+        # lastActivity the moment a run wrote to a thread nobody has opened.
+        #
+        # Strictly greater, so marking read clears the thread it was called
+        # on. Timestamps are second-resolution, which means activity landing
+        # in the same second as the marker counts as read -- the alternative,
+        # `>=`, makes a read never clear anything.
+        for thread in threads:
+            marker = store.try_get(K.thread_pk(thread["threadId"]), "READ") or {}
+            thread["readAt"] = marker.get("readAt")
+            thread["unread"] = bool(
+                thread.get("lastActivity")
+                and thread["lastActivity"] > (marker.get("readAt") or ""))
+        return _resp(200, {"threads": threads})
 
     if path == "/threads" and method == "POST":
         thread_id = new_id("th_")
@@ -528,6 +543,111 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     if (p := _match(path, "/approvals/{runId}/{apvId}")) and method == "POST":
         return _decide(store, p[0], p[1], body, _actor(event))
 
+    # --- read state --------------------------------------------------------
+    # The inbox orders on lastActivity and has never had anything to compare
+    # it against, so every conversation looked equally attended to. A marker
+    # per thread is the whole feature: unread is `lastActivity > readAt`,
+    # derived on read rather than stored, so it cannot drift from the
+    # activity it describes.
+    if (p := _match(path, "/threads/{id}/read")) and method == "POST":
+        thread = store.get(K.thread_pk(p[0]), "META")   # 404 if not ours
+        at = body.get("at") or thread.get("lastActivity") or now_iso()
+        marker = store.put({
+            "pk": K.thread_pk(p[0]), "sk": "READ",
+            "entity": "ReadMarker", "threadId": p[0], "readAt": at,
+        })
+        return _resp(200, {"threadId": p[0], "readAt": marker["readAt"]})
+
+    # --- routines ----------------------------------------------------------
+    # The execution half of routines has existed since the first build:
+    # `handlers/routine.py` claims the fire, opens or reuses a thread, and
+    # starts a run. There was simply no way to create one. These routes write
+    # exactly the record that handler already reads -- agentId, prompt,
+    # enabled, trigger, limits, threadId -- so nothing here invents a shape
+    # the worker would not understand.
+    if path == "/routines" and method == "GET":
+        return _resp(200, {"routines": store.query_index("gsi1", "gsi1pk", "ROUTINES")})
+
+    if path == "/routines" and method == "POST":
+        try:
+            record = R.plan_create(body, _actor(event))
+        except R.ValidationError as exc:
+            return _resp(400, {"error": "invalid_request", "detail": str(exc)})
+        agent = store.get(K.agent_pk(record["agentId"]), "META")   # 404 for a foreign agent
+        # The agent's zone decides when "every weekday at 9" is.
+        record["timezone"] = agent.get("timezone")
+        written = store.put(record)
+        try:
+            _schedule(store, written)
+        except Exception as exc:  # noqa: BLE001
+            # A routine whose schedule was refused would sit in the list
+            # looking armed and never fire. Leave nothing behind instead.
+            traceback.print_exc()
+            store.delete(K.routine_pk(written["routineId"]), "META")
+            return _resp(502, {
+                "error": "schedule_failed",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "note": "nothing was left behind; the same request can be retried",
+            })
+        return _resp(201, written)
+
+    if (p := _match(path, "/routines/{id}")) and method == "GET":
+        return _resp(200, store.get(K.routine_pk(p[0]), "META"))
+
+    if (p := _match(path, "/routines/{id}")) and method == "PATCH":
+        existing = store.get(K.routine_pk(p[0]), "META")
+        try:
+            changes = R.plan_update(existing, body)
+        except R.ValidationError as exc:
+            return _resp(400, {"error": "invalid_request", "detail": str(exc)})
+        updated = store.update(K.routine_pk(p[0]), "META", changes)
+        _schedule(store, updated)
+        return _resp(200, updated)
+
+    if (p := _match(path, "/routines/{id}")) and method == "DELETE":
+        # Disabled, not deleted. A routine that has fired owns runs and
+        # evidence, and those must keep pointing at something -- the same
+        # reason an agent is archived rather than removed.
+        store.get(K.routine_pk(p[0]), "META")
+        archived = store.update(K.routine_pk(p[0]), "META",
+                                {"enabled": False, "status": "archived"})
+        # The record survives; the schedule must not, or a routine the owner
+        # switched off keeps firing.
+        _schedule(store, archived)
+        return _resp(200, archived)
+
+    # --- artifacts ---------------------------------------------------------
+    # A sealed evidence bundle, listed. The manifest lives in S3 and the run
+    # holds the pointer, so this is a projection of runs that produced one --
+    # never a second copy of the bundle, which is append-only and must have
+    # exactly one home.
+    if path == "/artifacts" and method == "GET":
+        rows = store.query_index("gsi1", "gsi1pk", "RUNS", limit=500)
+        sealed = [r for r in rows if r.get("evidenceKey")]
+        sealed.sort(key=lambda r: r.get("endedAt") or r.get("startedAt") or "",
+                    reverse=True)
+        return _resp(200, {"artifacts": [{
+            "runId": r["runId"], "agentId": r.get("agentId"),
+            "threadId": r.get("threadId"), "goal": r.get("goal"),
+            "outcome": r.get("state"), "summary": r.get("summary"),
+            "evidenceKey": r.get("evidenceKey"),
+            "startedAt": r.get("startedAt"), "endedAt": r.get("endedAt"),
+            "costUsd": r.get("costUsd"),
+        } for r in sealed]})
+
+    # --- settings ----------------------------------------------------------
+    # Owner preferences. One row, defaulted on read rather than seeded on
+    # sign-up, so an account that predates this route answers with the
+    # defaults instead of a 404.
+    if path == "/settings" and method == "GET":
+        return _resp(200, S.read(store))
+
+    if path == "/settings" and method == "PUT":
+        try:
+            return _resp(200, S.write(store, body))
+        except S.ValidationError as exc:
+            return _resp(400, {"error": "invalid_request", "detail": str(exc)})
+
     # --- usage -------------------------------------------------------------
     if path == "/usage" and method == "GET":
         qs = event.get("queryStringParameters") or {}
@@ -628,6 +748,16 @@ def _create_agent(store: Store, body: dict, event: dict):
         })
 
     return _resp(201, provisioned)
+
+
+def _schedule(store: Store, routine: dict) -> None:
+    """Put the routine's EventBridge schedule in step with its record.
+
+    Separated for the same reason `_provision_harness` is: the whole routine
+    path can then be exercised without an AWS account, while the one call
+    that reaches a service stays in `amazai.schedules`.
+    """
+    schedules.put(routine, store.owner_id)
 
 
 def _provision_harness(store: Store, agent: dict) -> dict:

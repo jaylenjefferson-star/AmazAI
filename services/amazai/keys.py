@@ -88,6 +88,12 @@ def routine_pk(routine_id: str) -> str:
     return f"ROUTINE#{routine_id}"
 
 
+def settings_pk(owner_id: str) -> str:
+    """One row per owner. Preferences are not per-agent: a notification
+    someone does not want is not wanted from any companion."""
+    return f"SETTINGS#{owner_id}"
+
+
 def channel_pk(channel_type: str, external_id: str) -> str:
     return f"CHANNEL#{channel_type}#{external_id}"
 

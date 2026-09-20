@@ -19,6 +19,7 @@ const iso = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString();
 const AGENTS = [
   {
     agentId: 'eng', name: 'Engineering', state: 'active',
+    avatar: { shape: 'paper', color: '#2f6fe4' },
     role: 'Repositories, tests, pull requests, application diagnostics.',
     budget: { perMonthUsd: 40, perRunUsd: 2 },
     allowedTools: ['shell', 'file_operations', 'browser'],
@@ -28,6 +29,7 @@ const AGENTS = [
   },
   {
     agentId: 'ops', name: 'Cloud Operations', state: 'active',
+    avatar: { shape: 'cloud', color: '#12a594' },
     role: 'AWS investigations, logs, alarms, controlled deployments.',
     budget: { perMonthUsd: 30, perRunUsd: 1.5 },
     allowedTools: ['shell', 'file_operations'],
@@ -37,6 +39,7 @@ const AGENTS = [
   },
   {
     agentId: 'cos', name: 'Chief of Staff', state: 'active',
+    avatar: { shape: 'lantern', color: '#8b5cf6' },
     role: 'Intake, prioritization, planning, daily briefings, delegation.',
     budget: { perMonthUsd: 25, perRunUsd: 1 },
     allowedTools: ['file_operations'], grants: [],
@@ -44,6 +47,7 @@ const AGENTS = [
   },
   {
     agentId: 'res', name: 'Research', state: 'active',
+    avatar: { shape: 'moth', color: '#e93d82' },
     role: 'Market and technical research, sourcing, synthesis.',
     budget: { perMonthUsd: 20, perRunUsd: 1 },
     allowedTools: ['browser'], grants: [],
@@ -51,6 +55,7 @@ const AGENTS = [
   },
   {
     agentId: 'fin', name: 'Finance', state: 'disabled',
+    avatar: { shape: 'jelly', color: '#e8833a' },
     role: 'Ledger reconciliation and spend reporting.',
     budget: { perMonthUsd: 15, perRunUsd: 0.5 },
     allowedTools: [], grants: [],
@@ -62,6 +67,21 @@ const THREADS = [
   { threadId: 't-deploy', title: 'Ship the console to CloudFront', kind: 'task', agentIds: ['eng'] },
   { threadId: 't-alarm',  title: 'Investigate the 5xx spike', kind: 'task', agentIds: ['ops'] },
   { threadId: 't-brief',  title: 'Monday briefing', kind: 'task', agentIds: ['cos'] },
+  // The inbox orders on lastActivity, so the fixtures have to carry it or
+  // every row sorts on the empty string and the ordering cannot be reviewed.
+  { threadId: 'dm-eng', title: 'Engineering',      kind: 'dm', agentIds: ['eng'], lastActivity: iso(-4 * 60_000) },
+  { threadId: 'dm-ops', title: 'Cloud Operations', kind: 'dm', agentIds: ['ops'], lastActivity: iso(-38 * 60_000) },
+  { threadId: 'dm-cos', title: 'Chief of Staff',   kind: 'dm', agentIds: ['cos'], lastActivity: iso(-3 * 3600_000) },
+  { threadId: 'dm-res', title: 'Research',         kind: 'dm', agentIds: ['res'], lastActivity: iso(-26 * 3600_000) },
+  { threadId: 'dm-fin', title: 'Finance',          kind: 'dm', agentIds: ['fin'], lastActivity: iso(-3 * 86400_000) },
+  { threadId: 'room-ship', title: 'Ship the console', kind: 'room',
+    agentIds: ['eng', 'ops', 'cos'], status: 'active',
+    lastActivity: iso(-11 * 60_000) },
+  // A room is task-bound, so it ends. Without a finished one the read-only
+  // state has nothing to render against.
+  { threadId: 'room-migrate', title: 'Migrate the evidence bucket', kind: 'room',
+    agentIds: ['ops', 'eng'], status: 'completed', readOnly: true,
+    createdBy: 'you', lastActivity: iso(-5 * 86400_000) },
 ];
 
 const MESSAGES = {
@@ -73,7 +93,36 @@ const MESSAGES = {
     { role: 'user', author: 'you', text: 'The 5xx alarm fired twice overnight. What happened?' },
   ],
   't-brief': [],
+  // The inbox opens dm threads, so those are the ones that have to carry a
+  // conversation -- an empty timeline reviews nothing.
+  'dm-eng': [
+    { role: 'user', author: 'you', text: 'Why did last night\u2019s deploy roll back?' },
+    { role: 'assistant', author: 'Engineering', text: 'The parity check failed on two response contracts. Neither invariant actually broke \u2014 the patterns matched the field tables by literal text, and the tables had been reformatted.' },
+    { role: 'user', author: 'you', text: 'Can you fix it without widening the change?' },
+    { role: 'assistant', author: 'Engineering', text: 'Yes. Two patterns, matched on the binding rather than the formatting. I will need approval before anything touches production.' },
+  ],
+  'dm-ops': [
+    { role: 'user', author: 'you', text: 'Anything from the overnight alarms?' },
+    { role: 'assistant', author: 'Cloud Operations', text: 'Two 5xx spikes, both from the same deploy, both cleared on rollback. Nothing outstanding.' },
+  ],
+  'dm-cos': [], 'dm-res': [], 'dm-fin': [],
+  'room-ship': [
+    { role: 'user', author: 'you', text: 'Where are we for the release?' },
+    { role: 'assistant', author: 'Engineering', text: 'Tests are green on the branch. The full job ran end to end for the first time.' },
+    { role: 'assistant', author: 'Cloud Operations', text: 'Distribution is warm and the alarm thresholds are back to normal.' },
+  ],
+  'room-migrate': [
+    { role: 'user', author: 'you', text: 'Move the sealed bundles to the new bucket. Nothing may be rewritten.' },
+    { role: 'assistant', author: 'Cloud Operations', text: 'Copied 1,284 objects and verified every checksum against the manifest. Originals left in place.' },
+  ],
 };
+
+//: Owner preferences. Only what was changed, as the stored row holds.
+const SETTINGS = { notifications: {} };
+
+//: Read markers, by thread. Empty to start, so a fresh demo session opens on
+//: an inbox with everything unread -- which is the state the design is for.
+const READ = {};
 
 const APPROVAL = {
   approvalId: 'apv-7c41', runId: 'run-9a22', agentId: 'eng',
@@ -94,7 +143,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
    here only so the form can be driven without a deployed control plane; the
    shipped console reads it from GET /agents/options. */
 const OPTIONS = {
-  shapes: ['circle', 'squircle', 'square', 'pill', 'triangle', 'hex', 'cloud', 'drop'],
+  // The character archetypes, matching agents.AVATAR_SHAPES. These were the
+  // old geometric names, which no longer exist on either side.
+  shapes: ['pebble', 'paper', 'jelly', 'cloud', 'lantern', 'moth'],
   colors: ['#e5484d', '#e8833a', '#f0a93b', '#3dc98a', '#12a594',
            '#2f6fe4', '#8b5cf6', '#e93d82', '#8b6c4e', '#8a909c'],
   workingStyles: ['autonomous', 'collaborative', 'advisory'],
@@ -131,14 +182,54 @@ export const demoApi = {
     MESSAGES[`dm-${agentId}`] = [];
     return created;
   },
-  archiveAgent: async () => ({}),
+  archiveAgent: async (id) => {
+    await wait(150);
+    const agent = AGENTS.find((a) => a.agentId === id);
+    if (agent) { agent.status = 'archived'; agent.state = 'offline'; }
+    return { ...(agent || {}) };
+  },
   agent: async (id) => (await wait(80), AGENTS.find((a) => a.agentId === id) || AGENTS[0]),
-  updateAgent: async () => ({}),
+  updateAgent: async (id, changes) => {
+    await wait(200);
+    const agent = AGENTS.find((a) => a.agentId === id);
+    if (!agent) throw new Error('No such agent');
+    // Applied rather than acknowledged. Returning {} was a fake success --
+    // the settings screen renders what comes back, so a save would have
+    // blanked the companion it had just written.
+    const { avatar, budget, modelTier, ...rest } = changes;
+    Object.assign(agent, rest);
+    if (avatar) agent.avatar = { ...agent.avatar, ...avatar };
+    if (budget) agent.budget = { ...agent.budget, ...budget };
+    if (modelTier) agent.model = { ...(agent.model || {}), tier: modelTier };
+    return { ...agent };
+  },
   addMemory: async () => ({}),
   deleteMemory: async () => ({}),
 
-  threads: async () => (await wait(120), { threads: THREADS }),
-  thread: async (id) => (await wait(80), { threadId: id, messages: MESSAGES[id] || [] }),
+  // `unread` is derived by the control plane from lastActivity against the
+  // read marker. Mirrored here rather than stored as a flag, so the fixture
+  // cannot drift into showing an unread row that the real API would not.
+  threads: async () => (await wait(120), {
+    threads: THREADS.map((t) => ({
+      ...t,
+      readAt: READ[t.threadId] || null,
+      unread: Boolean(t.lastActivity && t.lastActivity > (READ[t.threadId] || '')),
+    })),
+  }),
+  // The whole record plus its messages, as GET /threads/{id} returns. The
+  // stub this used to be -- id and messages only -- meant a room rendered
+  // with no participants, no title and no status, so the read-only state and
+  // the participant marks could not be reviewed at all.
+  thread: async (id) => {
+    await wait(80);
+    const thread = THREADS.find((t) => t.threadId === id) || { threadId: id };
+    return { ...thread, threadId: id, messages: MESSAGES[id] || [] };
+  },
+  markRead: async (id) => {
+    const thread = THREADS.find((t) => t.threadId === id);
+    READ[id] = thread?.lastActivity || iso();
+    return { threadId: id, readAt: READ[id] };
+  },
   createThread: async (t) => {
     const threadId = `room-${Math.random().toString(36).slice(2, 8)}`;
     const thread = { threadId, kind: t?.kind || 'room', title: t?.title || 'New room',
@@ -149,7 +240,49 @@ export const demoApi = {
     return thread;
   },
   send: async () => (await wait(200), { runId: 'run-9a22' }),
-  coordination: async () => (await wait(80), { coordination: [] }),
+  // Agent-to-agent traffic bound to a room. Read-only in the console, and
+  // the reason the room keeps it in its own feed rather than the chat.
+  // Owner preferences, defaulted on read exactly as the control plane does,
+  // so the sheet can be reviewed without a deploy.
+  settings: async () => {
+    await wait(80);
+    return {
+      notifications: { completion: true, inputNeeded: true, failure: true, ...SETTINGS.notifications },
+      theme: SETTINGS.theme ?? 'system',
+      defaultTimezone: SETTINGS.defaultTimezone ?? null,
+      updatedAt: SETTINGS.updatedAt ?? null,
+    };
+  },
+  saveSettings: async (changes) => {
+    await wait(150);
+    // Refused by name, as the API does: an approval is a question a run
+    // cannot proceed without, not a notification.
+    const kinds = Object.keys(changes.notifications || {});
+    const bad = kinds.filter((k) => !['completion', 'inputNeeded', 'failure'].includes(k));
+    if (bad.length) throw new Error(`not a notification kind: ${bad.join(', ')}`);
+
+    if (changes.notifications) {
+      SETTINGS.notifications = { ...SETTINGS.notifications, ...changes.notifications };
+    }
+    if ('theme' in changes) SETTINGS.theme = changes.theme;
+    if ('defaultTimezone' in changes) SETTINGS.defaultTimezone = changes.defaultTimezone;
+    SETTINGS.updatedAt = iso();
+    return demoApi.settings();
+  },
+
+  coordination: async (id) => {
+    await wait(80);
+    if (id !== 'room-ship') return { coordination: [] };
+    return { coordination: [
+      { kind: 'handoff', at: iso(-16 * 60_000), fromAgentId: 'cos', toAgentId: 'eng',
+        status: 'accepted', summary: 'Cut the release once CI is green.' },
+      { kind: 'message', at: iso(-14 * 60_000), fromAgentId: 'eng', toAgentId: 'ops',
+        status: 'delivered', priority: 'normal',
+        summary: 'Invalidation will be needed once the bundle hash changes.' },
+      { kind: 'handoff', at: iso(-12 * 60_000), fromAgentId: 'eng', toAgentId: 'ops',
+        status: 'accepted', summary: 'Warm the distribution before the cutover.' },
+    ] };
+  },
   exec: async (_id, command) => (await wait(260), {
     stdout: command.startsWith('ls')
       ? 'dist/\nindex.html\nassets/\npackage.json'

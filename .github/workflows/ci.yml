@@ -1,0 +1,129 @@
+name: CI
+
+# Runs on every pull request and on main. Nothing here touches AWS: there are
+# no credentials, no bootstrap and no deploy. `cdk synth` needs none of that --
+# `bin/amazai.ts` reads CDK_DEFAULT_ACCOUNT, which is unset here, so the stack
+# synthesizes environment-agnostic, and the region falls back to the one in
+# scripts/seats.json. Deployment stays a deliberate act run by a person who is
+# signed in, per the sequence in CLAUDE.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Enforcement core and handlers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.11 is a floor, not a preference: the code reads its own `...Z`
+      # timestamps with datetime.fromisoformat, which only accepts that suffix
+      # from 3.11. Running CI on anything older would pass locally-written code
+      # that fails at runtime.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # The store tests run against moto, so this needs no account. moto reads
+      # the standard variables, and leaving them unset makes botocore search
+      # for real credentials and fail in a way that looks like a test bug.
+      - name: Run the test suite
+        env:
+          AWS_ACCESS_KEY_ID: testing
+          AWS_SECRET_ACCESS_KEY: testing
+          AWS_DEFAULT_REGION: us-west-2
+        run: python -m pytest -q
+
+  infra:
+    name: CDK synth
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      # ts-node compiles the stack on the way in, so a type error in the
+      # infrastructure fails here rather than at deploy time.
+      - name: Install and synthesize
+        working-directory: infra
+        run: |
+          npm ci
+          npx cdk synth > /dev/null
+
+      # The template is the thing that reaches production, so the properties
+      # worth guarding are asserted against it rather than against the source
+      # that produced it.
+      - name: Check the template still carries its load-bearing resources
+        working-directory: infra
+        run: |
+          npx cdk synth --json > /tmp/template.json
+          python3 - <<'PY'
+          import json
+
+          with open("/tmp/template.json") as handle:
+              resources = json.load(handle)["Resources"]
+          kinds = [r["Type"] for r in resources.values()]
+
+          def require(kind, why):
+              assert kind in kinds, f"{kind} missing from the template: {why}"
+
+          # One execution role per agent seat. A shared role would make every
+          # agent a peer of every other on the drive, and that is a property of
+          # the synthesized template rather than of the code that emits it.
+          roles = kinds.count("AWS::IAM::Role")
+          assert roles >= 2, f"expected per-seat execution roles, found {roles}"
+
+          # Added because the IAM policy is scoped to schedule/amazai/*, and
+          # nothing created that group -- the first CreateSchedule would have
+          # failed as what reads like a permissions error.
+          require("AWS::Scheduler::ScheduleGroup",
+                  "routines cannot be scheduled without it")
+
+          require("AWS::DynamoDB::Table", "the store")
+          print(f"{len(resources)} resources, {roles} roles")
+          PY
+
+  web:
+    name: Console
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install and build
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      # The SPA survives a refresh only because index.html is what CloudFront
+      # serves for any path. A build that produced no index.html would deploy
+      # and 404 on every deep link.
+      - name: The build produced an entry point
+        working-directory: web
+        run: test -f dist/index.html

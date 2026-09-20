@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import Companion, { STATES } from '../characters/Companion';
+import Icon from '../components/Icon';
 import Timeline from '../components/Timeline';
 import RightPanel from '../components/RightPanel';
 import { api } from '../api';
@@ -27,6 +28,7 @@ export default function Task() {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [panelOpen, setPanelOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const pollRef = useRef(null);
   const threadId = `dm-${agentId}`;
 
@@ -39,6 +41,12 @@ export default function Task() {
       setItems((thread.messages || []).map((message) => ({
         type: 'message', role: message.role, author: message.author, text: message.text,
       })));
+      // Opening a conversation is reading it. Marked after the messages are
+      // in hand rather than on mount, so a thread whose load failed is not
+      // recorded as seen. Failure here is silent on purpose: the reader has
+      // the conversation, and an error about a read marker would be noise
+      // about something they did not ask for.
+      api.markRead(threadId).catch(() => {});
     }).catch((e) => {
       // A newly provisioned agent has no conversation yet; a missing thread
       // is not a substitute for demo conversation history.
@@ -121,20 +129,33 @@ export default function Task() {
 
   return (
     <div className="task">
-      <header className="task-head">
-        <Link to="/agents" className="task-back" aria-label="Back to agents">‹</Link>
-        <Companion archetype={agent.archetype} color={agent.color}
-                   state={typing ? 'thinking' : agent.state} size={34} name={agent.name} />
-        <div className="task-who">
-          <strong>{agent.name}</strong>
-          <span>{agent.role}</span>
+      {/* Back goes to the inbox, which is where this conversation was opened
+          from now that the inbox is home -- `/agents` was the old section
+          list and returning there loses the thread you came in on.
+
+          The identity sits centred between two equal-width controls rather
+          than left-aligned beside them, so it stays centred whatever the
+          name's length, and the status reads as the companion's own rather
+          than as a chip parked at the end of a row. */}
+      <header className="chat-head">
+        <Link to="/" className="chat-icon" aria-label="Back to inbox">
+          <Icon name="chevronLeft" size={20} />
+        </Link>
+
+        <div className="chat-identity">
+          <Companion archetype={agent.archetype} color={agent.color}
+                     state={typing ? 'thinking' : agent.state} size={30} name={agent.name} />
+          <span className="chat-who">
+            <strong>{agent.name}</strong>
+            <small className={`cc-tone-${(STATES[typing ? 'thinking' : agent.state] || STATES.idle).tone}`}>
+              {(STATES[typing ? 'thinking' : agent.state] || STATES.idle).label}
+            </small>
+          </span>
         </div>
-        <span className={`state-chip cc-tone-${(STATES[agent.state] || STATES.idle).tone}`}>
-          <i className="cc-dot" aria-hidden="true" />
-          {(STATES[agent.state] || STATES.idle).label}
-        </span>
-        <button className="panel-toggle" onClick={() => setPanelOpen((o) => !o)}>
-          {agent.name}&rsquo;s computer
+
+        <button type="button" className="chat-icon" onClick={() => setMenuOpen(true)}
+                aria-label={`More about ${agent.name}`} aria-haspopup="menu">
+          <Icon name="more" size={20} />
         </button>
       </header>
 
@@ -153,6 +174,33 @@ export default function Task() {
           <span className="hint">⏎ send</span>
         </div>
       </form>
+
+      {/* The overflow: the two things a conversation leads to. Settings is a
+          screen because it is long; the computer stays a panel because it is
+          read beside the conversation, not instead of it. */}
+      {menuOpen && (
+        <>
+          <div className="scrim" onClick={() => setMenuOpen(false)} />
+          <div className="sheet" role="menu" aria-label={`${agent.name} options`}>
+            <h2 className="sheet-title">{agent.name}</h2>
+            <Link className="sheet-row" role="menuitem" to={`/agents/${agentId}/settings`}>
+              <Companion archetype={agent.archetype} color={agent.color} state="idle" size={30} />
+              <span>
+                <strong>Companion settings</strong>
+                <small>Identity, instructions, model, budget and hours.</small>
+              </span>
+            </Link>
+            <button type="button" className="sheet-row" role="menuitem"
+                    onClick={() => { setMenuOpen(false); setPanelOpen(true); }}>
+              <Icon name="layers" size={26} />
+              <span>
+                <strong>Computer and activity</strong>
+                <small>Its drive, memory, skills and what it has spent.</small>
+              </span>
+            </button>
+          </div>
+        </>
+      )}
 
       <RightPanel threadId={threadId} agent={agent} agents={agents}
                   onRefreshAgent={loadAgent} open={panelOpen}

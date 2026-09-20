@@ -45,6 +45,10 @@ const live = {
   revokeConnector: (connectorId) => call('DELETE', `/connectors/${encodeURIComponent(connectorId)}`),
 
   threads: () => call('GET', '/threads'),
+  // Marks the conversation seen up to its current activity. The server
+  // derives `unread` from this on every list, so there is nothing to keep
+  // in step on the client.
+  markRead: (id) => call('POST', `/threads/${id}/read`, {}),
   thread: (id) => call('GET', `/threads/${id}`),
   createThread: (t) => call('POST', '/threads', t),
   send: (id, text) => call('POST', `/threads/${id}/messages`, { text }),
@@ -62,6 +66,21 @@ const live = {
   // Rooms need without polling each run individually.
   approvals: (status = 'pending') =>
     call('GET', `/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+
+  routines: () => call('GET', '/routines'),
+  routine: (id) => call('GET', `/routines/${id}`),
+  createRoutine: (routine) => call('POST', '/routines', routine),
+  updateRoutine: (id, changes) => call('PATCH', `/routines/${id}`, changes),
+  // Disables and unschedules. The record survives, because its runs and
+  // their evidence point at it.
+  archiveRoutine: (id) => call('DELETE', `/routines/${id}`),
+
+  artifacts: () => call('GET', '/artifacts'),
+
+  settings: () => call('GET', '/settings'),
+  // Partial: a screen that renders one group cannot reset another it never
+  // showed.
+  saveSettings: (changes) => call('PUT', '/settings', changes),
 
   skills: () => call('GET', '/skills'),
   skillVersions: (id) => call('GET', `/skills/${id}/versions`),

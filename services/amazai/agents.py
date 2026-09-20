@@ -51,8 +51,20 @@ RUNNABLE: frozenset[str] = frozenset({"active"})
 #: the seat it held, which is the practical reason to archive rather than pause.
 SEATED: frozenset[str] = frozenset({"provisioning", "active", "paused"})
 
+#: The companion archetypes, and the same six keys the console's character
+#: system draws (`web/src/characters/archetypes.jsx`). They must stay in step:
+#: `useAgents.presentAgent` maps a stored `avatar.shape` straight onto an
+#: archetype, so a name accepted here that the console cannot draw silently
+#: becomes the fallback pebble, and a name the console offers that is refused
+#: here makes the create form fail on submit.
+#:
+#: This was geometry once -- circle, squircle, hex -- from before the
+#: characters existed. Only `cloud` overlapped the archetypes, so five of the
+#: six characters the picker offered were refused by this validator. It had
+#: never been caught because the console has never run against a deployed API.
+#: `test_character_parity.py` is the guard.
 AVATAR_SHAPES: tuple[str, ...] = (
-    "circle", "squircle", "square", "pill", "triangle", "hex", "cloud", "drop",
+    "pebble", "paper", "jelly", "cloud", "lantern", "moth",
 )
 
 #: Fixed palette. Free-form colour would let two agents be visually
@@ -70,6 +82,18 @@ WORKING_STYLES: tuple[str, ...] = (
 )
 
 NAME_RE = re.compile(r"^[\w][\w \-'&,.()/]{1,59}$")
+
+#: `HH:MM`, 24-hour. Stored as written rather than as minutes since midnight
+#: so the value a person typed is the value the console shows back.
+CLOCK_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+#: An IANA zone name. Validated by shape, not against a bundled database:
+#: the zone is carried to EventBridge Scheduler, which is the thing that
+#: actually resolves it, and a stale local copy would refuse zones that AWS
+#: accepts. `UTC` is the one single-segment name allowed.
+TZ_RE = re.compile(r"^(UTC|[A-Za-z]+(?:_[A-Za-z]+)*(?:/[A-Za-z0-9+_-]+){1,2})$")
+
+
 AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 
 #: Ceiling on agents an organization may hold at once. Refused at creation
@@ -162,7 +186,7 @@ def validate_profile(body: dict) -> dict:
              f"workingStyle must be one of {list(WORKING_STYLES)}")
 
     avatar = body.get("avatar") or {}
-    shape = avatar.get("shape") or "circle"
+    shape = avatar.get("shape") or "pebble"
     color = avatar.get("color") or AVATAR_COLORS[5]
     _require(shape in AVATAR_SHAPES, f"avatar.shape must be one of {list(AVATAR_SHAPES)}")
     _require(color in AVATAR_COLORS, f"avatar.color must be one of {list(AVATAR_COLORS)}")
@@ -174,6 +198,48 @@ def validate_profile(body: dict) -> dict:
         "avatar": {"shape": shape, "color": color},
     }
 
+
+def validate_schedule(body: dict) -> dict:
+    """The half of an agent that says *when*, rather than what or how.
+
+    Hours are a window a routine may fire in, not a guarantee about a run
+    already under way: a run that starts at 16:59 is not killed at 17:00.
+    Enforcing that here would make a long task unrunnable near the end of a
+    day, which is not what anyone means by working hours.
+    """
+    out: dict = {}
+
+    if "timezone" in body:
+        tz = (body.get("timezone") or "").strip()
+        _require(bool(TZ_RE.match(tz)),
+                 "timezone must be an IANA zone name such as America/Los_Angeles")
+        out["timezone"] = tz
+
+    if "workingHours" in body:
+        hours = body.get("workingHours")
+        # Explicit null clears the window: an agent with no hours is always
+        # available, which is a different statement from 00:00-23:59 and the
+        # only way to undo a window once set.
+        if hours is None:
+            out["workingHours"] = None
+        else:
+            _require(isinstance(hours, dict), "workingHours must be an object or null")
+            start, end = (hours.get("start") or ""), (hours.get("end") or "")
+            _require(bool(CLOCK_RE.match(start)), "workingHours.start must be HH:MM")
+            _require(bool(CLOCK_RE.match(end)), "workingHours.end must be HH:MM")
+            _require(start != end, "workingHours.start and end must differ")
+            days = hours.get("days")
+            if days is None:
+                days = list(range(7))
+            _require(isinstance(days, list) and days
+                     and all(isinstance(d, int) and 0 <= d <= 6 for d in days),
+                     "workingHours.days must be a non-empty list of 0-6, Monday first")
+            # A window whose end is before its start crosses midnight, which
+            # is a real shift and is stored as written rather than refused.
+            out["workingHours"] = {"start": start, "end": end,
+                                   "days": sorted(set(days))}
+
+    return out
 
 def validate_limits(body: dict) -> dict:
     """Seat, concurrency and budget limits, clamped to their ceilings.
@@ -501,7 +567,7 @@ def plan_create(body: dict, actor: Actor, *,
 PATCHABLE: frozenset[str] = frozenset({
     "name", "role", "description", "systemPrompt", "workingStyle", "avatar",
     "budget", "allowedTools", "preapproved", "status", "modelTier",
-    "parentAgentId", "toolCapabilities",
+    "parentAgentId", "toolCapabilities", "timezone", "workingHours",
 })
 
 
@@ -532,6 +598,12 @@ def plan_update(existing: dict, body: dict, actor: Actor) -> tuple[dict, list[di
             changes["accent"] = validated["avatar"]["color"]
         if "name" in body:
             changes["gsi1sk"] = validated["name"]
+
+    # When a routine may fire. Cosmetic in the sense that widening it grants
+    # no capability -- it changes when work starts, never what it may do.
+    schedule_keys = {"timezone", "workingHours"}
+    if schedule_keys & set(body):
+        changes.update(validate_schedule(body))
 
     if "modelTier" in body:
         tier = body["modelTier"]
