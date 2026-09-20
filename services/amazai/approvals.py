@@ -23,6 +23,7 @@ EXPIRED = "expired"
 
 def request(store: Store, run: dict, *, action: str, arguments: dict, why: str,
             capability: Capability, tool_use_id: str = "", target: dict | None = None,
+            tool_name: str = "", tool_input: dict | None = None,
             reversible: bool | None = None, preview_key: str | None = None,
             routine_id: str | None = None,
             decision: policy.Decision | None = None) -> dict:
@@ -56,6 +57,8 @@ def request(store: Store, run: dict, *, action: str, arguments: dict, why: str,
         "why": why,
         "previewKey": preview_key,
         "toolUseId": tool_use_id,
+        "toolName": tool_name,
+        "toolInput": tool_input or {},
         "requestedBy": {"agentId": run["agentId"], "routineId": routine_id},
 
         "policy": ({"rule": decision.rule, "matched": decision.matched,

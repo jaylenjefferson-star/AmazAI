@@ -1133,7 +1133,8 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict,
             threads.event(store, decided["threadId"], f"Shared with every Bot: {_label(created)}", icon="layers")
 
     runs.advance(store, run, RunState.EXECUTING, pending=None)
-    _invoke_orchestrator(run_id, store.owner_id, resume=True, resume_note=note)
+    _invoke_orchestrator(run_id, store.owner_id, resume=True, resume_note=note,
+                         resume_approval=decided)
     result = {"approval": approvals.to_card(decided), "resumed": True}
     if created and decided["action"] == "agent.create":
         result["createdAgent"] = created
@@ -1203,13 +1204,16 @@ def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict
 
 
 def _invoke_orchestrator(run_id: str, owner_id: str, *, resume: bool = False,
-                         resume_note: str = "", cancel: bool = False) -> None:
+                         resume_note: str = "", resume_approval: dict | None = None,
+                         cancel: bool = False) -> None:
     fn = os.environ.get("ORCHESTRATOR_FN_ARN")
     if not fn:
         return
     payload = {"runId": run_id, "ownerId": owner_id}
     if resume:
         payload.update({"resume": True, "resumeNote": resume_note})
+        if resume_approval:
+            payload["resumeApproval"] = resume_approval
     if cancel:
         # Settle a paused run that was stopped: nothing is watching it.
         payload["cancel"] = True
