@@ -102,7 +102,7 @@ Deletion from active systems may not immediately remove a record from a backup. 
 
 ## 8. Security
 
-We use administrative, technical, and organizational safeguards designed to protect information. These safeguards include access controls, isolated agent workspaces, encryption in transit and at rest, encrypted storage of connector credentials, approval gates for configured actions, and activity records. No method of transmission or storage is completely secure, and we cannot guarantee absolute security. More information is available in our [Security & Responsible Disclosure](/security) policy.
+We use administrative, technical, and organizational safeguards designed to protect information. These safeguards include access controls, isolated agent workspaces, encryption in transit and at rest, encrypted storage of connector credentials, approval gates for configured actions, and activity records. No method of transmission or storage is completely secure, and we cannot guarantee absolute security. More information is available in our [Security & Responsible Disclosure](/security-disclosure) policy.
 
 ## 9. International processing
 

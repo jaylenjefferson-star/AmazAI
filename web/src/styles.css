@@ -1380,8 +1380,126 @@ button.lg { min-height: 46px; padding: 0 24px; font-size: 14.5px; }
   border-radius: var(--r-lg); background: var(--raised);
 }
 .about-contact h2 { margin: 0 0 10px; font-size: 15px; }
-.about-contact p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.9; }
+.about-contact p { margin: 0 0 14px; color: var(--dim); font-size: 13.5px; line-height: 1.9; }
+.about-contact p:last-child { margin-bottom: 0; }
 .about-contact a { color: var(--accent); text-decoration: none; }
+.about-contact + .about-contact { margin-top: 16px; }
+.about-card.muted { opacity: .68; }
+
+/* --------------------------------------------------------- nav dropdown */
+
+.public-nav-dropdown { position: relative; }
+.public-nav-dropdown-trigger {
+  background: none; border: none; padding: 0; margin: 0; cursor: pointer;
+  color: var(--dim); font-size: 13.5px; font-family: inherit;
+  display: inline-flex; align-items: center; gap: 3px;
+}
+.public-nav-dropdown-trigger:hover { color: var(--text); }
+.public-nav-dropdown-menu {
+  position: absolute; top: calc(100% + 10px); left: 0; z-index: 20;
+  display: flex; flex-direction: column; min-width: 160px; padding: 6px;
+  border: 1px solid var(--hairline); border-radius: var(--r-lg);
+  background: var(--panel); box-shadow: var(--lift);
+}
+.public-nav-dropdown-menu a {
+  padding: 8px 10px; border-radius: 8px; color: var(--dim);
+  font-size: 13.5px; text-decoration: none;
+}
+.public-nav-dropdown-menu a:hover { background: var(--raised); color: var(--text); }
+
+/* -------------------------------------------------------- how it works */
+
+.flow-steps { display: flex; flex-direction: column; gap: 14px; margin-bottom: 44px; }
+.flow-step {
+  display: flex; align-items: flex-start; gap: 18px;
+  padding: 20px; border: 1px solid var(--hairline);
+  border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--lift);
+}
+.flow-step h2 { margin: 2px 0 6px; font-size: 16px; letter-spacing: -.015em; }
+.flow-step p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.6; }
+
+/* -------------------------------------------------------------- product */
+
+.product-section { margin-bottom: 44px; }
+.product-section-head {
+  display: flex; align-items: center; gap: 16px; margin-bottom: 18px;
+}
+.product-section-head h2 { margin: 0 0 4px; font-size: 20px; letter-spacing: -.02em; }
+.product-section-head p { margin: 0; color: var(--dim); font-size: 13.5px; }
+
+/* -------------------------------------------------------------- pricing */
+
+.pricing-grid {
+  display: grid; gap: 14px; margin-bottom: 36px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.pricing-card {
+  position: relative; padding: 22px 18px; border: 1px solid var(--hairline);
+  border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--lift);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.pricing-card.featured { border-color: var(--accent-dim); }
+.pricing-badge {
+  position: absolute; top: -11px; left: 18px; font-size: 10.5px;
+  letter-spacing: .05em; text-transform: uppercase; font-weight: 600;
+  color: #fff; background: var(--accent); padding: 3px 9px; border-radius: 999px;
+}
+.pricing-card h2 { margin: 6px 0 0; font-size: 16px; }
+.pricing-price { margin: 4px 0 0; font-size: 15px; color: var(--dim); }
+.pricing-price strong { font-size: 26px; color: var(--text); letter-spacing: -.02em; }
+.pricing-credits { margin: 0; font-size: 13px; color: var(--faint); }
+.pricing-tagline { margin: 4px 0 6px; font-size: 13px; color: var(--dim); }
+.pricing-card ul { margin: 0 0 14px; padding-left: 18px; color: var(--dim); flex: 1; }
+.pricing-card li { font-size: 12.5px; line-height: 1.6; margin-bottom: 4px; }
+.pricing-card button { margin-top: auto; }
+
+.pricing-teams {
+  text-align: center; padding: 28px 20px; margin-bottom: 44px;
+  border: 1px solid var(--hairline); border-radius: var(--r-lg); background: var(--raised);
+}
+.pricing-teams h2 { margin: 0 0 8px; font-size: 18px; }
+.pricing-teams p { margin: 0 0 16px; color: var(--dim); font-size: 14px; max-width: 52ch; margin-left: auto; margin-right: auto; }
+
+/* ------------------------------------------------------------------ faq */
+
+.faq-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 30px; }
+.faq-item {
+  border: 1px solid var(--hairline); border-radius: var(--r-lg);
+  background: var(--panel); overflow: hidden;
+}
+.faq-question {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 14px 18px; background: none; border: none; cursor: pointer;
+  color: var(--text); font-size: 14px; text-align: left; font-family: inherit;
+}
+.faq-question span { color: var(--faint); font-size: 15px; }
+.faq-answer { margin: 0; padding: 0 18px 16px; color: var(--dim); font-size: 13.5px; line-height: 1.65; }
+
+/* -------------------------------------------------------------- use cases */
+
+.usecase-list { display: flex; flex-direction: column; gap: 14px; }
+.usecase-item {
+  display: flex; align-items: flex-start; gap: 18px;
+  padding: 20px; border: 1px solid var(--hairline);
+  border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--lift);
+}
+.usecase-item h2 { margin: 0 0 6px; font-size: 16px; letter-spacing: -.015em; }
+.usecase-item p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.6; }
+
+/* --------------------------------------------------------- landing control */
+
+.landing-control {
+  display: flex; align-items: flex-start; gap: 20px;
+  max-width: 780px; margin: 0 auto 48px; padding: 26px 24px;
+  border: 1px solid var(--hairline); border-radius: var(--r-lg); background: var(--raised);
+}
+.landing-control h2 { margin: 4px 0 8px; font-size: 18px; }
+.landing-control p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.7; }
+.landing-control a { color: var(--accent); text-decoration: none; }
+
+@media (max-width: 620px) {
+  .landing-control { flex-direction: column; }
+}
 
 /* --------------------------------------------------------------- policy */
 

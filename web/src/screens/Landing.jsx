@@ -1,7 +1,6 @@
 import Companion from '../characters/Companion';
-import Logo from './../components/Logo';
-import { PublicFooter } from '../components/PublicShell';
 import { Link } from 'react-router-dom';
+import { TopNav, PublicFooter } from '../components/PublicShell';
 import { startLogin, useAuth0 } from '../auth0';
 
 const STEPS = [
@@ -38,20 +37,7 @@ export default function Landing() {
 
   return (
     <div className="landing">
-      <header className="landing-nav">
-        <Logo size={26} title="AmazAI" />
-        <nav className="landing-nav-links">
-          <Link to="/about">About</Link>
-          <Link to="/security">Security</Link>
-        </nav>
-        <span style={{ flex: 1 }} />
-        <button className="ghost" onClick={() => startLogin(loginWithRedirect, { returnTo: '/' })}>
-          Sign in
-        </button>
-        <button className="primary" onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: '/welcome' })}>
-          Create your AmazAI
-        </button>
-      </header>
+      <TopNav />
 
       <section className="landing-hero">
         <div className="landing-cast" aria-hidden="true">
@@ -61,13 +47,14 @@ export default function Landing() {
         </div>
 
         <h1>
-          A small cast of companions that
-          <span className="grad"> think, act, and show their work.</span>
+          A customizable AI team that gets
+          <span className="grad"> work done — with you in control.</span>
         </h1>
         <p>
-          AmazAI is a private operator console. You give a companion a job, a
-          budget and a narrow set of tools — it does the work on its own cloud
-          computer and stops for you before anything it cannot undo.
+          AmazAI is a private operator console. Build a small team of agents,
+          assign them real work with real tools, and approve anything they
+          can't undo before it happens. Every action is scoped, every run is
+          recorded, and nothing moves without a decision you made.
         </p>
 
         <div className="landing-cta">
@@ -80,7 +67,8 @@ export default function Landing() {
           </button>
         </div>
         <p className="landing-fine">
-          Sign-in is handled by Auth0. AmazAI never sees your password.
+          Sign-in is handled by Auth0. AmazAI never sees your password. See
+          how it all fits together on the <Link to="/how-it-works">How it works</Link> page.
         </p>
       </section>
 
@@ -93,6 +81,23 @@ export default function Landing() {
             <p>{s.body}</p>
           </article>
         ))}
+      </section>
+
+      <section className="landing-control">
+        <Companion archetype="lantern" color="#e8833a" state="approval" size={56} />
+        <div>
+          <h2>Why control matters</h2>
+          <p>
+            Agents can collaborate and execute — draft, send, ship, spend.
+            What keeps a human accountable is what happens around that: scoped
+            permissions, an approval gate on anything irreversible, a durable
+            memory of what was decided, and an audit trail nobody can quietly
+            edit. That combination, not the agents themselves, is what makes
+            AmazAI safe to hand real work to. Read more on
+            {' '}<Link to="/how-it-works">How it works</Link> and
+            {' '}<Link to="/security">Security</Link>.
+          </p>
+        </div>
       </section>
 
       <PublicFooter />

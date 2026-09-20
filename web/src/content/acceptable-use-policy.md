@@ -58,4 +58,4 @@ Enforcement rights under this Policy are in addition to any other remedies avail
 
 ## 6. Reporting
 
-To report suspected misuse of the Service or a security concern, contact **security@amazai.co**. For a potential security vulnerability, please follow our [Security & Responsible Disclosure](/security) guidelines.
+To report suspected misuse of the Service or a security concern, contact **security@amazai.co**. For a potential security vulnerability, please follow our [Security & Responsible Disclosure](/security-disclosure) guidelines.
