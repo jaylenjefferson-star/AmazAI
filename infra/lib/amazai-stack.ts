@@ -494,12 +494,12 @@ export class AmazaiStack extends cdk.Stack {
     );
     routineFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
 
-    // Decision D4: how a paused run continues. `resume_note` is the documented
-    // fallback and what is verified in code; `tool_result` is refused by the
-    // orchestrator until `scripts/spike_d4.py` has shown the service accepts it.
-    // Set with `cdk deploy -c continuation=<value>`. Anything else is an error at
-    // synth time, not a mystery at 2am.
-    const continuation = String(this.node.tryGetContext('continuation') ?? 'resume_note');
+    // Decision D4: the live probe verified the native `tool_result` path on
+    // 2026-09-20. Keep it as the deploy default so an ordinary deploy cannot
+    // silently replace the settled path with the old `resume_note` fallback.
+    // A context override remains available for a deliberate rollback; anything
+    // else is an error at synth time, not a mystery at 2am.
+    const continuation = String(this.node.tryGetContext('continuation') ?? 'tool_result');
     if (!['resume_note', 'tool_result'].includes(continuation)) {
       throw new Error(`context continuation must be resume_note or tool_result, got ${continuation}`);
     }
