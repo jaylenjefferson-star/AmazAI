@@ -140,9 +140,11 @@ export default function Marketplace() {
   return (
     <div className="page">
       <header className="page-head">
-        <h1>Marketplace</h1>
-        <p>Plugins connect your Bots to your tools. Skills teach them how you work.
-          Neither gives a Bot anything until you grant or assign it.</p>
+        <div>
+          <h1>Marketplace</h1>
+          <p>Plugins connect your Bots to your tools. Skills teach them how you work.
+            Neither gives a Bot anything until you grant or assign it.</p>
+        </div>
       </header>
       <div className="seg" role="tablist" aria-label="Marketplace">
         {[['plugins', 'Plugins'], ['skills', 'Skills']].map(([key, label]) => (

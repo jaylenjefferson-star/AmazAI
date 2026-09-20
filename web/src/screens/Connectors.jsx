@@ -15,21 +15,33 @@ export default function Connectors({ embedded = false }) {
   const [accounts, setAccounts] = useState({});
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
   async function reload() {
     setError('');
-    try {
-      const [available, appPage, current, accountRows] = await Promise.all([
-        api.connectorCatalog(), api.connectorApps(appQuery), api.connectors(), api.connectorAccounts(),
-      ]);
-      setCatalog(available.catalog || []);
-      setApps(appPage.apps || []);
-      setNextCursor(appPage.pageInfo?.end_cursor || '');
-      setInstalled(Object.fromEntries((current.connectors || []).map((c) => [c.connectorId, c])));
-      setAccounts(Object.fromEntries((accountRows.accounts || []).map((a) => [a.app, a])));
-    } catch (err) {
-      setError(err.message || 'Could not load connectors.');
-    }
+    setLoading(true);
+    // Settled one by one, not Promise.all: the catalog is ours and needs no
+    // third party, so a slow or failing Pipedream call must not hide it.
+    const [available, appPage, current, accountRows] = await Promise.allSettled([
+      api.connectorCatalog(), api.connectorApps(appQuery), api.connectors(), api.connectorAccounts(),
+    ]);
+    const failed = [];
+    const ok = (r, label) => {
+      if (r.status === 'fulfilled') return r.value || {};
+      failed.push(`${label}: ${r.reason?.message || 'could not be loaded'}`);
+      return {};
+    };
+    const cat = ok(available, 'catalog');
+    const page = ok(appPage, 'apps');
+    const inst = ok(current, 'installed connectors');
+    const accts = ok(accountRows, 'connected accounts');
+    setCatalog(cat.catalog || []);
+    setApps(page.apps || []);
+    setNextCursor(page.pageInfo?.end_cursor || '');
+    setInstalled(Object.fromEntries((inst.connectors || []).map((c) => [c.connectorId, c])));
+    setAccounts(Object.fromEntries((accts.accounts || []).map((a) => [a.app, a])));
+    if (failed.length) setError(failed.join(' · '));
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -147,7 +159,8 @@ export default function Connectors({ embedded = false }) {
             </article>
           ))}
         </div>
-        {!apps.length && !error && <div className="empty">No matching apps found.</div>}
+        {!apps.length && loading && <div className="empty">Loading apps…</div>}
+        {!apps.length && !loading && !error && <div className="empty">No matching apps found.</div>}
         {nextCursor && <button className="ghost" disabled={busy === 'more-apps'} onClick={loadMoreApps}>Load more apps</button>}
       </section>
       <div className="section-label">Agent-enabled connectors</div>
@@ -178,7 +191,8 @@ export default function Connectors({ embedded = false }) {
           );
         })}
       </div>
-      {!catalog.length && !error && <div className="empty">Loading your connector catalog…</div>}
+      {!catalog.length && loading && <div className="empty">Loading your connector catalog…</div>}
+      {!catalog.length && !loading && !error && <div className="empty">No connectors are available yet.</div>}
       <p className="hint-text">Connecting an account does not grant it to every agent. Grant access from an agent’s setup, and write or destructive actions still require approval.</p>
     </div>
   );

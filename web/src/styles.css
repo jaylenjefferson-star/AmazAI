@@ -238,7 +238,10 @@ button.primary {
   color: var(--accent-ink);
   font-weight: 560;
 }
-button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+/* Restates the fill: `button:hover:not(:disabled)` above is more specific than
+   `button.primary`, and without this the label (white) lands on a pale hover fill. */
+button.primary:hover:not(:disabled),
+button.primary:focus-visible:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
 
 button.danger { border-color: var(--danger-edge); color: var(--danger); background: transparent; }
 button.danger:hover:not(:disabled) { background: var(--danger-wash); border-color: var(--danger); }

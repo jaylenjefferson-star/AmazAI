@@ -188,7 +188,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # thing that cannot be verified without AWS, so nothing here knows the shape.
     messages.extend(continuation.resume_messages(event))
 
-    system_prompt = agentcore.build_system_prompt(agent, memories, skills=assigned_skills)
+    # The greeting is stored (so every browser shows the same one) but never sent as
+    # a turn; the model is told about it instead. See agentcore.identity_block.
+    opening = next((m.get("text", "") for m in history if m.get("starter")), "")
+    system_prompt = agentcore.build_system_prompt(agent, memories, skills=assigned_skills,
+                                                  opening=opening)
     system_prompt += _request_notes(run, agent, thread)
 
 

@@ -372,7 +372,11 @@ export class AmazaiStack extends cdk.Stack {
     const httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
       apiName: 'amazai',
       corsPreflight: {
-        allowHeaders: ['authorization', 'content-type'],
+        // Every header the console sets on a request must be listed here, or the
+        // browser's preflight fails and it reports a bare "Load failed" without
+        // the request ever reaching the API. tests/test_cors_contract.py compares
+        // this list with web/src/api.js.
+        allowHeaders: ['authorization', 'content-type', 'idempotency-key'],
         allowMethods: [apigwv2.CorsHttpMethod.ANY],
         allowOrigins: [
           'https://amazai.co',

@@ -244,6 +244,17 @@ def harness_tools(tool_names: list[str]) -> list[dict]:
     return tools
 
 
+def _harness_id(harness_arn: str) -> str:
+    """Return the control-plane identifier from an ARN or an id.
+
+    Local tests and callers that already have the id may pass it directly;
+    deployed records deliberately retain the ARN because the runtime needs it.
+    Module level on purpose: defined between two methods it swallows every
+    method that follows it into its own body.
+    """
+    return harness_arn.rsplit("/", 1)[-1]
+
+
 class HarnessNotReady(RuntimeError):
     pass
 
@@ -342,15 +353,6 @@ class AgentCore:
         self._control.update_harness(harnessId=_harness_id(harness_arn), tools=current + added)
         return {"changed": True, "added": [t["name"] for t in added]}
 
-
-def _harness_id(harness_arn: str) -> str:
-    """Return the control-plane identifier from an ARN or an id.
-
-    Local tests and callers that already have the id may pass it directly;
-    deployed records deliberately retain the ARN because the runtime needs it.
-    """
-    return harness_arn.rsplit("/", 1)[-1]
-
     def update_filesystem(self, harness_arn: str, mounts: list[dict]) -> dict:
         """Filesystem mounts are not enabled in this deployment."""
         raise NotImplementedError(
@@ -388,9 +390,42 @@ def build_messages(history: list[dict], *, room: bool = False) -> list[dict]:
     return out
 
 
+def identity_block(agent: dict, opening: str = "") -> str:
+    """Who this Bot is, from the profile the operator filled in.
+
+    The name, title, role and description are the operator's own words about
+    what they made, and until this existed the model saw only the role string:
+    ask a Bot its name and it had nothing to say. `opening` is the greeting the
+    operator has already read. It is not sent as a turn (a conversation cannot
+    open on an assistant message), so it is told here, and the Bot continues
+    from it instead of greeting again.
+
+    Identity is presentation, not permission: nothing here widens what the
+    Bot may do, and it is not where any rule is enforced.
+    """
+    name = (agent.get("name") or "").strip()
+    if not name:
+        return ""
+    lines = [f"You are {name}, a Bot on the operator's AmazAI team."]
+    if (agent.get("title") or "").strip():
+        lines.append(f"Your title: {agent['title'].strip()}")
+    if (agent.get("role") or "").strip():
+        lines.append(f"Your role: {agent['role'].strip()}")
+    if (agent.get("description") or "").strip():
+        lines.append(f"About you: {agent['description'].strip()}")
+    lines.append("When you are asked who you are or what you do, answer in the first "
+                 "person from this. Do not present yourself as a generic assistant.")
+    if opening.strip():
+        lines.append("You already opened this conversation with the message below, which "
+                     "the operator has read. Continue from it and do not greet again.\n"
+                     f"> {opening.strip()}")
+    return "\n".join(lines)
+
+
 def build_system_prompt(agent: dict, memories: list[dict], *,
-                        skills: list[dict] | None = None) -> str:
-    """Assemble the system prompt: role, instructions, memory, skills.
+                        skills: list[dict] | None = None,
+                        opening: str = "") -> str:
+    """Assemble the system prompt: identity, role, instructions, memory, skills.
 
     `memories` is expected to already be filtered to what is visible right
     now -- see `amazai.memory.visible` -- this function only decides layout,
@@ -408,7 +443,8 @@ def build_system_prompt(agent: dict, memories: list[dict], *,
     `amazai.skills.assigned_active_skills`), not every active skill in the
     library -- an unassigned skill is never passed in and so is never seen.
     """
-    parts = [agent.get("systemPrompt") or agent.get("role", "")]
+    parts = [identity_block(agent, opening),
+             agent.get("systemPrompt") or agent.get("role", "")]
 
     def _foundational(m: dict) -> bool:
         return bool(m.get("pinned")) or m.get("kind") == "foundational"
