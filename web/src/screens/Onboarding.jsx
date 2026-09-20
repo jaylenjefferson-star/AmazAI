@@ -3,32 +3,36 @@ import { useNavigate } from 'react-router-dom';
 import Companion from '../characters/Companion';
 import Logo from '../components/Logo';
 import { ARCHETYPES, ARCHETYPE_KEYS } from '../characters/archetypes';
-import { useAuth0 } from '../auth0';
+import { operatorFirstName, useAuth0 } from '../auth0';
 import { api } from '../api';
 import { rememberSetupDone } from '../hooks/useFirstRun';
 
-// Six of the ten the API accepts (`agents.AVATAR_COLORS`). The blue and the
-// purple used to be #2b6bff and #8b2fe0, which are not in that list at all --
-// onboarding's first companion would have been refused on submit. Kept as a
-// short list rather than the full palette because this is the first screen
-// anyone sees, but every entry has to be one the validator allows.
+// Six of the ten the API accepts (`agents.AVATAR_COLORS`). Kept as a short
+// list rather than the full palette because this is the first screen anyone
+// sees, but every entry has to be one the validator allows -- a colour the API
+// refuses would fail the create at the very last step.
 const PALETTE = ['#2f6fe4', '#8b5cf6', '#12a594', '#e8833a', '#e93d82', '#3dc98a'];
 
 /**
- * First run.
+ * First run: meet your first Bot.
  *
- * Five steps, and the third one is the point: choosing a shape and a colour
- * is how a workspace stops feeling like someone else's software. The steps
- * before and after it are short so that one does not feel like a chore in a
- * queue.
+ * Four steps, and the second one is the point: choosing a name, a shape and a
+ * colour is how a workspace stops feeling like someone else's software. The
+ * rest are short so that step does not feel like a chore in a queue.
  *
- * The last step is the one that was wrong. It used to set a localStorage flag
- * and navigate: the workspace name, the companion's name, its job, its shape
- * and its colour were all read into state and then dropped on the floor. Five
- * screens of setup produced nothing on the server, so the next browser to sign
- * in found an account that had never been set up -- and ran the same five
- * screens to the same end. Setup now creates the companion it spent four
- * steps designing, and says so if it cannot.
+ * What this creates is the account's **first Bot** -- an agent flagged
+ * `entrypoint`, made through the ordinary create path. It is not a tour and
+ * not a wizard that ends in an empty inbox: the moment it exists it opens the
+ * conversation itself ("What do you mainly want me for?"), which is where the
+ * onboarding actually happens. This screen only decides who you meet.
+ *
+ * Note what it does *not* send: no role, no title, no instructions. Those are
+ * the server's to supply for a first Bot (`services/amazai/onboarding.py`) --
+ * a prompt shipped in the browser bundle is a prompt anyone can read.
+ *
+ * The last step must create the Bot or say why it could not. Setup that
+ * reports success and leaves the account exactly as empty as it found it is
+ * the failure this screen has already had once.
  */
 export default function Onboarding() {
   const nav = useNavigate();
@@ -36,23 +40,24 @@ export default function Onboarding() {
   const [step, setStep] = useState(0);
   const [workspace, setWorkspace] = useState(
     user?.given_name ? `${user.given_name}'s workspace` : 'My workspace');
-  const [name, setName] = useState('');
-  const [role, setRole] = useState('');
+  const [name, setName] = useState('Chief');
   const [archetype, setArchetype] = useState('pebble');
   const [color, setColor] = useState(PALETTE[0]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   // One key for the whole run of setup, so a retry after a timeout resolves
-  // to the companion the first attempt created rather than a second one.
+  // to the Bot the first attempt created rather than a second one.
   const idempotencyKey = useMemo(
     () => `setup-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
     [],
   );
 
+  const botName = name.trim() || 'Your first Bot';
+
   const steps = [
     {
       title: 'Welcome to AmazAI',
-      body: 'A private place for a small cast of companions that do real work on your behalf. Let us give it a name.',
+      body: 'A private place for a small team of Bots that do real work on your behalf. Let us give it a name.',
       state: 'idle',
       content: (
         <label className="field">
@@ -64,32 +69,16 @@ export default function Onboarding() {
       canNext: workspace.trim().length >= 2,
     },
     {
-      title: 'Your first companion',
-      body: 'Give it a name and a job. You can change both later, and add more whenever you like.',
+      title: 'Meet your first Bot',
+      body: 'It opens the conversation, finds out what you mainly want it for, and takes the first real task. Give it a name and a look; you can change both later.',
       state: 'thinking',
       content: (
         <>
           <label className="field">
             <span>Name</span>
-            <input className="big" placeholder="Pell" value={name} maxLength={60}
+            <input className="big" value={name} maxLength={60}
                    onChange={(e) => setName(e.target.value)} />
           </label>
-          <label className="field">
-            <span>What is it for?</span>
-            <input placeholder="Watches production and investigates alarms"
-                   value={role} maxLength={200}
-                   onChange={(e) => setRole(e.target.value)} />
-          </label>
-        </>
-      ),
-      canNext: name.trim().length >= 2 && role.trim().length >= 2,
-    },
-    {
-      title: 'Pick its shape',
-      body: 'Shape is how you will recognise it at a glance — in a list, a room, a timeline. Colour is the second signal, never the only one.',
-      state: 'working',
-      content: (
-        <>
           <div className="picker">
             {ARCHETYPE_KEYS.map((k) => (
               <button key={k} type="button" title={ARCHETYPES[k].name}
@@ -112,7 +101,7 @@ export default function Onboarding() {
           </div>
         </>
       ),
-      canNext: true,
+      canNext: name.trim().length >= 2,
     },
     {
       title: 'You keep the brake',
@@ -121,15 +110,15 @@ export default function Onboarding() {
       content: (
         <ul className="promise-list">
           <li><strong>Nothing irreversible happens silently.</strong> Approvals name the account, the target and whether it can be undone.</li>
-          <li><strong>A tool nobody granted is absent</strong>, not refused. Companions cannot argue their way into access.</li>
+          <li><strong>A tool nobody granted is absent</strong>, not refused. Bots cannot argue their way into access.</li>
           <li><strong>Your credentials stay yours.</strong> Connector tokens live with the provider; AmazAI holds a reference, not a key.</li>
         </ul>
       ),
       canNext: true,
     },
     {
-      title: `${name.trim() || 'Your companion'} is ready`,
-      body: 'That is the whole setup. Everything else can be changed from Settings.',
+      title: `${botName} is ready`,
+      body: 'It will say hello as soon as you open your workspace. Everything else can be changed from Settings.',
       state: 'complete',
       content: null,
       canNext: true,
@@ -144,20 +133,23 @@ export default function Onboarding() {
     setBusy(true);
     setError('');
     try {
-      // The companion first: it is the thing someone would notice missing,
-      // and the workspace name is worth nothing without it.
-      await api.createAgent({
+      // The Bot first: it is the thing someone would notice missing, and the
+      // workspace name is worth nothing without it.
+      const bot = await api.createAgent({
         name: name.trim(),
-        role: role.trim(),
+        entrypoint: true,
+        // Only so it can say hello by name. Sent, read once, stored nowhere.
+        operatorName: operatorFirstName(user),
         avatar: { shape: archetype, color },
       }, idempotencyKey);
       await api.saveSettings({ workspaceName: workspace.trim(), onboarded: true });
       rememberSetupDone();
-      nav('/', { replace: true });
+      // Straight into the conversation: the greeting is waiting there, and an
+      // inbox with one unread row would only be a longer way to the same place.
+      nav(`/agents/${bot.agentId}`, { replace: true });
     } catch (err) {
       // Stays on this step with the reason. Navigating anyway would be the
-      // original bug with a better story: setup that reports success and
-      // leaves the account exactly as empty as it found it.
+      // original bug with a better story.
       setError(err.message);
     } finally {
       setBusy(false);
@@ -178,7 +170,7 @@ export default function Onboarding() {
 
         <div className="onboard-stage">
           <Companion archetype={archetype} color={color} state={s.state}
-                     size={96} name={name.trim() || 'Your companion'} />
+                     size={96} name={botName} />
         </div>
 
         <h1>{s.title}</h1>
@@ -195,7 +187,7 @@ export default function Onboarding() {
             : <span />}
           <button className="primary" disabled={!s.canNext || busy}
                   onClick={() => (last ? finish() : setStep((n) => n + 1))}>
-            {last ? (busy ? 'Setting up…' : 'Open my workspace') : 'Continue'}
+            {last ? (busy ? 'Setting up…' : `Meet ${botName}`) : 'Continue'}
           </button>
         </footer>
       </div>

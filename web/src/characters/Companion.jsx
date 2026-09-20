@@ -17,6 +17,10 @@ export const STATES = {
   idle:     { label: 'Idle',            tone: 'neutral', verb: 'resting' },
   thinking: { label: 'Thinking',        tone: 'accent',  verb: 'working something out' },
   working:  { label: 'Working',         tone: 'accent',  verb: 'running a task' },
+  // Paused on something outside itself -- a connector, another Bot -- rather
+  // than on you. Quieter than `approval` on purpose: nothing is being asked of
+  // the operator, so nothing about it should look like a request.
+  waiting:  { label: 'Waiting',         tone: 'neutral', verb: 'waiting on something else' },
   approval: { label: 'Needs you',       tone: 'warn',    verb: 'waiting for your approval' },
   complete: { label: 'Done',            tone: 'ok',      verb: 'finished' },
   blocked:  { label: 'Blocked',         tone: 'danger',  verb: 'stuck and stopped' },
@@ -82,6 +86,15 @@ export default function Companion({
                   fill={color} opacity=".75" />
             <rect className="cc-chip cc-chip-3" x="44" y="2" width="13" height="9" rx="2.5"
                   fill={color} opacity=".5" />
+          </g>
+        )}
+
+        {/* Waiting: three dots take turns, and it does not hurry them. */}
+        {state === 'waiting' && (
+          <g className="cc-wait" fill={color}>
+            <circle className="cc-wait-a" cx="60" cy="14" r="3.2" />
+            <circle className="cc-wait-b" cx="72" cy="14" r="3.2" />
+            <circle className="cc-wait-c" cx="84" cy="14" r="3.2" />
           </g>
         )}
 

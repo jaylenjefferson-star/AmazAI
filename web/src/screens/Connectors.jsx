@@ -6,7 +6,7 @@ import { api } from '../api';
  * an account gives the organisation a capability; an agent receives none of
  * it until it is explicitly granted on that companion's profile.
  */
-export default function Connectors() {
+export default function Connectors({ embedded = false }) {
   const [catalog, setCatalog] = useState([]);
   const [apps, setApps] = useState([]);
   const [appQuery, setAppQuery] = useState('');
@@ -110,11 +110,18 @@ export default function Connectors() {
   }
 
   return (
-    <div className="page">
-      <header className="page-head">
-        <div><h1>Connectors</h1><p>Browse 1,000+ apps through Pipedream. Connecting an app does not grant it to any companion.</p></div>
-        <button className="btn-link" onClick={reload} disabled={Boolean(busy)}>Refresh</button>
-      </header>
+    // Embedded (in the Marketplace) the page frame and heading belong to the
+    // host; standing alone at /connectors it keeps its own.
+    <div className={embedded ? undefined : 'page'}>
+      {embedded ? (
+        <div className="mk-bar"><h3 className="mk-h">Connect a tool</h3>
+          <button className="btn-link" onClick={reload} disabled={Boolean(busy)}>Refresh</button></div>
+      ) : (
+        <header className="page-head">
+          <div><h1>Connectors</h1><p>Browse 1,000+ apps through Pipedream. Connecting an app does not grant it to any companion.</p></div>
+          <button className="btn-link" onClick={reload} disabled={Boolean(busy)}>Refresh</button>
+        </header>
+      )}
       {error && <div className="empty"><strong>Connector setup needs attention</strong><span>{error}</span></div>}
       <section className="section-block">
         <div className="section-label">Available apps</div>

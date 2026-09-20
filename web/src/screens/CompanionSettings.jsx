@@ -37,6 +37,7 @@ const DAYS = [
 function formValues(agent) {
   return {
     name: agent.name || '',
+    title: agent.title || '',
     role: agent.role || '',
     description: agent.description || '',
     systemPrompt: agent.systemPrompt || '',
@@ -112,7 +113,7 @@ export default function CompanionSettings() {
     const out = {};
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-    for (const key of ['name', 'role', 'description', 'systemPrompt', 'workingStyle']) {
+    for (const key of ['name', 'title', 'role', 'description', 'systemPrompt', 'workingStyle']) {
       if (draft[key] !== was[key]) out[key] = draft[key];
     }
     if (draft.modelTier !== was.modelTier) out.modelTier = draft.modelTier;
@@ -232,7 +233,13 @@ export default function CompanionSettings() {
                    onChange={(e) => set('name', e.target.value)} />
           </label>
           <label className="field">
-            <span>Title</span>
+            <span>Title <em>optional</em></span>
+            <input value={draft.title} maxLength={24} placeholder="Email, Sales, Research…"
+                   onChange={(e) => set('title', e.target.value)} />
+            <small className="hint-text">The tag shown beside its name in your inbox.</small>
+          </label>
+          <label className="field">
+            <span>Role</span>
             <input value={draft.role} maxLength={200}
                    onChange={(e) => set('role', e.target.value)} />
           </label>

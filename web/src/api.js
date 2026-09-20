@@ -34,6 +34,11 @@ const live = {
   updateAgent: (id, changes) => call('PATCH', `/agents/${id}`, changes),
   addMemory: (id, entry) => call('POST', `/agents/${id}/memory`, entry),
   deleteMemory: (id, memId) => call('DELETE', `/agents/${id}/memory/${memId}`),
+  updateMemory: (id, memId, changes) => call('PATCH', `/agents/${id}/memory/${memId}`, changes),
+  sharedMemory: () => call('GET', '/memory'),
+  addSharedMemory: (entry) => call('POST', '/memory', entry),
+  deleteSharedMemory: (memId) => call('DELETE', `/memory/${memId}`),
+  updateSharedMemory: (memId, changes) => call('PATCH', `/memory/${memId}`, changes),
 
   connectorCatalog: () => call('GET', '/connectors/catalog'),
   connectorApps: (q, after) => call('GET', `/connectors/apps?limit=48${q ? `&q=${encodeURIComponent(q)}` : ''}${after ? `&after=${encodeURIComponent(after)}` : ''}`),
@@ -51,7 +56,10 @@ const live = {
   markRead: (id) => call('POST', `/threads/${id}/read`, {}),
   thread: (id) => call('GET', `/threads/${id}`),
   createThread: (t) => call('POST', '/threads', t),
-  send: (id, text) => call('POST', `/threads/${id}/messages`, { text }),
+  // `redirectRunId` stops that run in favour of this message; the API starts the
+  // new one only once the old has really ended, so two never share a session.
+  send: (id, text, opts = {}) => call('POST', `/threads/${id}/messages`, { text, ...opts }),
+  patchThread: (id, changes) => call('PATCH', `/threads/${id}`, changes),
   exec: (id, command) => call('POST', `/threads/${id}/exec`, { command }),
   // Read-only: agent<->agent handoffs and messages bound to this thread.
   // Never a write path — sender/recipient are the only agents who may
@@ -67,6 +75,9 @@ const live = {
   approvals: (status = 'pending') =>
     call('GET', `/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`),
 
+  // Run now: the same fire a schedule uses. The key makes a double-click one run.
+  runRoutine: (id, key) => call('POST', `/routines/${id}/run`, {},
+    key ? { 'idempotency-key': key } : undefined),
   routines: () => call('GET', '/routines'),
   routine: (id) => call('GET', `/routines/${id}`),
   createRoutine: (routine) => call('POST', '/routines', routine),
@@ -83,6 +94,8 @@ const live = {
   saveSettings: (changes) => call('PUT', '/settings', changes),
 
   skills: () => call('GET', '/skills'),
+  createSkill: (skill) => call('POST', '/skills', skill),
+  updateSkill: (id, changes) => call('PATCH', `/skills/${id}`, changes),
   skillVersions: (id) => call('GET', `/skills/${id}/versions`),
   assignSkill: (skillId, agentId, version) =>
     call('POST', `/skills/${skillId}/assignments`, { agentId, version }),

@@ -1,4 +1,4 @@
-import { StrictMode } from 'react';
+import { StrictMode, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   BrowserRouter, Navigate, Route, Routes, useLocation,
@@ -20,7 +20,8 @@ import securityRaw from './content/security-responsible-disclosure.md?raw';
 import cookieRaw from './content/cookie-policy.md?raw';
 import acceptableUseRaw from './content/acceptable-use-policy.md?raw';
 import Onboarding from './screens/Onboarding';
-import { DONE, NEEDED, useFirstRun } from './hooks/useFirstRun';
+import { CHECKING, NEEDED, OFFER, useFirstRun } from './hooks/useFirstRun';
+import { DEMO } from './demo';
 import Inbox from './screens/Inbox';
 import { Agents, Artifacts, Rooms, Routines } from './screens/Sections';
 import Settings from './screens/Settings';
@@ -30,6 +31,7 @@ import Room from './screens/Room';
 import Usage from './screens/Usage';
 import Gallery from './screens/Gallery';
 import Connectors from './screens/Connectors';
+import Marketplace from './screens/Marketplace';
 import HowItWorks from './screens/marketing/HowItWorks';
 import Product from './screens/marketing/Product';
 import Pricing from './screens/marketing/Pricing';
@@ -81,7 +83,10 @@ function FirstRunGuard({ children }) {
   // Nothing is rendered while the answer is outstanding. Guessing would mean
   // either a flash of setup for an owner who has been here for months, or a
   // flash of an empty inbox for someone who genuinely has not.
-  if (firstRun !== DONE && firstRun !== NEEDED) return null;
+  if (firstRun === CHECKING) return null;
+  // Only an account with nobody in it is walled in. One that has agents but no
+  // first Bot (OFFER) is a working org and keeps its inbox; the inbox offers
+  // the first Bot there instead of blocking the way to the rest.
   if (firstRun === NEEDED && location.pathname !== '/welcome') {
     return <Navigate to="/welcome" replace />;
   }
@@ -89,14 +94,19 @@ function FirstRunGuard({ children }) {
 }
 
 /**
- * Setup runs once. Reaching `/welcome` by typing it, with an account that is
- * already set up, would otherwise walk an owner through creating a second
- * "first" companion -- now that the last step actually creates one.
+ * Setup runs until there is a first Bot. Reaching `/welcome` by typing it,
+ * with an account that already has one, would otherwise walk an owner through
+ * making a second -- which the API would refuse anyway.
  */
 function SetupOnly({ children }) {
   const firstRun = useFirstRun();
-  if (firstRun === DONE) return <Navigate to="/" replace />;
-  if (firstRun !== NEEDED) return null;
+  // Decided once, on arrival. Setup finishing is what flips `firstRun` to DONE,
+  // and re-deciding then would bounce the owner to `/` on top of the
+  // navigation setup itself just made -- into the new Bot's conversation.
+  const arrived = useRef(null);
+  if (arrived.current === null && firstRun !== CHECKING) arrived.current = firstRun;
+  if (arrived.current === null) return null;
+  if (arrived.current !== NEEDED && arrived.current !== OFFER) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -141,6 +151,7 @@ function Router() {
         <Route path="/agents/new" element={<Agents />} />
         <Route path="/agents/:agentId" element={<Task />} />
         <Route path="/agents/:agentId/settings" element={<CompanionSettings />} />
+        <Route path="/marketplace" element={<Marketplace />} />
         <Route path="/connectors" element={<Connectors />} />
         <Route path="/rooms" element={<Rooms />} />
         <Route path="/rooms/:roomId" element={<Room />} />
@@ -162,7 +173,8 @@ function Entry() {
   const { isAuthenticated, isLoading } = useAuth0();
   const location = useLocation();
 
-  if (!configured) return <Router />;
+  // Demo has no session to wait for; see `AuthGate`.
+  if (!configured || DEMO) return <Router />;
   if (isLoading) return null;
 
   const isPublicPath = PUBLIC_PATHS.includes(location.pathname);

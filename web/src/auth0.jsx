@@ -77,6 +77,21 @@ export function isOwner(user) {
   return false;
 }
 
+/**
+ * The name a Bot should greet the owner by.
+ *
+ * Only what the identity provider actually says: a given name, or the first
+ * word of a display name. Never derived from the email address -- "nichjeffers"
+ * is not anyone's name, and a greeting that gets it wrong is worse than one
+ * that says nothing. Empty means "greet without a name".
+ */
+export function operatorFirstName(user) {
+  if (user?.given_name) return String(user.given_name).trim();
+  const name = String(user?.name || '').trim();
+  if (!name || name.includes('@')) return '';
+  return name.split(/\s+/)[0];
+}
+
 export function AmazAIAuthProvider({ children }) {
   if (!configured) return children;
 

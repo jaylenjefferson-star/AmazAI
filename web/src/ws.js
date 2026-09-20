@@ -10,6 +10,9 @@ const URL = import.meta.env.VITE_WS_URL;
  */
 export function connect(onEvent, onStatus) {
   if (DEMO) return demoConnect(onEvent, onStatus);
+  // Nothing to connect to. Without this the client builds `undefined?token=`,
+  // throws, and reconnects on a backoff for the life of the tab.
+  if (!URL) return { send: () => {}, close: () => {} };
 
   let socket = null;
   let attempt = 0;

@@ -103,6 +103,25 @@
   100%    { transform: rotate(360deg) scale(.7); opacity: 0; }
 }
 
+/* ---------------------------------------------------------------- waiting */
+
+/* Slower and smaller than idle's float, and on a longer period, so it reads as
+   "settled, biding time" rather than "resting". The dots do the talking. */
+.cc-waiting .cc-stage { animation: cc-wait-lean 6s ease-in-out infinite; }
+.cc-waiting .cc-body  { animation: cc-breathe 5.2s ease-in-out infinite; transform-origin: 50px 56px; }
+.cc-wait circle { animation: cc-wait-dot 2.1s ease-in-out infinite; }
+.cc-wait .cc-wait-b { animation-delay: .3s; }
+.cc-wait .cc-wait-c { animation-delay: .6s; }
+
+@keyframes cc-wait-lean {
+  0%, 100% { transform: rotate(-2.5deg); }
+  50%      { transform: rotate(2.5deg) translateY(-1px); }
+}
+@keyframes cc-wait-dot {
+  0%, 60%, 100% { opacity: .22; }
+  30%           { opacity: 1; }
+}
+
 /* --------------------------------------------------------------- approval */
 
 /* Holds the token up and waits. Warm, patient, not urgent — the urgency
@@ -212,6 +231,8 @@
   .cc-working  .cc-chip  { opacity: 1; }
   .cc-working  .cc-chip-2 { transform: rotate(120deg); transform-origin: 50px 50px; }
   .cc-working  .cc-chip-3 { transform: rotate(240deg); transform-origin: 50px 50px; }
+  .cc-waiting  .cc-wait circle { opacity: .8; }
+  .cc-waiting  .cc-stage { transform: rotate(-4deg); }
   .cc-approval .cc-token { opacity: 1; }
   .cc-complete .cc-pop   { opacity: 1; }
   .cc-complete .cc-ring  { opacity: 0; }

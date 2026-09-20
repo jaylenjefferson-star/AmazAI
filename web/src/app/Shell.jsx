@@ -2,6 +2,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import AccountMenu from '../components/AccountMenu';
 import Icon from '../components/Icon';
 import Logo from '../components/Logo';
+import PresenceFeed from '../components/PresenceFeed';
 import Inbox from '../screens/Inbox';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 
@@ -24,7 +25,7 @@ import { useMediaQuery } from '../hooks/useMediaQuery';
  */
 const NAV = [
   { to: '/',           label: 'Inbox',      end: true, icon: 'inbox',   primary: true },
-  { to: '/connectors', label: 'Connectors', icon: 'plug',    primary: true },
+  { to: '/marketplace', label: 'Marketplace', icon: 'store', primary: true },
   { to: '/routines',   label: 'Routines',   icon: 'clock' },
   { to: '/artifacts',  label: 'Artifacts',  icon: 'layers' },
   { to: '/settings',   label: 'Settings',   icon: 'sliders', primary: true },
@@ -72,6 +73,7 @@ export default function Shell() {
 
   return (
     <div className="shell" data-focused={focused ? 'true' : undefined}>
+      <PresenceFeed />
       <header className="shell-top">
         <Logo size={24} title="AmazAI" />
         <span style={{ flex: 1 }} />
