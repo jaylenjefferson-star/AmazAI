@@ -40,13 +40,12 @@ const live = {
   deleteSharedMemory: (memId) => call('DELETE', `/memory/${memId}`),
   updateSharedMemory: (memId, changes) => call('PATCH', `/memory/${memId}`, changes),
 
-  connectorCatalog: () => call('GET', '/connectors/catalog'),
   connectorApps: (q, after) => call('GET', `/connectors/apps?limit=48${q ? `&q=${encodeURIComponent(q)}` : ''}${after ? `&after=${encodeURIComponent(after)}` : ''}`),
   connectors: () => call('GET', '/connectors'),
   connectorAccounts: (app) => call('GET', `/connectors/accounts${app ? `?app=${encodeURIComponent(app)}` : ''}`),
   connectToken: (connectorId) => call('POST', '/connectors/connect-token', { connectorId }),
-  installConnector: (connectorId, accountId, allowedTools) =>
-    call('POST', `/connectors/${encodeURIComponent(connectorId)}/install`, { accountId, allowedTools }),
+  installConnector: (connectorId) =>
+    call('POST', `/connectors/${encodeURIComponent(connectorId)}/install`, {}),
   revokeConnector: (connectorId) => call('DELETE', `/connectors/${encodeURIComponent(connectorId)}`),
 
   threads: () => call('GET', '/threads'),

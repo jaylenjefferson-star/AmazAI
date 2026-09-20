@@ -990,19 +990,41 @@ if (import.meta.env.DEV) {
     },
   });
 
-  // Connectors, enough for the Marketplace's Plugins tab to be reviewed. Nothing
-  // here connects to anything.
+  // Connectors, shaped like the real API (Composio). Nothing here reaches a real
+  // service: "connecting" just marks the app installed, so the flow can be reviewed.
+  const APPS = [
+    ['gmail', 'Gmail', 'Read, search and draft email.'],
+    ['googlecalendar', 'Google Calendar', 'See your schedule and find time.'],
+    ['slack', 'Slack', 'Read channels and post messages.'],
+    ['github', 'GitHub', 'Repositories, issues and pull requests.'],
+    ['notion', 'Notion', 'Pages and databases.'],
+    ['linear', 'Linear', 'Issues and projects.'],
+    ['googledrive', 'Google Drive', 'Find and read files.'],
+    ['hubspot', 'HubSpot', 'Contacts and deals.'],
+  ].map(([slug, name, description]) => ({ slug, name, description, logo: '', categories: [], toolsCount: null, noAuth: false }));
+  const installedApps = new Map();
   Object.assign(demoApi, {
-    connectorCatalog: async () => ({ catalog: [{
-      connectorId: 'pipedream:slack', app: 'slack', name: 'Slack',
-      description: 'Read channel history, and post messages with approval.', capability: 'write',
-      actions: [{ tool: 'slack.read', capability: 'read', summary: 'Read recent channel history' },
-                { tool: 'slack.post', capability: 'write', summary: 'Post a message' }] }] }),
-    connectorApps: async () => ({ apps: [], pageInfo: {} }),
-    connectors: async () => ({ connectors: [] }),
+    connectorApps: async (q) => {
+      const term = (q || '').toLowerCase();
+      return { apps: APPS.filter((a) => !term || a.name.toLowerCase().includes(term) || a.slug.includes(term)),
+               pageInfo: { end_cursor: '' } };
+    },
+    connectors: async () => ({ connectors: [...installedApps.values()] }),
     connectorAccounts: async () => ({ accounts: [] }),
-    connectToken: async () => { throw new Error('Demo mode does not connect real accounts.'); },
-    installConnector: async () => { throw new Error('Demo mode does not connect real accounts.'); },
+    connectToken: async () => ({ connectLinkUrl: 'about:blank', accountId: 'ca_demo' }),
+    installConnector: async (connectorId) => {
+      const slug = connectorId.replace(/^composio:/, '');
+      const app = APPS.find((a) => a.slug === slug);
+      if (!app) throw new Error('That app is not available.');
+      const row = { connectorId: `composio:${slug}`, app: slug, name: app.name, status: 'installed',
+                    capability: 'admin', allowedTools: ['*'], accountId: 'ca_demo' };
+      installedApps.set(row.connectorId, row);
+      return { ...row, grantedTo: [] };
+    },
+    revokeConnector: async (connectorId) => {
+      installedApps.delete(connectorId);
+      return { connectorId, revokedFrom: [] };
+    },
   });
 
   // A routine created in the console says so in that Bot's conversation.

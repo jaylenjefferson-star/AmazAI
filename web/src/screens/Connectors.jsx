@@ -1,199 +1,221 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 
 /**
- * Connector management is intentionally separate from agent grants. Connecting
- * an account gives the organisation a capability; an agent receives none of
- * it until it is explicitly granted on that companion's profile.
+ * Connect an app, then it is usable. There is no catalog to pick from: every app
+ * Composio offers is here, and connecting one makes it available to your Bots.
+ * What a Bot may *do* in it is decided per call on the server, so reads run and
+ * anything that changes data still asks first.
+ *
+ * The flow: Connect opens Composio's own sign-in page in a new tab (the
+ * credential never touches AmazAI). When you come back to this tab, or land here
+ * from the return link, we ask Composio whether the account is active and, if it
+ * is, install it. There is no separate "install" step for a person to find.
  */
-export default function Connectors({ embedded = false }) {
-  const [catalog, setCatalog] = useState([]);
-  const [apps, setApps] = useState([]);
-  const [appQuery, setAppQuery] = useState('');
-  const [nextCursor, setNextCursor] = useState('');
-  const [installed, setInstalled] = useState({});
-  const [accounts, setAccounts] = useState({});
-  const [busy, setBusy] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+const idFor = (slug) => `composio:${slug}`;
 
-  async function reload() {
-    setError('');
+function friendly(err, fallback) {
+  const text = String(err?.message || '');
+  // A transport failure ("Load failed", "Failed to fetch") is not something a
+  // person can act on; say what they can do.
+  if (!text || /load failed|failed to fetch|networkerror|network request/i.test(text)) return fallback;
+  return text;
+}
+
+export function AppLogo({ app, size = 40 }) {
+  const [broken, setBroken] = useState(false);
+  const initial = (app.name || app.slug || '?').trim().charAt(0).toUpperCase();
+  return app.logo && !broken
+    ? <img className="app-logo" src={app.logo} alt="" width={size} height={size}
+           loading="lazy" onError={() => setBroken(true)} />
+    : <span className="app-logo fallback" aria-hidden="true" style={{ width: size, height: size }}>{initial}</span>;
+}
+
+export default function Connectors({ embedded = false }) {
+  const [apps, setApps] = useState([]);
+  const [query, setQuery] = useState('');
+  const [cursor, setCursor] = useState('');
+  const [installed, setInstalled] = useState({});
+  const [pending, setPending] = useState({});     // slug -> true while a sign-in tab is open
+  const [busy, setBusy] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [problem, setProblem] = useState('');
+  const [notice, setNotice] = useState('');
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+
+  const load = useCallback(async (q) => {
     setLoading(true);
-    // Settled one by one, not Promise.all: the catalog is ours and needs no
-    // third party, so a slow or failing Pipedream call must not hide it.
-    const [available, appPage, current, accountRows] = await Promise.allSettled([
-      api.connectorCatalog(), api.connectorApps(appQuery), api.connectors(), api.connectorAccounts(),
-    ]);
-    const failed = [];
-    const ok = (r, label) => {
-      if (r.status === 'fulfilled') return r.value || {};
-      failed.push(`${label}: ${r.reason?.message || 'could not be loaded'}`);
-      return {};
-    };
-    const cat = ok(available, 'catalog');
-    const page = ok(appPage, 'apps');
-    const inst = ok(current, 'installed connectors');
-    const accts = ok(accountRows, 'connected accounts');
-    setCatalog(cat.catalog || []);
-    setApps(page.apps || []);
-    setNextCursor(page.pageInfo?.end_cursor || '');
-    setInstalled(Object.fromEntries((inst.connectors || []).map((c) => [c.connectorId, c])));
-    setAccounts(Object.fromEntries((accts.accounts || []).map((a) => [a.app, a])));
-    if (failed.length) setError(failed.join(' · '));
+    setProblem('');
+    // Settled apart: our own installed list needs no third party, so a slow
+    // Composio call must not hide it.
+    const [page, current] = await Promise.allSettled([api.connectorApps(q), api.connectors()]);
+    if (current.status === 'fulfilled') {
+      setInstalled(Object.fromEntries((current.value.connectors || []).map((c) => [c.connectorId, c])));
+    }
+    if (page.status === 'fulfilled') {
+      setApps(page.value.apps || []);
+      setCursor(page.value.pageInfo?.end_cursor || '');
+    } else {
+      setProblem(friendly(page.reason, 'Having trouble loading apps.'));
+    }
     setLoading(false);
-  }
+  }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => reload(), 250);
-    return () => clearTimeout(timer);
-  }, [appQuery]); // eslint-disable-line react-hooks/exhaustive-deps
+    const t = setTimeout(() => load(query), query ? 250 : 0);
+    return () => clearTimeout(t);
+  }, [query, load]);
 
-  async function connect(spec) {
-    setBusy(spec.connectorId);
-    setError('');
+  const finish = useCallback(async (slug) => {
+    // Composio is the authority on whether the person finished signing in.
+    setBusy(slug);
+    setProblem('');
     try {
-      const token = await api.connectToken(spec.connectorId);
-      const url = token.connectLinkUrl || token.connect_link_url || token.url;
-      if (!url) throw new Error('Pipedream did not return a Connect Link URL.');
-      window.open(url, '_blank', 'noopener,noreferrer');
+      const row = await api.installConnector(idFor(slug));
+      setPending((p) => ({ ...p, [slug]: false }));
+      setInstalled((cur) => ({ ...cur, [row.connectorId]: row }));
+      setNotice(`${row.name} is connected. Your Bots can use it now.`);
     } catch (err) {
-      setError(err.message || 'Could not start Pipedream Connect.');
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function install(spec) {
-    const account = accounts[spec.app];
-    if (!account) return connect(spec);
-    setBusy(spec.connectorId);
-    setError('');
-    try {
-      await api.installConnector(spec.connectorId, account.accountId,
-        spec.actions.map((action) => action.tool));
-      await reload();
-    } catch (err) {
-      setError(err.message || 'Could not install connector.');
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function revoke(spec) {
-    setBusy(spec.connectorId);
-    try {
-      await api.revokeConnector(spec.connectorId);
-      await reload();
-    } catch (err) {
-      setError(err.message || 'Could not revoke connector.');
-    } finally {
-      setBusy('');
-    }
-
-    async function connectApp(app) {
-      setBusy(app.slug);
-      setError('');
-      try {
-        const token = await api.connectToken(`pipedream:${app.slug}`);
-        const url = token.connectLinkUrl || token.connect_link_url || token.url;
-        if (!url) throw new Error('Pipedream did not return a Connect Link URL.');
-        window.open(url, '_blank', 'noopener,noreferrer');
-      } catch (err) {
-        setError(err.message || 'Could not start Pipedream Connect.');
-      } finally {
-        setBusy('');
+      if (/not_connected|not connected yet/i.test(String(err?.message))) {
+        setNotice('');   // still signing in; try again when they return
+      } else {
+        setProblem(friendly(err, "Couldn't finish connecting. Try again."));
       }
+    } finally {
+      setBusy('');
     }
+  }, []);
 
-    async function loadMoreApps() {
-      if (!nextCursor) return;
-      setBusy('more-apps');
-      try {
-        const page = await api.connectorApps(appQuery, nextCursor);
-        setApps((current) => [...current, ...(page.apps || [])]);
-        setNextCursor(page.pageInfo?.end_cursor || '');
-      } catch (err) {
-        setError(err.message || 'Could not load more apps.');
-      } finally {
-        setBusy('');
-      }
+  // Returning from Composio's sign-in tab: settle whatever is waiting.
+  useEffect(() => {
+    const back = () => Object.keys(pendingRef.current).filter((s) => pendingRef.current[s]).forEach(finish);
+    window.addEventListener('focus', back);
+    document.addEventListener('visibilitychange', back);
+    return () => {
+      window.removeEventListener('focus', back);
+      document.removeEventListener('visibilitychange', back);
+    };
+  }, [finish]);
+
+  // Landing here from Composio's return link.
+  useEffect(() => {
+    const slug = new URLSearchParams(window.location.search).get('connected');
+    if (slug && /^[a-z0-9_-]{1,64}$/.test(slug)) finish(slug);
+  }, [finish]);
+
+  async function connect(app) {
+    setBusy(app.slug);
+    setProblem('');
+    try {
+      const link = await api.connectToken(idFor(app.slug));
+      if (!link.connectLinkUrl) throw new Error('');
+      window.open(link.connectLinkUrl, '_blank', 'noopener,noreferrer');
+      setPending((p) => ({ ...p, [app.slug]: true }));
+    } catch (err) {
+      setProblem(friendly(err, `Couldn't start connecting ${app.name}. Try again.`));
+    } finally {
+      setBusy('');
     }
   }
+
+  async function remove(app) {
+    setBusy(app.slug);
+    try {
+      await api.revokeConnector(idFor(app.slug));
+      setInstalled((cur) => {
+        const next = { ...cur };
+        delete next[idFor(app.slug)];
+        return next;
+      });
+      setNotice(`${app.name} was removed from your Bots.`);
+    } catch (err) {
+      setProblem(friendly(err, `Couldn't remove ${app.name}. Try again.`));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function more() {
+    if (!cursor) return;
+    setBusy('more');
+    try {
+      const page = await api.connectorApps(query, cursor);
+      setApps((cur) => [...cur, ...(page.apps || [])]);
+      setCursor(page.pageInfo?.end_cursor || '');
+    } catch (err) {
+      setProblem(friendly(err, "Couldn't load more apps."));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  // Connected apps float to the top, in the order they were added.
+  const mine = Object.values(installed).map((c) => ({ slug: c.app, name: c.name, logo: '', description: '', connected: true }));
+  const shown = [
+    ...mine.filter((m) => !query || m.name.toLowerCase().includes(query.toLowerCase())),
+    ...apps.filter((a) => !installed[idFor(a.slug)]),
+  ];
 
   return (
-    // Embedded (in the Marketplace) the page frame and heading belong to the
-    // host; standing alone at /connectors it keeps its own.
-    <div className={embedded ? undefined : 'page'}>
-      {embedded ? (
-        <div className="mk-bar"><h3 className="mk-h">Connect a tool</h3>
-          <button className="btn-link" onClick={reload} disabled={Boolean(busy)}>Refresh</button></div>
-      ) : (
+    <div className={embedded ? 'tools' : 'page tools'}>
+      {!embedded && (
         <header className="page-head">
-          <div><h1>Connectors</h1><p>Browse 1,000+ apps through Pipedream. Connecting an app does not grant it to any companion.</p></div>
-          <button className="btn-link" onClick={reload} disabled={Boolean(busy)}>Refresh</button>
+          <div>
+            <h1>Connect a tool</h1>
+            <p>Connect an app and your Bots can use it. Reading runs on its own; anything that changes something asks you first.</p>
+          </div>
         </header>
       )}
-      {error && <div className="empty"><strong>Connector setup needs attention</strong><span>{error}</span></div>}
-      <section className="section-block">
-        <div className="section-label">Available apps</div>
-        <input
-          className="text-input"
-          value={appQuery}
-          onChange={(event) => setAppQuery(event.target.value)}
-          placeholder="Search apps, for example Google Drive or GitHub"
-          aria-label="Search available apps"
-        />
-        <div className="row-list">
-          {apps.map((app) => (
-            <article className="row-card" key={app.slug}>
-              {app.icon ? <img className="artifact-glyph" src={app.icon} alt="" /> : <span className="artifact-glyph" aria-hidden="true">⌁</span>}
-              <div className="row-body">
-                <strong>{app.name}</strong>
-                <span>{app.description || 'Connect this app through Pipedream.'}</span>
-                {app.categories?.length > 0 && <span>{app.categories.slice(0, 3).join(' · ')}</span>}
-              </div>
-              <button className="primary" disabled={busy === app.slug} onClick={() => connectApp(app)}>
-                Connect with Pipedream
-              </button>
-            </article>
-          ))}
+
+      <input className="tools-search" type="search" placeholder="Search apps, like Gmail or GitHub"
+             aria-label="Search apps" value={query} onChange={(e) => setQuery(e.target.value)} />
+
+      {notice && <div className="tools-note" role="status">{notice}</div>}
+      {problem && (
+        <div className="tools-problem" role="alert">
+          <span>{problem}</span>
+          <button type="button" className="ghost sm" onClick={() => load(query)}>Retry</button>
         </div>
-        {!apps.length && loading && <div className="empty">Loading apps…</div>}
-        {!apps.length && !loading && !error && <div className="empty">No matching apps found.</div>}
-        {nextCursor && <button className="ghost" disabled={busy === 'more-apps'} onClick={loadMoreApps}>Load more apps</button>}
-      </section>
-      <div className="section-label">Agent-enabled connectors</div>
-      <div className="row-list">
-        {catalog.map((spec) => {
-          const current = installed[spec.connectorId];
-          const account = accounts[spec.app];
-          return (
-            <article className="row-card" key={spec.connectorId}>
-              <span className="artifact-glyph" aria-hidden="true">⌁</span>
-              <div className="row-body">
-                <strong>{spec.name}</strong>
-                <span>{spec.description}</span>
-                <span>{spec.actions.map((a) => a.tool).join(' · ')}</span>
-              </div>
-              <div style={{ display: 'grid', gap: 8, justifyItems: 'end' }}>
-                {current ? <>
-                  <span className="state-chip cc-tone-ok"><i className="cc-dot" aria-hidden="true" />Installed</span>
-                  <button className="ghost sm" disabled={busy === spec.connectorId} onClick={() => revoke(spec)}>Revoke</button>
-                </> : <>
-                  {account && <span className="state-chip cc-tone-neutral"><i className="cc-dot" aria-hidden="true" />Account connected</span>}
-                  <button className="primary" disabled={busy === spec.connectorId} onClick={() => install(spec)}>
-                    {account ? 'Install for AmazAI' : 'Connect with Pipedream'}
-                  </button>
-                </>}
-              </div>
-            </article>
-          );
-        })}
-      </div>
-      {!catalog.length && loading && <div className="empty">Loading your connector catalog…</div>}
-      {!catalog.length && !loading && !error && <div className="empty">No connectors are available yet.</div>}
-      <p className="hint-text">Connecting an account does not grant it to every agent. Grant access from an agent’s setup, and write or destructive actions still require approval.</p>
+      )}
+
+      {loading && !shown.length ? (
+        <div className="tools-list" aria-busy="true" aria-label="Loading apps">
+          {Array.from({ length: 6 }, (_, i) => <div className="tool-row skeleton" key={i} />)}
+        </div>
+      ) : (
+        <ul className="tools-list">
+          {shown.map((app) => {
+            const on = !!installed[idFor(app.slug)] || app.connected;
+            const waiting = pending[app.slug];
+            return (
+              <li className="tool-row" key={app.slug}>
+                <AppLogo app={app} />
+                <div className="tool-text">
+                  <strong>{app.name}</strong>
+                  <span>{on ? 'Connected. Your Bots can use it.'
+                    : waiting ? 'Finish signing in, then come back here.'
+                    : (app.description || 'Connect to use it with your Bots.')}</span>
+                </div>
+                {on
+                  ? <button type="button" className="ghost sm" disabled={busy === app.slug} onClick={() => remove(app)}>Remove</button>
+                  : waiting
+                    ? <button type="button" className="primary sm" disabled={busy === app.slug} onClick={() => finish(app.slug)}>I&apos;m done</button>
+                    : <button type="button" className="primary sm" disabled={busy === app.slug} onClick={() => connect(app)}>Connect</button>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {!loading && !problem && !shown.length && (
+        <div className="tools-empty">No apps match &ldquo;{query}&rdquo;.</div>
+      )}
+      {cursor && !loading && (
+        <button type="button" className="ghost tools-more" disabled={busy === 'more'} onClick={more}>
+          {busy === 'more' ? 'Loading…' : 'Show more apps'}
+        </button>
+      )}
     </div>
   );
 }

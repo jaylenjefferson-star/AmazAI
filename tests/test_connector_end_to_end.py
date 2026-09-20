@@ -1,148 +1,100 @@
-"""One connector, walked end to end.
+"""One app, walked end to end.
 
-Everything except the network hop to Pipedream is the real code path: the
-real handler, the real store, the real catalog, the real policy engine, the
-real router. Only `Pipedream.proxy` is stubbed, because the live leg needs an
-OAuth client this repository deliberately does not contain.
+Everything except the network hop to Composio is the real code path: the real
+handler, the real store, the real client, the real policy engine, and the
+orchestrator's own `_handle_tool` -- the gate a model actually meets. Only the
+transport under the Composio client is scripted, because the live leg needs a
+project key this repository deliberately does not contain.
 
-The test is written as a narrative because the claim it defends is a sequence
-rather than a property: four gates, each of which narrows, and a write that
-stops for a human at the end.
+Written as a narrative because the claim it defends is a sequence rather than a
+property: connect, use, be stopped at the write, be revoked.
 """
 
 import json
 
-import pytest
-
-from amazai import connectors as C, keys as K, policy, router
+from amazai import approvals, connectors as C, keys as K, review
 from amazai.policy import Capability
 from amazai.store import Store
 
+from tests.fake_composio import DELETE, READ, WRITE, FakeTransport
+from tests.loop_world import POST, SLACK, World, world  # noqa: F401
 from tests.test_agents_api import api_table, call  # noqa: F401
 
-SLACK = "pipedream:slack"
 
-ANALYST = {
-    "name": "Comms Analyst",
-    "role": "Reads channel history and drafts replies.",
-    "modelTier": "balanced",
-    "avatar": {"shape": "cloud", "color": "#12a594"},
-    "budget": {"perRunUsd": 1.0, "perMonthUsd": 10.0},
-}
-
-
-class RecordingProxy:
-    def __init__(self):
-        self.calls = []
-
-    def proxy(self, **kwargs):
-        self.calls.append(kwargs)
-        return {"ok": True, "messages": [{"text": "ship it"}]}
-
-
-class TestOneConnectorEndToEnd:
-    def test_the_whole_path(self, api_table):
+class TestOneAppEndToEnd:
+    def test_the_whole_path(self, api_table, monkeypatch):
         store = Store("owner-a", table=api_table)
 
-        # 1 — Nothing is installed, so nothing is grantable. An agent created
-        #     now has no outside access at all.
-        assert call("GET", "/agents/options")[1]["connectors"] == []
+        # 1 -- Nothing is connected. A Bot made now has no outside access, and
+        #      says so instead of pretending.
+        w = World(api_table, monkeypatch, connected=set(), install=False)
         assert call("GET", "/connectors")[1]["connectors"] == []
+        assert w.search("post a message")["tools"] == []
 
-        # The catalog is still readable: you can see what *could* be installed
-        # without holding any of it.
-        catalog = call("GET", "/connectors/catalog")[1]["catalog"]
-        assert [c["connectorId"] for c in catalog] == [SLACK]
+        # 2 -- The person signs in to Slack on Composio's hosted page. We get a
+        #      link, never a credential.
+        _, link = call("POST", "/connectors/connect-token", {"connectorId": "slack"})
+        assert link["connectLinkUrl"].startswith("https://connect.composio.dev/")
+        assert call("POST", f"/connectors/{SLACK}/install", {})[0] == 409   # not signed in yet
 
-        # 2 — The organization installs Slack. The account id is a Pipedream
-        #     reference; no credential is written.
-        status, install = call("POST", f"/connectors/{SLACK}/install",
-                               {"accountId": "apn_live123"})
-        assert status == 201
-        assert "secret" not in json.dumps(install).lower()
-        assert install["accountId"] == "apn_live123"
+        # 3 -- They finish signing in. Composio now reports an ACTIVE account, and
+        #      only then is Slack installed -- and granted to the Bot that exists.
+        w.transport.connected.add("slack")
+        status, install = call("POST", f"/connectors/{SLACK}/install", {})
+        assert status == 201 and w.agent_id in install["grantedTo"]
+        assert "secret" not in json.dumps(install).lower() and install["accountId"] == "ca_slack"
 
-        # 3 — An agent is created holding a strict subset: read, not post.
-        status, agent = call("POST", "/agents", dict(
-            ANALYST, grants=[{"connectorId": SLACK, "allowedTools": ["slack.read"]}]))
-        assert status == 201
-        agent_id = agent["agentId"]
+        # 4 -- Restrict this Bot to reading. The write is not merely refused; it
+        #      is absent from what the Bot is shown.
+        store.put(C.grant_row(w.agent_id, SLACK, actor_user_id="owner-a", capability=Capability.READ))
+        shown = {t["tool"] for t in w.search("slack")["tools"]}
+        assert shown == {READ}
 
-        # 4 — Resolution. slack.read is in the schema the model will see.
-        #     slack.post is not — not refused, absent.
-        grants = C.router_grants(store, agent_id)
-        resolution = router.resolve_tools(router.ResolutionInput(
-            agent_allowed_tools=frozenset(agent["allowedTools"]), grants=grants))
+        # 5 -- The read runs, as the person, against their account reference.
+        assert w.use(READ, {"channel": "C123"})["pause"] is False
+        assert w.executed[0]["body"]["user_id"] == "owner-a"
+        assert w.executed[0]["body"]["connected_account_id"] == "ca_slack"
+        assert w.last["review"]["rule"] == "read"
 
-        assert "slack.read" in resolution.tools
-        assert "slack.post" not in resolution.tools
-        assert router.may_call("slack.post", resolution) is False
+        # 6 -- The write is refused by the ceiling; nothing left the building.
+        blocked = w.use(WRITE, POST, tool_use_id="tu-2")
+        assert "read-only" in blocked["toolResult"]["error"]
+        assert len(w.executed) == 1
 
-        # 5 — The read runs. It is READ capability, so no approval is needed,
-        #     and it goes out through the proxy with an account reference
-        #     rather than a token.
-        assert policy.evaluate("slack.read", Capability.READ).required is False
+        # 7 -- The owner widens the Bot to the whole app. The write now stops for a
+        #      person, and only that exact call runs once approved.
+        store.put(C.grant_row(w.agent_id, SLACK, actor_user_id="owner-a"))
+        held = w.use(WRITE, POST, tool_use_id="tu-3")
+        assert held["pause"] is True and len(w.executed) == 1
+        w.approve(held["approval"])
+        assert w.use(WRITE, POST, tool_use_id="tu-4")["pause"] is False
+        assert w.last["review"]["rule"] == "approved" and len(w.executed) == 2
+        assert w.use(WRITE, POST, tool_use_id="tu-5")["pause"] is True   # spent
 
-        client = RecordingProxy()
-        result = C.invoke(store, client, agent_id=agent_id, tool="slack.read",
-                          arguments={"channel": "C123", "limit": 10},
-                          grants=grants, run_id="run-1")
+        # 8 -- A destructive tool asks even if the owner pre-approved it.
+        w.agent = {**w.agent, "preapproved": [DELETE]}
+        assert w.use(DELETE, {"channel": "C1", "ts": "1"}, tool_use_id="tu-6")["pause"] is True
 
-        assert result["messages"] == [{"text": "ship it"}]
-        sent = client.calls[0]
-        assert sent["account_id"] == "apn_live123"
-        assert sent["target_url"] == "https://slack.com/api/conversations.history"
-        assert sent["body"] == {"channel": "C123", "limit": 10}
-
-        # 6 — The write is refused, because this agent was never granted it.
-        with pytest.raises(C.NotGranted):
-            C.invoke(store, client, agent_id=agent_id, tool="slack.post",
-                     arguments={"channel": "C123", "text": "hello"},
-                     grants=grants, run_id="run-1")
-        assert len(client.calls) == 1
-
-        # 7 — Even granted, the write stops for a person. slack.post is on the
-        #     always-approve floor, which no grant and no pre-approval clears.
-        call("PATCH", f"/agents/{agent_id}", {"preapproved": ["slack.post"]})
-        decision = policy.evaluate("slack.post", Capability.WRITE,
-                                   preapproved={"slack.post"})
-        assert decision.required is True
-        assert "always-approve floor" in decision.reason
-
-        # 8 — Revoking the connector empties the next schema immediately.
+        # 9 -- Revoking removes it from the very next call.
         call("DELETE", f"/connectors/{SLACK}")
+        assert C.granted_apps(store, w.agent_id) == []
+        gone = w.use(READ, {"channel": "C123"}, tool_use_id="tu-7")
+        assert "not connected" in gone["toolResult"]["error"]
+        assert len(w.executed) == 2
 
-        after = C.router_grants(store, agent_id)
-        assert after == []
-        assert router.resolve_tools(router.ResolutionInput(
-            agent_allowed_tools=frozenset(agent["allowedTools"]),
-            grants=after)).connector_tools == ()
+        # 10 -- And the sequence is on the record, with no arguments in it.
+        log = store.query(K.connector_pk(SLACK), sk_prefix="LOG#")
+        actions = [e["action"] for e in log]
+        assert actions[0] == "connector.authorization_started"
+        assert actions.count("connector.invoked") == 2
+        assert actions[-1] == "connector.revoked" and "connector.installed" in actions
+        assert "Shipped." not in json.dumps(log)
 
-        # 9 — And the whole sequence is on the record.
-        log = [e["action"] for e in
-               store.query(K.connector_pk(SLACK), sk_prefix="LOG#")]
-        assert log == ["connector.installed", "connector.invoked",
-                       "connector.revoked"]
-
-    def test_a_revoke_mid_run_stops_the_very_next_call(self, api_table):
-        """Not just the next run. The orchestrator re-reads grants before each
-        connector call, so a revoke lands between two tool calls."""
-        store = Store("owner-a", table=api_table)
-        call("POST", f"/connectors/{SLACK}/install", {"accountId": "apn_live123"})
-        _, agent = call("POST", "/agents", dict(
-            ANALYST, grants=[{"connectorId": SLACK, "allowedTools": ["slack.read"]}]))
-        agent_id = agent["agentId"]
-
-        client = RecordingProxy()
-        C.invoke(store, client, agent_id=agent_id, tool="slack.read",
-                 arguments={"channel": "C1"},
-                 grants=C.router_grants(store, agent_id))
-        assert len(client.calls) == 1
-
-        call("DELETE", f"/connectors/{SLACK}")
-
-        with pytest.raises(C.NotGranted):
-            C.invoke(store, client, agent_id=agent_id, tool="slack.read",
-                     arguments={"channel": "C1"},
-                     grants=C.router_grants(store, agent_id))
-        assert len(client.calls) == 1
+    def test_a_failing_provider_call_is_a_clear_error_and_leaves_a_log_id(self, api_table, monkeypatch):
+        w = World(api_table, monkeypatch)
+        w.transport.fail[READ] = "not_in_channel"
+        out = w.use(READ, {"channel": "C1"})
+        assert "not_in_channel" in out["toolResult"]["error"]
+        log = w.store.query(K.connector_pk(SLACK), sk_prefix="LOG#")
+        failed = [e for e in log if e["action"] == "connector.invocation_failed"]
+        assert failed and "log_failed" in failed[0]["detail"]

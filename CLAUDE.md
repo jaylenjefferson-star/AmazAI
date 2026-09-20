@@ -28,7 +28,7 @@ exists because the code reads its own `...Z` timestamps with
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest                 # 625 tests
+.venv/bin/python -m pytest                 # 695 tests
 cd infra && npm install && npx cdk synth   # 72 resources
 cd web   && npm install && npm run build
 ```
@@ -58,7 +58,7 @@ this one; run `npx vite --port 5174` instead of assuming your edits are live.
 | 5 · Console | conversation-first inbox and chat, light + dark, builds clean |
 | 2 · Seat provisioning | needs a deploy first |
 | 6 · Agent CRUD + Create-a-Bot | written, never run against AWS |
-| 7 · Connectors (Pipedream) | written; live leg needs the OAuth client |
+| 7 · Connectors (Composio) | written, tested; any app can be connected, gated per call. Live leg needs the `amazai/composio` key: see [connectors](docs/connectors.md) |
 | 8 · First Bot, greeting, roster, presence | written, tested; see [18](docs/architecture/18-first-bot-and-presence.md). **Needs a backend deploy** for `entrypoint`, `title`, thread previews and pins |
 | 9 · Composer, Auto Review, the closed loop | written, tested; see [19](docs/architecture/19-composer-review-and-the-loop.md). Connector writes are now gated **in code**. D4 isolated behind `continuation.py`; live test: `scripts/spike_d4.py` |
 
@@ -95,20 +95,19 @@ sentence explaining it (now flushed in order).
 
 ## Connectors
 
-A Pipedream app becomes an AmazAI connector; Pipedream is a way to reach an
-API and a place for its OAuth token to live, never a second place where
-permission is decided. Full reasoning in `docs/connectors.md`.
+A Composio app becomes an AmazAI connector; Composio is a way to reach an app and a
+place for its OAuth token to live, never a second place where permission is decided.
+There is **no allowlist of apps** -- any app can be connected -- but every *call* is
+classified from the tool's own tags and gated in code (`docs/connectors.md`).
 
-    catalog -> org install -> agent grant -> router.resolve_tools -> schema
+    connect -> org install -> per-Bot grant -> connector_search / connector_call
+                                                 -> policy.evaluate -> Composio
 
-The third party's token never enters this process: calls go through the
-Connect proxy with an account reference and Pipedream injects the credential
-on its side. The one credential AmazAI holds is the Pipedream OAuth client,
-in Secrets Manager, readable by three Lambdas.
-
-The proof-of-concept connector is Slack, chosen because its two actions sit on
-opposite sides of the approval boundary — `slack.read` flows, `slack.post` is
-on the always-approve floor and cannot be pre-approved away.
+The model reaches apps through two fixed inline tools, not per-tool schemas, and
+Composio's own session meta tools (execute-anything, remote bash) are never exposed.
+The third party's token never enters this process. The one credential AmazAI holds is
+the Composio project key, in Secrets Manager (`amazai/composio`), readable by three
+Lambdas. Check it with `scripts/check_composio.py`.
 
 ## Layout
 

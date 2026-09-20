@@ -2592,3 +2592,20 @@ a.row-card:hover { border-color: var(--btn-line); }
   .cmp { padding-inline: 10px; }
   .cmp-stop { padding: 0 10px; }
 }
+
+/* ------------------------------------------------------------- tools (connect an app) */
+.tools-search { width: 100%; margin: 0 0 12px; }
+.tools-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.tool-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; min-height: 60px; }
+.tool-row.skeleton { border-radius: 12px; background: var(--hover); animation: tool-pulse 1.4s ease-in-out infinite; }
+@keyframes tool-pulse { 50% { opacity: .55; } }
+.tool-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.tool-text strong { font-size: 16px; font-weight: 600; }
+.tool-text span { font-size: 13.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-logo { border-radius: 10px; object-fit: contain; flex: none; background: var(--hover); }
+.app-logo.fallback { display: inline-grid; place-items: center; font-weight: 650; color: var(--dim); }
+.tools-note, .tools-problem, .tools-empty { font-size: 14px; padding: 10px 12px; border-radius: 12px; margin: 0 0 10px; }
+.tools-note { background: var(--accent-wash); }
+.tools-problem { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--danger-wash); color: var(--danger); }
+.tools-empty { color: var(--dim); text-align: center; }
+.tools-more { width: 100%; margin-top: 8px; }

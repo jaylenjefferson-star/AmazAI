@@ -22,7 +22,7 @@ import boto3
 
 from dataclasses import dataclass, field
 
-from amazai import (agentcore, agents as A, approvals, collab, connectors,
+from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
                     continuation, cost, keys as K, memory, policy, redact, review,
                     router, routines, runs, skills, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
@@ -156,10 +156,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # trusted as written. A grant row that outlived its install — a revoke
     # that raced this read, a restored backup — contributes nothing, so
     # revoking a connector removes its tools from the next schema built.
-    grants = connectors.router_grants(store, run["agentId"])
+    # Connector tools are not in this list. They are not declared one by one:
+    # the model reaches them through connector_search / connector_call, and what
+    # it may reach is decided per call from the Bot's grants (see connectors.py).
     resolution = router.resolve_tools(router.ResolutionInput(
         agent_allowed_tools=frozenset(agent.get("allowedTools", [])),
-        grants=grants,
+        grants=[],
         connector_covers_outcome=bool(run.get("connectorCoversOutcome")),
     ))
 
@@ -194,6 +196,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     system_prompt = agentcore.build_system_prompt(agent, memories, skills=assigned_skills,
                                                   opening=opening)
     system_prompt += _request_notes(run, agent, thread)
+    system_prompt += _connected_apps_note(store, run["agentId"])
 
 
     run = runs.advance(store, run, RunState.PLANNING) if run["state"] == RunState.QUEUED.value else run
@@ -379,6 +382,22 @@ def _request_notes(run: dict, agent: dict, thread: dict) -> str:
     return "\n\n## This request\n" + "\n".join(f"- {n}" for n in notes)
 
 
+def _connected_apps_note(store: Store, agent_id: str) -> str:
+    """Which apps this Bot holds, so it knows to look before it says it cannot.
+
+    Guidance, not enforcement: naming an app here grants nothing, and leaving one
+    out hides nothing that connector_search would not also hide.
+    """
+    apps = sorted({g.slug for g in connectors.granted_apps(store, agent_id)})
+    if not apps:
+        return ""
+    return ("\n\n## Connected apps\n"
+            f"You have access to: {', '.join(apps)}. Use connector_search to find what "
+            "you can do in them, then connector_call to do it. Reading runs at once; "
+            "anything that creates, changes or removes data waits for the operator's "
+            "approval. For an app not listed, use request_connector.")
+
+
 def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
                  turn: Turn | None = None) -> dict:
     """Answer an inline function call, or record an in-harness tool call.
@@ -561,23 +580,24 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
     # run carries on -- and because it carries on, the model is told to make
     # these its last action, after the result they follow.
     if name == "request_connector":
-        connector_id = (args.get("connectorId") or "").strip()
-        spec = connectors.CATALOG.get(connector_id)
-        if spec is None:
-            ev.error(seq, "terminal", f"request_connector: no such connector {connector_id!r}")
-            _step(push, run, turn, "request_connector", f"unknown connector {connector_id!r}",
+        try:
+            slug = connectors.slug_of(args.get("connectorId") or "")
+            app = _composio_client().toolkit(slug)
+        except (connectors.UnknownConnector, composio.ComposioError) as exc:
+            ev.error(seq, "terminal", f"request_connector: {exc}")
+            _step(push, run, turn, "request_connector", f"no such app {args.get('connectorId')!r}",
                   review.Review(review.DENIED, "unknown_connector",
-                                "that connector is not in the catalog", connector_id))
-            return {"pause": False}
-        granted = {g.connector_id for g in connectors.router_grants(store, run["agentId"])}
-        if connector_id in granted:
-            _step(push, run, turn, "request_connector", f"{spec.name} is already connected",
+                                "that app is not one Composio offers", str(args.get("connectorId", ""))))
+            return {"pause": False, "toolResult": {"error": "that app is not available"}}
+        cid = connectors.connector_id(slug)
+        if any(g.connector_id == cid for g in connectors.granted_apps(store, run["agentId"])):
+            _step(push, run, turn, "request_connector", f"{app['name']} is already connected",
                   review.scoped("proposal", "already connected and granted; nothing to ask for"))
             return {"pause": False}
-        turn.cards.append({"type": "connect", "connectorId": connector_id, "name": spec.name,
+        turn.cards.append({"type": "connect", "connectorId": cid, "name": app["name"],
                            "why": (args.get("why") or "")[:200]})
-        ev.action(seq, "request_connector", f"asked to connect {spec.name}")
-        _step(push, run, turn, "request_connector", f"asked you to connect {spec.name}",
+        ev.action(seq, "request_connector", f"asked to connect {app['name']}")
+        _step(push, run, turn, "request_connector", f"asked you to connect {app['name']}",
               review.scoped("proposal", "a suggestion; nothing is connected until you do it"))
         return {"pause": False}
 
@@ -595,7 +615,13 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
               review.scoped("proposal", "a suggestion; you review it before it exists"))
         return {"pause": False}
 
-    # --- in-harness tool, or a connector tool we execute ----------------------
+    # --- connector tools ------------------------------------------------------
+    if name == "connector_search":
+        return _connector_search(store, run, ev, push, turn, seq, args)
+    if name == "connector_call":
+        return _connector_call(store, run, ev, push, turn, parsed, seq, cost, args, preapproved)
+
+    # --- in-harness tool --------------------------------------------------------
     if not router.may_call(name, resolution):
         # Should be unreachable: unresolved tools are absent from the schema.
         ev.error(seq, "terminal", f"{name} called without a grant")
@@ -604,76 +630,152 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
 
     safe_args, redacted = redact.redact(args)
     summary = _summarise(name, safe_args)
-    is_connector = _is_connector_tool(name, resolution)
     verdict = review.sandbox(name)
-
-    if is_connector:
-        # The gate. `connectors.invoke` documents that `policy.evaluate` has
-        # already run by the time it is called; until this branch existed, it
-        # had not -- a connector write on the always-approve floor ran if the
-        # model simply did not call `request_approval` first. Enforcement is
-        # code, never prompt: the decision is made here, from the tool's own
-        # declared capability, whatever the model did or did not ask for.
-        live_grants = connectors.router_grants(store, run["agentId"])
-        try:
-            _spec, action = connectors.action_for(name, live_grants)
-            decision = policy.evaluate(name, action.capability, preapproved=preapproved)
-        except policy.Refused as exc:
-            ev.error(seq, "terminal", str(exc))
-            _step(push, run, turn, name, f"refused: {exc}", review.refused(exc))
-            return {"pause": False, "toolResult": {"error": str(exc)}}
-        except Exception as exc:  # noqa: BLE001
-            ev.error(seq, "retryable", f"{name} failed: {type(exc).__name__}")
-            _step(push, run, turn, name, f"failed: {type(exc).__name__}", review.ungranted(name))
-            return {"pause": False, "toolResult": {"error": f"{name} failed: {exc}"}}
-
-        if decision.required:
-            granted = approvals.find_grant(store, run["pk"], name, args)
-            if granted and approvals.consume(store, granted):
-                verdict = review.approved(granted["approvalId"])
-            else:
-                approval = approvals.request(
-                    store, run, action=name, arguments=args,
-                    why=f"{name} needs your approval ({decision.reason})",
-                    capability=action.capability, tool_use_id=parsed.tool_use_id,
-                    tool_name=name, tool_input=args,
-                    reversible=None, decision=decision,
-                )
-                ev.action(seq, name, "held for approval before running",
-                          approvalId=approval["approvalId"])
-                _step(push, run, turn, name, "waiting for your approval",
-                      review.from_decision(decision))
-                return {"pause": True, "approval": approval}
-        else:
-            verdict = review.from_decision(decision)
-
     runs.record_event(store, run, seq, "tool", tool=name, args=safe_args,
                       redactions=redacted, review=verdict.to_dict())
     ev.action(seq, name, summary, redactions=redacted, review=verdict.to_dict())
     cost.add_connector(name.split(".")[0], calls=1)
     _step(push, run, turn, name, summary, verdict)
-
-    # A connector tool is executed here, through the Pipedream proxy, rather
-    # than inside the harness. The proxy injects the third party's credential
-    # on its side, so the token never enters this process and cannot reach
-    # model context. The gate above is what decided this call was allowed.
-    if is_connector:
-        try:
-            # Re-read the grants here rather than reusing the ones resolution
-            # was built from. A revoke that lands mid-run is then honoured on
-            # the very next tool call, not only on the next run.
-            live_grants = connectors.router_grants(store, run["agentId"])
-            result = connectors.invoke(
-                store, _pipedream_client(), agent_id=run["agentId"], tool=name,
-                arguments=args, grants=live_grants, run_id=run["runId"])
-        except Exception as exc:  # noqa: BLE001
-            ev.error(seq, "retryable", f"{name} failed: {type(exc).__name__}")
-            return {"pause": False, "toolResult": {
-                "error": f"{name} failed: {exc}"}}
-        return {"pause": False, "toolResult": redact.redact(result)[0]}
     store.update(run["pk"], "META",
                  {"toolCallCount": run.get("toolCallCount", 0) + 1})
     return {"pause": False}
+
+
+#: Words a model can act on, in place of an enum it would have to look up.
+_EFFECT = {"read": "reads only", "write": "changes data", "cost": "spends money",
+           "destructive": "removes data", "admin": "changes settings"}
+
+
+def _compact_schema(schema: dict) -> dict:
+    """A tool's inputs, small enough to put in front of a model many at a time."""
+    props = (schema or {}).get("properties") or {}
+    out = {}
+    for key, spec in list(props.items())[:14]:
+        kind = spec.get("type", "any") if isinstance(spec, dict) else "any"
+        text = (spec.get("description") or "") if isinstance(spec, dict) else ""
+        out[key] = f"{kind} - {text[:90]}" if text else str(kind)
+    return {"required": [r for r in ((schema or {}).get("required") or []) if r in props][:14],
+            "properties": out}
+
+
+def _connector_search(store, run, ev, push, turn, seq, args) -> dict:
+    """List what this Bot may do in the apps it holds. Runs nothing.
+
+    What comes back is already narrowed by the grant: an app the Bot was not
+    given, and a tool above its ceiling, are not shown -- absent, not refused.
+    """
+    query = (args.get("query") or "").strip()[:200]
+    only = (args.get("app") or "").strip().lower().removeprefix(connectors.PREFIX)
+    verdict = review.scoped("connector", "lists what this Bot may use; runs nothing")
+
+    granted = [g for g in connectors.granted_apps(store, run["agentId"])
+               if not only or g.slug == only]
+    if not granted:
+        _step(push, run, turn, "connector_search", "no connected app matches", verdict)
+        return {"pause": False, "toolResult": {
+            "tools": [],
+            "note": "No connected app matches. Say what you can do without one, and "
+                    "use request_connector if the operator should connect it."}}
+
+    client = _composio_client()
+    found: list[dict] = []
+    try:
+        for g in granted[:8]:
+            for t in client.tools(g.slug, query=query or None, limit=6):
+                capability = Capability(t["capability"])
+                try:
+                    connectors.authorize([g], toolkit_slug=g.slug, tool=t["tool"],
+                                         capability=capability)
+                except connectors.NotGranted:
+                    continue
+                found.append({"tool": t["tool"], "app": g.slug,
+                              "does": t["description"][:240],
+                              "effect": _EFFECT.get(capability.value, capability.value),
+                              "inputs": _compact_schema(t["inputSchema"])})
+    except composio.ComposioError as exc:
+        ev.error(seq, "retryable", f"connector_search failed: {exc}")
+        _step(push, run, turn, "connector_search", "could not search", verdict)
+        return {"pause": False, "toolResult": {"error": f"search failed: {exc}"}}
+
+    apps = ", ".join(sorted({g.slug for g in granted}))
+    ev.action(seq, "connector_search", f"searched {apps}: {query}"[:160])
+    _step(push, run, turn, "connector_search", f"searched {apps}"[:160], verdict)
+    return {"pause": False, "toolResult": {"tools": found[:20]}}
+
+
+def _connector_call(store, run, ev, push, turn, parsed, seq, cost, args, preapproved) -> dict:
+    """Run one Composio tool for a Bot -- the gate, then the call.
+
+    The order is the point. The tool is looked up and classified from Composio's
+    own tags (the model does not get to say what it does), checked against the
+    Bot's grant, and put through `policy.evaluate`; only a call that survives all
+    three reaches Composio. Enforcement is code, never prompt: a Bot that skips
+    `request_approval` and calls a write directly is stopped here all the same.
+    """
+    slug = (args.get("tool") or "").strip()
+    arguments = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
+    client = _composio_client()
+
+    try:
+        meta = client.tool(slug)
+        capability = Capability(meta["capability"])
+        grant = connectors.authorize(connectors.granted_apps(store, run["agentId"]),
+                                     toolkit_slug=meta["toolkit"], tool=slug,
+                                     capability=capability)
+        decision = policy.evaluate(slug, capability, preapproved=preapproved)
+    except policy.Refused as exc:
+        ev.error(seq, "terminal", str(exc))
+        _step(push, run, turn, slug, f"refused: {exc}", review.refused(exc))
+        return {"pause": False, "toolResult": {"error": str(exc)}}
+    except connectors.NotGranted as exc:
+        ev.error(seq, "terminal", str(exc))
+        _step(push, run, turn, slug or "connector_call", f"not allowed: {exc}",
+              review.Review(review.DENIED, "no_grant", str(exc), slug))
+        return {"pause": False, "toolResult": {"error": str(exc)}}
+    except composio.ComposioError as exc:
+        ev.error(seq, "retryable", f"{slug or 'connector_call'} lookup failed: {exc}")
+        _step(push, run, turn, slug or "connector_call", "could not look that tool up",
+              review.ungranted(slug or "that tool"))
+        return {"pause": False, "toolResult": {"error": f"could not look up {slug}: {exc}"}}
+
+    verdict = review.from_decision(decision)
+    if decision.required:
+        held = approvals.find_grant(store, run["pk"], slug, arguments)
+        if held and approvals.consume(store, held):
+            verdict = review.approved(held["approvalId"])
+        else:
+            approval = approvals.request(
+                store, run, action=slug, arguments=arguments,
+                why=f"{slug} needs your approval ({decision.reason})",
+                capability=capability, tool_use_id=parsed.tool_use_id,
+                tool_name="connector_call", tool_input=args,
+                target={"app": grant.slug}, reversible=None, decision=decision,
+            )
+            ev.action(seq, slug, "held for approval before running",
+                      approvalId=approval["approvalId"])
+            _step(push, run, turn, slug, "waiting for your approval", verdict)
+            return {"pause": True, "approval": approval}
+
+    safe_args, redacted = redact.redact(arguments)
+    summary = f"{slug} {json.dumps(safe_args, default=str)}"[:160]
+    runs.record_event(store, run, seq, "tool", tool=slug, args=safe_args,
+                      redactions=redacted, review=verdict.to_dict())
+    ev.action(seq, slug, summary, redactions=redacted, review=verdict.to_dict())
+    cost.add_connector(grant.slug, calls=1)
+    _step(push, run, turn, slug, summary, verdict)
+
+    try:
+        # Read the grants again here rather than reusing the ones above: a revoke
+        # that lands mid-run is honoured on the very next call, not the next run.
+        grant = connectors.authorize(connectors.granted_apps(store, run["agentId"]),
+                                     toolkit_slug=meta["toolkit"], tool=slug,
+                                     capability=capability)
+        result = connectors.invoke(store, client, agent_id=run["agentId"], grant=grant,
+                                   tool=slug, arguments=arguments, run_id=run["runId"])
+    except Exception as exc:  # noqa: BLE001
+        ev.error(seq, "retryable", f"{slug} failed: {type(exc).__name__}")
+        return {"pause": False, "toolResult": {"error": f"{slug} failed: {exc}"}}
+    return {"pause": False, "toolResult": redact.redact(result)[0]}
 
 
 def _agent_creation_proposal(args: dict, *, parent_agent_id: str) -> dict:
@@ -705,21 +807,16 @@ def _agent_creation_proposal(args: dict, *, parent_agent_id: str) -> dict:
     }
 
 
-_pd = None
+_composio = None
 
 
-def _pipedream_client():
+def _composio_client():
     """Built on first use, so a run that calls no connector never reads the
-    Pipedream secret."""
-    global _pd
-    if _pd is None:
-        from amazai.pipedream import Pipedream
-        _pd = Pipedream()
-    return _pd
-
-
-def _is_connector_tool(name: str, resolution) -> bool:
-    return name in resolution.connector_tools
+    Composio secret."""
+    global _composio
+    if _composio is None:
+        _composio = composio.Composio()
+    return _composio
 
 
 def _summarise(name: str, args: dict) -> str:

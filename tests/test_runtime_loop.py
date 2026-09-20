@@ -6,173 +6,176 @@ floor must stop for a person whether or not the model remembered to ask first;
 an approval must be spent once and only on the arguments it was given; and every
 step must carry the verdict and the rule behind it.
 
-Only the network hop to Pipedream is stubbed. The store, the policy engine, the
+Only the network hop to Composio is faked. The store, the policy engine, the
 router, the approvals and the orchestrator's own handler are the real ones.
 """
-
-import types
 
 import pytest
 
 import handlers.api as api
 import handlers.orchestrator as orch
-from amazai import (agentcore, approvals, connectors as C, keys as K, policy,
-                    review, router, runs, threads)
+from amazai import agentcore, approvals, connectors as C, keys as K, policy, review, router, runs, threads
 from amazai.cost import RunCost
 from amazai.evidence import EvidenceWriter
-from amazai.push import Push
 from amazai.states import RunState
 from amazai.store import Store
 
+from tests.fake_composio import DELETE, READ, UNLABELLED, WRITE, FakeTransport, wire
+from tests.loop_world import POST, SLACK, RecPush, World, tool_call, world  # noqa: F401
 from tests.test_agents_api import api_table, call  # noqa: F401
 
-SLACK = "pipedream:slack"
-
-
-class RecPush(Push):
-    """A `Push` that remembers instead of sending."""
-
-    def __init__(self):
-        self.sent = []
-
-    def send(self, payload):
-        self.sent.append(payload)
-        return 0
-
-    @property
-    def steps(self):
-        return [e for e in self.sent if e["type"] == "tool"]
-
-
-class Proxy:
-    def __init__(self):
-        self.calls = []
-
-    def proxy(self, **kwargs):
-        self.calls.append(kwargs)
-        return {"ok": True}
-
-
-def tool_call(name, args, tool_use_id="tu-1"):
-    return types.SimpleNamespace(tool_name=name, tool_input=args, tool_use_id=tool_use_id)
-
-
-class World:
-    """One agent holding read and post on Slack, one run, one turn."""
-
-    def __init__(self, table, monkeypatch):
-        self.store = Store("owner-a", table=table)
-        call("POST", f"/connectors/{SLACK}/install", {"accountId": "apn_live123"})
-        status, agent = call("POST", "/agents", {
-            "name": "Comms", "role": "Reads and posts in Slack.", "modelTier": "balanced",
-            "avatar": {"shape": "cloud", "color": "#12a594"},
-            "budget": {"perRunUsd": 1.0, "perMonthUsd": 10.0},
-            "grants": [{"connectorId": SLACK, "allowedTools": ["slack.read", "slack.post"]}],
-        })
-        assert status == 201, agent
-        self.agent_id = agent["agentId"]
-        self.agent = self.store.get(K.agent_pk(self.agent_id), "META")
-        self.run = runs.create(self.store, agent_id=self.agent_id,
-                               thread_id=f"dm-{self.agent_id}", goal="post the update")
-        self.push, self.ev, self.cost, self.turn = RecPush(), EvidenceWriter("run_test"), RunCost(), orch.Turn()
-        self.proxy = Proxy()
-        monkeypatch.setattr(orch, "_pipedream_client", lambda: self.proxy)
-        self.resolution = router.resolve_tools(router.ResolutionInput(
-            agent_allowed_tools=frozenset(self.agent["allowedTools"]),
-            grants=C.router_grants(self.store, self.agent_id)))
-        self.seq = 0
-
-    def handle(self, name, args, tool_use_id="tu-1"):
-        self.seq += 1
-        return orch._handle_tool(self.store, self.run, self.agent, self.ev, self.push,
-                                 self.resolution, tool_call(name, args, tool_use_id),
-                                 self.seq, self.cost, self.turn)
-
-    def approve(self, approval):
-        return approvals.decide(self.store, self.run["pk"], approval["approvalId"], approve=True)
-
-    @property
-    def last(self):
-        return self.turn.steps[-1]
-
-
-@pytest.fixture
-def world(api_table, monkeypatch):
-    return World(api_table, monkeypatch)
-
-
-POST = {"channel": "C123", "text": "Shipped."}
-
-
 class TestAConnectorWriteStopsForAPersonInCode:
-    """The gap this closes: `connectors.invoke` says `policy.evaluate` already ran.
-    It had not. A model that skipped `request_approval` ran `slack.post`."""
+    """`connector_call` is the only way a model reaches an app, and the gate is
+    in the handler, not in the prompt: a Bot that never calls `request_approval`
+    and just calls a write is stopped all the same."""
 
     def test_a_read_runs_and_says_why(self, world):
-        result = world.handle("slack.read", {"channel": "C123"})
+        result = world.use(READ, {"channel": "C123"})
         assert result["pause"] is False
-        assert len(world.proxy.calls) == 1
+        assert len(world.executed) == 1
         assert world.last["review"]["decision"] == review.ALLOWED
         assert world.last["review"]["rule"] == "read"
 
-    def test_a_post_the_model_never_asked_about_does_not_run(self, world):
-        result = world.handle("slack.post", POST)
+    def test_a_write_the_model_never_asked_about_does_not_run(self, world):
+        result = world.use(WRITE, POST)
         assert result["pause"] is True
-        assert world.proxy.calls == [], "the write reached Slack without approval"
+        assert world.executed == [], "the write reached Slack without approval"
         assert world.last["review"]["decision"] == review.ASKED
 
     def test_the_approval_names_the_rule_that_stopped_it(self, world):
-        approval = world.handle("slack.post", POST)["approval"]
+        approval = world.use(WRITE, POST)["approval"]
         card = approvals.to_card(approval)
-        assert card["policy"]["rule"] == "floor"
-        assert card["policy"]["matched"] == "slack.post"
+        assert card["action"] == WRITE
+        assert card["policy"]["rule"] == "default"
+        assert card["policy"]["matched"] == "write"
         assert card["arguments"] == POST
 
+    def test_the_paused_call_is_recorded_so_the_run_can_resume_it_natively(self, world):
+        approval = world.use(WRITE, POST)["approval"]
+        assert approval["toolName"] == "connector_call"
+        assert approval["toolInput"] == {"tool": WRITE, "arguments": POST}
+
     def test_once_approved_the_same_call_runs(self, world):
-        approval = world.handle("slack.post", POST)["approval"]
+        approval = world.use(WRITE, POST)["approval"]
         world.approve(approval)
-        result = world.handle("slack.post", POST, tool_use_id="tu-2")
+        result = world.use(WRITE, POST, tool_use_id="tu-2")
         assert result["pause"] is False
-        assert len(world.proxy.calls) == 1
+        assert len(world.executed) == 1
         assert world.last["review"]["decision"] == review.ALLOWED
         assert world.last["review"]["rule"] == "approved"
         assert world.last["review"]["matched"] == approval["approvalId"]
 
     def test_an_approval_is_spent_once(self, world):
-        approval = world.handle("slack.post", POST)["approval"]
+        approval = world.use(WRITE, POST)["approval"]
         world.approve(approval)
-        world.handle("slack.post", POST, tool_use_id="tu-2")
-        again = world.handle("slack.post", POST, tool_use_id="tu-3")
+        world.use(WRITE, POST, tool_use_id="tu-2")
+        again = world.use(WRITE, POST, tool_use_id="tu-3")
         assert again["pause"] is True, "an approval authorised a second post"
-        assert len(world.proxy.calls) == 1
+        assert len(world.executed) == 1
 
     def test_an_approval_does_not_cover_different_arguments(self, world):
-        approval = world.handle("slack.post", POST)["approval"]
+        approval = world.use(WRITE, POST)["approval"]
         world.approve(approval)
-        other = world.handle("slack.post", {"channel": "C123", "text": "Something else."},
-                             tool_use_id="tu-2")
+        other = world.use(WRITE, {"channel": "C123", "text": "Something else."}, tool_use_id="tu-2")
         assert other["pause"] is True
-        assert world.proxy.calls == []
+        assert world.executed == []
 
     def test_a_denied_approval_does_not_unlock_the_call(self, world):
-        approval = world.handle("slack.post", POST)["approval"]
+        approval = world.use(WRITE, POST)["approval"]
         approvals.decide(world.store, world.run["pk"], approval["approvalId"], approve=False)
-        assert world.handle("slack.post", POST, tool_use_id="tu-2")["pause"] is True
-        assert world.proxy.calls == []
+        assert world.use(WRITE, POST, tool_use_id="tu-2")["pause"] is True
+        assert world.executed == []
 
-    def test_a_pre_approved_rule_cannot_lower_the_floor(self, world):
-        world.agent = {**world.agent, "preapproved": ["slack.post"]}
-        result = world.handle("slack.post", POST)
-        assert result["pause"] is True, "a pre-approved rule overrode the always-approve floor"
-        assert world.proxy.calls == []
+    def test_an_unlabelled_tool_is_treated_as_a_write(self, world):
+        # Composio tagged nothing on it. Guessing "read" here would be the leak.
+        assert world.use(UNLABELLED, {})["pause"] is True
+        assert world.executed == []
+
+    def test_an_owner_can_pre_approve_one_specific_write_for_one_bot(self, world):
+        world.agent = {**world.agent, "preapproved": [WRITE]}
+        result = world.use(WRITE, POST)
+        assert result["pause"] is False and len(world.executed) == 1
+        assert world.last["review"]["rule"] == "preapproved"
+
+    def test_a_destructive_tool_can_never_be_pre_approved(self, world):
+        world.agent = {**world.agent, "preapproved": [DELETE]}
+        result = world.use(DELETE, {"channel": "C1", "ts": "1"})
+        assert result["pause"] is True, "a pre-approved rule lowered a destructive tool's gate"
+        assert world.executed == []
+        assert result["approval"]["policy"]["rule"] == "capability"
+
+    def test_a_bot_skipping_request_approval_is_stopped_all_the_same(self, world):
+        # The model is never trusted to have asked. There is no path to Slack
+        # that does not go through `connector_call`.
+        world.use(WRITE, POST)
+        assert world.executed == []
+
+
+class TestWhatABotMayReach:
+    def test_search_shows_only_what_the_grant_allows(self, world):
+        found = {t["tool"]: t for t in world.search("slack")["tools"]}
+        assert READ in found and WRITE in found
+        assert found[READ]["effect"] == "reads only" and found[WRITE]["effect"] == "changes data"
+        assert found[DELETE]["effect"] == "removes data"
+        assert set(found[WRITE]["inputs"]["required"]) == {"channel", "text"}
+
+    def test_a_read_only_bot_is_never_shown_a_tool_that_writes(self, world):
+        world.store.put(C.grant_row(world.agent_id, SLACK, actor_user_id="owner-a",
+                                    capability=C.Capability.READ))
+        found = {t["tool"] for t in world.search("slack")["tools"]}
+        assert found == {READ}
+
+    def test_and_cannot_call_one_it_was_not_shown(self, world):
+        world.store.put(C.grant_row(world.agent_id, SLACK, actor_user_id="owner-a",
+                                    capability=C.Capability.READ))
+        out = world.use(WRITE, POST)
+        assert out["toolResult"]["error"].endswith("is read-only") or "read-only" in out["toolResult"]["error"]
+        assert world.executed == []
+        assert world.last["review"]["decision"] == review.DENIED
+        assert world.last["review"]["rule"] == "no_grant"
+
+    def test_an_app_the_bot_does_not_hold_is_not_searched_and_not_callable(self, world):
+        assert world.search("mail", app="gmail")["tools"] == []
+        out = world.use("GMAIL_FETCH_EMAILS", {})
+        assert "gmail is not connected" in out["toolResult"]["error"]
+        assert world.executed == []
+
+    def test_with_nothing_connected_the_bot_is_told_what_to_do_instead(self, api_table, monkeypatch):
+        w = World(api_table, monkeypatch, connected=set(), install=False)
+        out = w.search("send an email")
+        assert out["tools"] == [] and "request_connector" in out["note"]
+
+    def test_a_tool_that_does_not_exist_is_an_error_the_bot_can_read(self, world):
+        out = world.use("SLACK_MADE_UP_TOOL", {})
+        assert "could not look up" in out["toolResult"]["error"]
+        assert world.executed == []
+
+    def test_a_slug_that_could_rewrite_the_url_is_refused_before_any_request(self, world):
+        before = len(world.transport.requests)
+        out = world.use("../connected_accounts", {})
+        assert "toolResult" in out and world.executed == []
+        assert len(world.transport.requests) == before
+
+    def test_a_revoke_between_two_calls_stops_the_second(self, world):
+        assert world.use(READ, {"channel": "C1"})["pause"] is False
+        call("DELETE", f"/connectors/{SLACK}")
+        out = world.use(READ, {"channel": "C1"}, tool_use_id="tu-2")
+        assert "not connected" in out["toolResult"]["error"]
+        assert len(world.executed) == 1
+
+    def test_a_failing_call_reports_back_and_does_not_pretend(self, api_table, monkeypatch):
+        w = World(api_table, monkeypatch)
+        w.transport.fail[READ] = "channel_not_found"
+        out = w.use(READ, {"channel": "nope"})
+        assert "channel_not_found" in out["toolResult"]["error"]
 
 
 class TestEveryStepCarriesAVerdict:
     def test_the_verdict_travels_with_the_pushed_step(self, world):
-        world.handle("slack.read", {"channel": "C123"})
+        world.use(READ, {"channel": "C123"})
         pushed = world.push.steps[-1]
         assert pushed["review"]["decision"] == "allowed"
-        assert pushed["name"] == "slack.read"
+        assert pushed["name"] == READ
 
     def test_a_sandbox_tool_is_labelled_honestly_as_observed_not_gated(self, world):
         world.resolution = router.resolve_tools(router.ResolutionInput(
@@ -182,7 +185,7 @@ class TestEveryStepCarriesAVerdict:
         assert "sandbox" in world.last["review"]["reason"]
 
     def test_a_tool_without_a_grant_is_denied_and_says_so(self, world):
-        world.handle("slack.delete_channel", {"channel": "C1"})
+        world.use("GMAIL_SEND_EMAIL", {"to": "x@example.com", "body": "hi"})
         assert world.last["review"]["decision"] == review.DENIED
         assert world.last["review"]["rule"] == "no_grant"
 
@@ -206,40 +209,31 @@ class TestEveryStepCarriesAVerdict:
         assert "no access" in world.last["review"]["reason"]
 
     def test_the_verdict_is_stored_on_the_runs_own_event(self, world):
-        world.handle("slack.read", {"channel": "C123"})
+        world.use(READ, {"channel": "C123"})
         events = world.store.query(world.run["pk"], sk_prefix="EVT#")
         assert events[-1]["review"]["decision"] == "allowed"
 
 
 class TestCardsComeFromToolCalls:
-    def test_a_connector_the_agent_lacks_becomes_a_connect_card(self, world):
-        world.handle("request_connector", {"connectorId": "pipedream:nonexistent", "why": "x"})
+    def test_an_app_that_does_not_exist_becomes_no_card(self, world):
+        world.handle("request_connector", {"connectorId": "nonexistentapp", "why": "x"})
         assert world.turn.cards == []
         assert world.last["review"]["decision"] == review.DENIED
 
-    def test_an_already_connected_connector_asks_for_nothing(self, world):
-        world.handle("request_connector", {"connectorId": SLACK, "why": "to post"})
+    def test_an_already_connected_app_asks_for_nothing(self, world):
+        world.handle("request_connector", {"connectorId": "slack", "why": "to post"})
         assert world.turn.cards == []
         assert "already connected" in world.last["summary"]
 
-    def test_a_connector_not_yet_granted_becomes_a_card(self, api_table, monkeypatch):
-        # A fresh agent with no grants: the catalog has Slack, the agent does not.
-        store = Store("owner-a", table=api_table)
-        status, agent = call("POST", "/agents", {
-            "name": "Bare", "role": "Has nothing yet.", "modelTier": "balanced",
-            "avatar": {"shape": "cloud", "color": "#12a594"},
-            "budget": {"perRunUsd": 1.0, "perMonthUsd": 10.0}})
-        assert status == 201
-        run = runs.create(store, agent_id=agent["agentId"], thread_id="dm-bare", goal="x")
-        turn = orch.Turn()
-        orch._handle_tool(store, run, store.get(K.agent_pk("bare"), "META"), EvidenceWriter("r"),
-                          RecPush(), router.resolve_tools(router.ResolutionInput(
-                              agent_allowed_tools=frozenset(), grants=[])),
-                          tool_call("request_connector", {"connectorId": SLACK,
-                                                          "why": "To read the channel."}),
-                          1, RunCost(), turn)
-        assert turn.cards == [{"type": "connect", "connectorId": SLACK,
-                               "name": C.CATALOG[SLACK].name, "why": "To read the channel."}]
+    def test_any_app_composio_offers_can_be_asked_for_not_just_a_short_list(self, world):
+        world.handle("request_connector", {"connectorId": "github", "why": "To read the repo."})
+        assert world.turn.cards == [{"type": "connect", "connectorId": "composio:github",
+                                     "name": "GitHub", "why": "To read the repo."}]
+
+    def test_an_app_the_bot_lacks_becomes_a_connect_card(self, world):
+        world.handle("request_connector", {"connectorId": "gmail", "why": "To read the inbox."})
+        assert world.turn.cards[0]["connectorId"] == "composio:gmail"
+        assert world.last["review"]["decision"] == review.ALLOWED
 
     def test_a_routine_proposal_becomes_a_card_and_creates_nothing(self, world):
         world.handle("propose_routine", {"name": "Weekday planning", "schedule": "weekday-9",
@@ -273,20 +267,20 @@ class TestCardsComeFromToolCalls:
 
 class TestWhatTheTurnLeavesBehind:
     def test_steps_and_cards_are_stored_on_the_message(self, world):
-        world.handle("slack.read", {"channel": "C123"})
+        world.use(READ, {"channel": "C123"})
         world.handle("propose_routine", {"name": "Digest", "schedule": "daily-730", "prompt": "Summarise."})
         orch._persist_message(world.store, world.run, world.agent, "Here you go.", world.cost,
                               steps=world.turn.steps, cards=world.turn.cards,
                               started_at="2026-09-20T09:00:00Z")
         rows = world.store.query(K.thread_pk(world.run["threadId"]), sk_prefix="MSG#")
         row = rows[-1]
-        assert [s["name"] for s in row["steps"]] == ["slack.read", "propose_routine"]
+        assert [s["name"] for s in row["steps"]] == [READ, "propose_routine"]
         assert row["steps"][0]["review"]["decision"] == "allowed"
         assert row["cards"][0]["type"] == "routine"
         assert row["startedAt"] == "2026-09-20T09:00:00Z" and row["endedAt"]
 
     def test_a_turn_with_no_words_still_keeps_its_trail_and_the_model_never_sees_it(self, world):
-        world.handle("slack.post", POST)   # pauses; the model said nothing
+        world.use(WRITE, POST)   # pauses; the model said nothing
         orch._persist_message(world.store, world.run, world.agent, "", world.cost,
                               steps=world.turn.steps, cards=[])
         rows = world.store.query(K.thread_pk(world.run["threadId"]), sk_prefix="MSG#")
@@ -347,7 +341,7 @@ class TestAPausedOrRunningRunCanBeStopped:
         invoked = []
         monkeypatch.setattr(api, "_invoke_orchestrator",
                             lambda *a, **k: invoked.append(k))
-        approval = world.handle("slack.post", POST)["approval"]
+        approval = world.use(WRITE, POST)["approval"]
         run = self._executing(world)
         run = runs.pause_for_approval(world.store, run, approval)
 

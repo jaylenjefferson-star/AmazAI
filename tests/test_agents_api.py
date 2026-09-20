@@ -144,7 +144,7 @@ class TestCreate:
 
     def test_a_grant_on_an_uninstalled_connector_is_refused(self, api_table):
         status, err = call("POST", "/agents", dict(
-            NEW_AGENT, grants=[{"connectorId": "pipedream:stripe",
+            NEW_AGENT, grants=[{"connectorId": "composio:stripe",
                                 "allowedTools": ["payment.charge"]}]))
         assert status == 403
         assert "not installed" in err["detail"]
