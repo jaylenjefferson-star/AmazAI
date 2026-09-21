@@ -37,6 +37,11 @@ from amazai.stream import EventKind, StreamParser
 
 MAX_HISTORY = 40
 
+#: Memory rows read per scope, newest first. A ceiling on the read, not on what
+#: reaches the prompt: `agentcore.build_system_prompt` injects every
+#: foundational row it is given and caps notes at `agentcore.RECENT_NOTES`.
+MAX_MEMORY = 50
+
 #: Model calls in one turn, each answering the tools the last one asked for. Not a
 #: limit on how much a Bot may do -- it can carry on in the next message -- but a stop
 #: for a loop that would otherwise run until the run's deadline.
@@ -189,20 +194,28 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # being asked to answer.
     history = list(reversed(store.query(K.thread_pk(run["threadId"]), sk_prefix="MSG#",
                                         limit=MAX_HISTORY, ascending=False)))
-    memories = memory.visible(store.query(K.agent_pk(run["agentId"]), sk_prefix="MEM#", limit=50))
+    # The *newest* MAX_MEMORY rows, for the same reason the history above is read
+    # backwards: `mem_` ids carry a millisecond timestamp (store.new_id), so MEM#
+    # sorts chronologically, and an ascending `limit=50` returns the fifty oldest
+    # facts a Bot ever saved. Past fifty it could no longer see anything it had
+    # recently learned -- the exact symptom of a Bot that does not remember.
+    memories = memory.visible(store.query(K.agent_pk(run["agentId"]), sk_prefix="MEM#",
+                                          limit=MAX_MEMORY, ascending=False))
     # Shared user memory (name, timezone, standing preferences) is visible to
     # every agent's context alongside its own, on by default -- see
     # docs/architecture/16-grokbot-ux-alignment.md §4 and open question 1.
     # `memory.visible` drops anything revoked/expired/still-proposed so a
     # publish approval or a revoke takes effect on the very next turn.
-    memories += memory.visible(store.query(K.user_pk(store.owner_id), sk_prefix="MEM#", limit=50))
+    memories += memory.visible(store.query(K.user_pk(store.owner_id), sk_prefix="MEM#",
+                                           limit=MAX_MEMORY, ascending=False))
     # Task-scoped memory only exists for a run that is actually part of that
     # task: its own runId, or the taskId a priority message spawned it under
     # (`trigger.taskId`, set only by an already-authorized send -- see
     # collab.send). A run outside that task never queries this partition, so
     # task memory cannot cross a task boundary by construction.
     effective_task_id = (run.get("trigger") or {}).get("taskId") or run["runId"]
-    memories += memory.visible(store.query(K.task_pk(effective_task_id), sk_prefix="MEM#", limit=50))
+    memories += memory.visible(store.query(K.task_pk(effective_task_id), sk_prefix="MEM#",
+                                           limit=MAX_MEMORY, ascending=False))
     assigned_skills = skills.assigned_active_skills(store, run["agentId"])
 
     # What a run said before it failed, or before the run it replaced was stopped, is
@@ -761,8 +774,10 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
 
     if name == "propose_shared_memory":
         # Same pattern as propose_agent/propose_skill: the model nominates, a
-        # person decides. Nothing here reaches shared_user until _decide
-        # approves it -- see memory.plan_write's status="proposed" default.
+        # person decides. No memory row is written here at all -- the proposed
+        # fields ride on the approval, and `api._decide` is the only thing that
+        # ever writes them to the shared partition. A denied proposal therefore
+        # leaves nothing behind to clean up.
         try:
             fields = memory.validate(args, scope="shared_user")
         except memory.ValidationError as exc:

@@ -10,14 +10,33 @@ Three scopes, per `docs/architecture/17-message-and-memory-authorization.md`
                   is allowed to read, not by a role check on the row).
 - ``shared_user`` every seat's context. A person publishes directly. An
                   agent may only *propose*: `orchestrator.propose_shared_
-                  memory` writes a `status: proposed` row through the same
-                  approval gate as `agent.create`/`skill.create`, and only
-                  `api._decide` moves it to `published`.
+                  memory` opens an approval carrying the proposed fields,
+                  through the same gate as `agent.create`/`skill.create`. No
+                  row exists until `api._decide` approves it and writes one
+                  `published`; a denied proposal leaves nothing behind.
 
 A row is excluded from the next prompt the instant its `status` stops being
 `published`, or the instant `now >= expiresAt` -- `is_visible()` is called on
 every read, not cached, so a revoke or an expiry takes effect on the very
 next turn, never a stale one.
+
+`kind` decides whether a visible row reaches the prompt at all, and
+`agentcore.build_system_prompt` is the one place that reads it:
+
+- ``foundational`` always injected, for as long as it is visible. A stable
+                   preference, a boundary, a fact about the operator.
+- ``note``         injected, newest first, up to
+                   `agentcore.RECENT_NOTES` per scope. Older notes fall out
+                   of the window rather than growing the prompt without
+                   bound.
+- ``log``          never injected. A record for the operator and the
+                   evidence trail, not context.
+
+`validate` defaults an unspecified kind to ``note``, so the common case --
+a Bot calling `remember` without naming a kind -- is remembered and read
+back. It was previously fetched on every subsequent run and then dropped
+before the prompt was built, which made a Bot's own `remember` a no-op it
+had no way to notice.
 """
 
 from __future__ import annotations
@@ -57,9 +76,19 @@ def validate(body: dict, *, scope: str) -> dict:
     if confidence is not None:
         _require(0.0 <= float(confidence) <= 1.0, "confidence must be between 0 and 1")
 
+    # Both spellings, deliberately. The inline tool schemas are snake_case
+    # (`expires_at`, beside `task_id`) and the HTTP API is camelCase, so
+    # reading only `expiresAt` silently discarded every expiry a Bot set on
+    # its own memory -- the fact was saved, permanently, having asked not to
+    # be. A dropped expiry is invisible until a stale fact contradicts a live
+    # one, so this accepts either name at the boundary rather than trusting
+    # every caller to pick the same one.
+    expires_at = body.get("expiresAt") or body.get("expires_at")
+    review_at = body.get("reviewAt") or body.get("review_at")
+
     return {"title": title, "body": text, "kind": kind, "taskId": task_id,
-           "confidence": confidence, "expiresAt": body.get("expiresAt"),
-           "reviewAt": body.get("reviewAt")}
+           "confidence": confidence, "expiresAt": expires_at,
+           "reviewAt": review_at}
 
 
 def is_visible(row: dict, *, now: str | None = None) -> bool:

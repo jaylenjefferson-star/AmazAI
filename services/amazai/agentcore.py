@@ -15,6 +15,13 @@ import boto3
 
 REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-west-2"
 
+#: How many `kind: note` memory rows reach the prompt per scope, newest first
+#: (`build_system_prompt`). Notes are the default kind, so this is the window
+#: that keeps "it remembers what it learned" from becoming "its prompt grows
+#: every time it saves anything". `foundational` rows are not capped: a
+#: standing preference or a boundary is not something to age out.
+RECENT_NOTES = 12
+
 #: The inline functions the orchestrator answers. Everything else -- shell,
 #: file_operations, browser, gateway targets -- executes inside the harness
 #: and never round-trips through us.
@@ -311,8 +318,23 @@ INLINE_TOOLS = {
                 "task_id": {"type": "string", "description": "Required when scope=task"},
                 "title": {"type": "string"},
                 "body": {"type": "string"},
-                "kind": {"type": "string", "enum": ["foundational", "log", "note"]},
-                "expires_at": {"type": "string"},
+                "kind": {
+                    "type": "string", "enum": ["foundational", "log", "note"],
+                    "description": (
+                        "foundational: a standing preference, boundary or fact -- kept in "
+                        "your context from now on, and never aged out. note (the default): "
+                        "useful now, kept in a recent-notes window that older notes fall "
+                        "out of. log: a record for the operator only; it is never added "
+                        "back to your context, so do not use it for something you need to "
+                        "recall."
+                    ),
+                },
+                "expires_at": {
+                    "type": "string",
+                    "description": ("ISO-8601 instant, e.g. 2026-03-01T00:00:00Z. After it "
+                                    "passes the fact stops reaching your context. Use it "
+                                    "for anything that will go stale."),
+                },
             },
             "required": ["scope", "body"],
         },
@@ -329,9 +351,19 @@ INLINE_TOOLS = {
             "properties": {
                 "title": {"type": "string"},
                 "body": {"type": "string"},
-                "kind": {"type": "string", "enum": ["foundational", "log", "note"]},
+                "kind": {
+                    "type": "string", "enum": ["foundational", "log", "note"],
+                    "description": (
+                        "foundational: every Bot carries it from now on. note (the "
+                        "default): every Bot sees it while it is recent. log: recorded "
+                        "for the operator, never added to any Bot's context."
+                    ),
+                },
                 "confidence": {"type": "number"},
-                "expires_at": {"type": "string"},
+                "expires_at": {
+                    "type": "string",
+                    "description": "ISO-8601 instant after which the fact is dropped.",
+                },
                 "why": {"type": "string"},
             },
             "required": ["body", "why"],
@@ -579,6 +611,18 @@ def build_system_prompt(agent: dict, memories: list[dict], *,
     reasoning above about foundational-only injection applies to a fact that
     is already this narrowly scoped.
 
+    `note` rows are injected too, newest first and capped at `RECENT_NOTES`
+    per scope. They used to be dropped here, which made the default
+    `remember` write -- `validate` defaults kind to `note` -- a fact the Bot
+    saved, paid to re-read on every later run, and never saw again. The cap
+    is what keeps that from becoming an unbounded prompt: a window that ages
+    out is the difference between remembering and hoarding. `log` rows stay
+    out; they are a record for the operator, not context.
+
+    Foundational rows are ordered oldest-first so the block is stable between
+    turns -- an identical prefix is what a provider's prompt cache can reuse,
+    and reordering it every run would throw that away for nothing.
+
     `skills` must already be this agent's *assignment* set (see
     `amazai.skills.assigned_active_skills`), not every active skill in the
     library -- an unassigned skill is never passed in and so is never seen.
@@ -589,26 +633,66 @@ def build_system_prompt(agent: dict, memories: list[dict], *,
     def _foundational(m: dict) -> bool:
         return bool(m.get("pinned")) or m.get("kind") == "foundational"
 
-    agent_pinned = [m for m in memories
-                    if _foundational(m) and m.get("scope", "agent") == "agent"]
-    shared_pinned = [m for m in memories
-                     if _foundational(m) and m.get("scope") == "shared_user"]
+    def _scope(m: dict) -> str:
+        return m.get("scope", "agent")
+
+    def _kind(m: dict) -> str:
+        # `memory.validate` defaults an unspecified kind to `note`, so the
+        # reader has to agree with the writer. A row written before `kind`
+        # existed carries only `pinned`; read as kind-less it would be fetched
+        # on every run and then dropped, which is the bug this whole block is
+        # here to fix, one layer further down.
+        return m.get("kind") or "note"
+
+    def _stamp(m: dict) -> tuple:
+        # `createdAt` resolves to the second; `memId` carries a millisecond
+        # timestamp (see store.new_id), so the pair orders rows written inside
+        # the same second instead of leaving them to dict order.
+        return (m.get("createdAt", ""), m.get("memId", ""))
+
+    def _oldest_first(rows: list[dict]) -> list[dict]:
+        return sorted(rows, key=_stamp)
+
+    def _newest_first(rows: list[dict], limit: int) -> list[dict]:
+        return sorted(rows, key=_stamp, reverse=True)[:limit]
+
+    def _notes(scope: str) -> list[dict]:
+        return _newest_first(
+            [m for m in memories if _kind(m) == "note"
+             and not _foundational(m) and _scope(m) == scope],
+            RECENT_NOTES)
+
+    agent_pinned = _oldest_first([m for m in memories
+                                  if _foundational(m) and _scope(m) == "agent"])
+    shared_pinned = _oldest_first([m for m in memories
+                                   if _foundational(m) and _scope(m) == "shared_user"])
+    agent_notes = _notes("agent")
+    shared_notes = _notes("shared_user")
     task_memories = [m for m in memories if m.get("scope") == "task"]
+
+    def _bullets(rows: list[dict]) -> None:
+        for m in rows:
+            parts.append(f"- **{m.get('title','')}**: {m.get('body','')}")
 
     if agent_pinned:
         parts.append("\n## What you know\n")
-        for m in agent_pinned:
-            parts.append(f"- **{m.get('title','')}**: {m.get('body','')}")
+        _bullets(agent_pinned)
+
+    if agent_notes:
+        parts.append("\n## Notes from your recent work\n")
+        _bullets(agent_notes)
 
     if shared_pinned:
         parts.append("\n## About the operator (shared across every agent)\n")
-        for m in shared_pinned:
-            parts.append(f"- **{m.get('title','')}**: {m.get('body','')}")
+        _bullets(shared_pinned)
+
+    if shared_notes:
+        parts.append("\n## Recent notes about the operator\n")
+        _bullets(shared_notes)
 
     if task_memories:
         parts.append("\n## This task\n")
-        for m in task_memories:
-            parts.append(f"- **{m.get('title','')}**: {m.get('body','')}")
+        _bullets(_oldest_first(task_memories))
 
     active = [s for s in (skills or []) if s.get("status") == "active"]
     if active:
