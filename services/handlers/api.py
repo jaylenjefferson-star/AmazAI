@@ -1137,12 +1137,27 @@ def _admin_killswitch_set(store: Store, body: dict, event: dict):
         before={"frozen": govern.is_frozen(before)}, after={"frozen": frozen},
         detail=(body.get("reason") or ""))
     # The kill switch is a single overwriteable row (a re-freeze replaces it),
-    # so it is a put rather than a transact_put's create-only write. The audit
-    # row is written FIRST for the same reason as _apply_member_change: the
-    # trail is the thing that must never be lost, so a crash over-records
-    # rather than losing the record of a freeze.
-    store.put(audit)
-    written = store.put(row)
+    # so it is a put rather than a transact_put's create-only write. The two
+    # writes are ordered so a crash between them leaves the org in the MORE
+    # restrictive (frozen) state -- a kill switch must fail closed on the
+    # action, not the audit. That makes the ordering asymmetric:
+    #
+    #   FREEZE (frozen=True): write the KILLSWITCH row FIRST, then the audit.
+    #     A crash after the state write leaves the org actually frozen with at
+    #     worst a missing audit row -- the org is safely stopped, which is the
+    #     priority. Audit-first here would be wrong: a crash would leave the
+    #     org unfrozen while the trail claims a freeze, so an operator believes
+    #     the org is stopped when it is not.
+    #   UNFREEZE (frozen=False): keep audit-FIRST. A crash after the audit
+    #     leaves the org still frozen with a trail claiming it was unfrozen --
+    #     again the safe direction, since staying frozen is the restrictive
+    #     state and the append-only trail is not lost.
+    if frozen:
+        written = store.put(row)
+        store.put(audit)
+    else:
+        store.put(audit)
+        written = store.put(row)
     return _resp(200, {"frozen": frozen, "reason": written.get("reason", ""),
                        "correlationId": audit["correlationId"]})
 

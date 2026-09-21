@@ -495,6 +495,62 @@ class TestAuditIsWrittenFirst:
         assert member["state"] == D.MemberState.ACTIVE.value
 
 
+class TestFreezeFailsClosedOnTheAction:
+    """Review follow-up: the kill switch must fail CLOSED on the ACTION, not on
+    the audit. For a FREEZE the KILLSWITCH row is written BEFORE the audit, so a
+    crash between the two writes leaves the org actually frozen (with at worst a
+    missing audit row) rather than unfrozen-but-audited-as-frozen. Unfreeze
+    keeps audit-first, so a crash there leaves the org still frozen. Either way
+    a partial failure lands the org in the more restrictive (frozen) state.
+
+    These tests would fail if the freeze path were reverted to audit-first: the
+    first (state) write would then be the audit, the second (failing) write
+    would be the killswitch row, and the org would read UNFROZEN below."""
+
+    def test_a_failed_audit_write_still_left_the_org_frozen(self, admin_table, monkeypatch):
+        # Make the AUDIT write raise. On a freeze the ordering is
+        # killswitch-FIRST then audit, so failing the audit write proves the
+        # killswitch (state) write already landed. Keying on the ADMINAUDIT#
+        # row rather than a call count is precise: it fails ONLY the audit put,
+        # whichever ordinal it happens to be.
+        real_put = Store.put
+
+        def put_fails_on_audit(self, item, *a, **k):
+            if str(item.get("sk", "")).startswith("ADMINAUDIT#"):
+                raise RuntimeError("crash between the killswitch row and its audit")
+            return real_put(self, item, *a, **k)
+
+        monkeypatch.setattr(Store, "put", put_fails_on_audit)
+        status, _ = call("POST", "/admin/killswitch", {"frozen": True, "reason": "incident"})
+        assert status == 500  # the audit write failed
+        monkeypatch.setattr(Store, "put", real_put)
+
+        # The org is ACTUALLY frozen even though the audit never landed: the
+        # state write won the partial failure, so the kill switch failed closed
+        # on the action. (Audit-first would have left this UNFROZEN.)
+        row = Store(OWNER, table=admin_table).try_get(K.org_pk(OWNER), "KILLSWITCH")
+        assert govern.is_frozen(row) is True
+        # ...and the audit row for the freeze is absent (the acceptable loss).
+        assert [r["action"] for r in audit_rows(admin_table)] == []
+
+    def test_a_normal_freeze_then_unfreeze_writes_both_rows(self, admin_table):
+        status, body = call("POST", "/admin/killswitch", {"frozen": True, "reason": "incident"})
+        assert status == 200 and body["frozen"] is True
+        assert body["correlationId"]
+        frozen_corr = body["correlationId"]
+        assert govern.is_frozen(
+            Store(OWNER, table=admin_table).try_get(K.org_pk(OWNER), "KILLSWITCH")) is True
+
+        status, body = call("POST", "/admin/killswitch", {"frozen": False})
+        assert status == 200 and body["frozen"] is False
+        assert body["correlationId"] and body["correlationId"] != frozen_corr
+        assert govern.is_frozen(
+            Store(OWNER, table=admin_table).try_get(K.org_pk(OWNER), "KILLSWITCH")) is False
+
+        # Both actions left their own append-only audit row, newest first.
+        assert [r["action"] for r in audit_rows(admin_table)] == ["org.unfrozen", "org.frozen"]
+
+
 class TestOrgIdIsThreadedConsistently:
     """Review issue 4: reads and writes key on ONE org id (the verified
     principal's org), so status/audit reads see exactly what the write path
