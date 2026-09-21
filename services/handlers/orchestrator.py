@@ -167,8 +167,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
     # --- conversation ------------------------------------------------------
     thread = store.get(K.thread_pk(run["threadId"]), "META")
-    history = store.query(K.thread_pk(run["threadId"]), sk_prefix="MSG#",
-                          limit=MAX_HISTORY, ascending=True)[-MAX_HISTORY:]
+    # The *newest* MAX_HISTORY rows, oldest first. Asking DynamoDB for `limit=40` in
+    # ascending order returns the first 40 ever written, so past 40 rows the model
+    # would stop seeing the conversation's end -- including the message it is
+    # being asked to answer.
+    history = list(reversed(store.query(K.thread_pk(run["threadId"]), sk_prefix="MSG#",
+                                        limit=MAX_HISTORY, ascending=False)))
     memories = memory.visible(store.query(K.agent_pk(run["agentId"]), sk_prefix="MEM#", limit=50))
     # Shared user memory (name, timezone, standing preferences) is visible to
     # every agent's context alongside its own, on by default -- see
@@ -185,10 +189,20 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     memories += memory.visible(store.query(K.task_pk(effective_task_id), sk_prefix="MEM#", limit=50))
     assigned_skills = skills.assigned_active_skills(store, run["agentId"])
 
-    messages = agentcore.build_messages(history, room=thread.get("kind") == "room")
+    # What a run said before it failed, or before the run it replaced was stopped, is
+    # not part of the conversation it is now retrying or answering. A run *resuming*
+    # after an approval is different: what it said before pausing is exactly the
+    # context it needs, so nothing is left out there. A retry is also sent as a
+    # "resume", so telling the two apart is `continuation`'s to say, not something to
+    # read off the event here.
+    superseded = set() if continuation.is_approval_resume(event) else {
+        r for r in (run["runId"], (run.get("trigger") or {}).get("redirectOf")) if r}
+    messages = agentcore.build_messages(history, room=thread.get("kind") == "room",
+                                        skip_runs=superseded)
     # Decision D4 lives behind `continuation`: how a paused run resumes is the one
     # thing that cannot be verified without AWS, so nothing here knows the shape.
     messages.extend(continuation.resume_messages(event))
+    messages = agentcore.end_on_user(messages, run.get("goal", ""))
 
     # The greeting is stored (so every browser shows the same one) but never sent as
     # a turn; the model is told about it instead. See agentcore.identity_block.
@@ -216,6 +230,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     push.state(run["runId"], run["threadId"], run["state"], run.get("costUsd", 0.0))
 
     # --- stream ------------------------------------------------------------
+    _ensure_harness_tools(store, agent)
     core = agentcore.AgentCore()
     parser = StreamParser()
     ev = EvidenceWriter(run["runId"])
@@ -300,8 +315,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             return {"ok": True, "state": RunState.AWAITING_CONNECTOR.value}
 
         if cls.retryable:
+            # Kept on the run: only the final attempt's evidence is sealed, so without
+            # this the error that *started* a retry chain is gone by the time anyone
+            # asks why it failed.
             runs.advance(store, run, RunState.RETRYING,
-                         attempt=run.get("attempt", 0) + 1)
+                         attempt=run.get("attempt", 0) + 1,
+                         lastError=stream_error[:500])
             _reinvoke(run["runId"], store.owner_id, delay_note=cls.reason)
             return {"ok": True, "state": RunState.RETRYING.value, "retry": cls.reason}
 
@@ -447,6 +466,29 @@ def _connected_apps_note(store: Store, agent_id: str) -> str:
             "you can do in them, then connector_call to do it. Reading runs at once; "
             "anything that creates, changes or removes data waits for the operator's "
             "approval. For an app not listed, use request_connector.")
+
+
+def _ensure_harness_tools(store: Store, agent: dict) -> None:
+    """Make sure this Bot's harness has the tools the loop is written around.
+
+    A harness is created bare, and its inline tools (`propose_agent`,
+    `request_approval`, `message_agent`, `connector_call`, ...) are added by an update.
+    Nothing did that for a Bot made through the console, so it could talk but not
+    ask for an approval, bring in a teammate, propose a Bot or use a connected app --
+    and the prompt still told it to. This closes that once per Bot and per set of
+    tools, and records that it did.
+
+    It never fails the run. If the update is refused the Bot goes on with the tools
+    it has, the reason is logged, and the next run tries again.
+    """
+    version = agentcore.tools_version()
+    if not agent.get("harnessArn") or agent.get("harnessToolsVersion") == version:
+        return
+    try:
+        agentcore.AgentCore().ensure_inline_tools(agent["harnessArn"])
+        store.update(K.agent_pk(agent["agentId"]), "META", {"harnessToolsVersion": version})
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
 
 
 def _reporting_note(store: Store, agent: dict) -> str:

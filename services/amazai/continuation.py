@@ -44,6 +44,17 @@ def mode() -> Mode:
             f"AMAZAI_CONTINUATION={raw!r}; expected one of {[m.value for m in Mode]}") from exc
 
 
+def is_approval_resume(event: dict) -> bool:
+    """Whether this invocation continues a run that paused for a decision.
+
+    A retry is also sent with `resume: True` (`orchestrator._reinvoke`), so that
+    flag alone cannot say which this is; the decision's note is what separates them.
+    Here, with the rest of the shape of a resume, so nothing outside this module
+    reads it.
+    """
+    return bool(event.get("resume") and event.get("resumeNote"))
+
+
 def resume_messages(event: dict) -> list[dict]:
     """The turn(s) to append to history when a paused run resumes.
 

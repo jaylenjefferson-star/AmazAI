@@ -6,8 +6,12 @@
 
 Inline functions (`request_connector`, `propose_routine`, ...) are declared when a
 harness is created. A harness made earlier -- the Engineering seat, say -- does not
-have them, so its model is never offered them and no card can come from it. New
-Bots get them automatically.
+have them, so its model is never offered them and no card can come from it.
+
+The orchestrator now does this itself, once per Bot and per set of tools, before a
+Bot's first run (`orchestrator._ensure_harness_tools`), so this script is only for
+doing it ahead of time or checking what a harness has. A Bot created through the
+console is made without them.
 
 The report is safe to run: it only reads. `--apply` calls `update_harness`, whose
 parameter shape BUILD_PLAN has not verified; run the report first, and read the

@@ -34,7 +34,11 @@ _NEEDS_HUMAN = re.compile(
 )
 _TERMINAL = re.compile(
     r"(?i)grant denied|not granted|budget exceeded|invalid target|"
-    r"never approvable|\b404\b|not found|no such"
+    r"never approvable|\b404\b|not found|no such|"
+    # The shape of the conversation itself is wrong. Sent again unchanged it is
+    # refused again, so re-planning only burns the attempts (and matches
+    # "validation" below).
+    r"assistant message prefill|must end with a user message|must alternate between"
 )
 _NEEDS_REPLAN = re.compile(
     r"(?i)validation|invalid (?:argument|parameter|input)|schema|"
