@@ -102,3 +102,70 @@ class TestDegenerateBudgets:
         r = check(Budget(per_run_usd=0.0, per_month_usd=0.0),
                   spent_this_run=1.0, spent_this_month=1.0)
         assert r.verdict is Verdict.OK
+
+
+
+class TestModelPricing:
+    """`model_usd` is the seam between this ledger and the one price table.
+
+    These assert the seam, not the prices: the numbers come from
+    `usage.PRICING`, and a price change should edit that table and this file's
+    expectations together rather than introduce a second table here.
+    """
+
+    def test_a_priced_call_costs_something(self):
+        from amazai.cost import model_usd
+        assert model_usd("test-model", input_tokens=1000, output_tokens=500) > 0
+
+    def test_default_price_matches_the_usage_table(self):
+        from amazai.cost import model_usd
+        from amazai.usage import MICRO, TokenCounts, cost_micros
+        usd = model_usd("test-model", input_tokens=1000, output_tokens=500)
+        expected = cost_micros("test-model", TokenCounts(input=1000, output=500)) / MICRO
+        assert usd == pytest.approx(expected)
+
+    def test_a_named_model_beats_its_family(self):
+        from amazai.cost import model_usd
+        opus = model_usd("anthropic.claude-opus-5-v1", input_tokens=1_000_000)
+        family = model_usd("anthropic.claude-something-new", input_tokens=1_000_000)
+        assert opus > family
+
+    def test_output_tokens_cost_more_than_input(self):
+        from amazai.cost import model_usd
+        assert (model_usd("test-model", output_tokens=10_000)
+                > model_usd("test-model", input_tokens=10_000))
+
+    def test_cached_tokens_are_cheaper_than_fresh_input(self):
+        from amazai.cost import model_usd
+        assert (model_usd("test-model", cached_tokens=1_000_000)
+                < model_usd("test-model", input_tokens=1_000_000))
+
+    def test_unreported_cached_tokens_do_not_raise(self):
+        from amazai.cost import model_usd
+        assert model_usd("test-model", input_tokens=10, cached_tokens=None) >= 0
+
+    def test_a_call_with_no_tokens_is_free(self):
+        from amazai.cost import model_usd
+        assert model_usd("test-model") == 0.0
+
+
+class TestRunCostAccumulation:
+    def test_model_calls_are_counted(self):
+        c = RunCost()
+        c.add_model(0.01, input_tokens=10, output_tokens=2)
+        c.add_model(0.02, input_tokens=20, output_tokens=4)
+        assert c.model_calls == 2
+        assert c.input_tokens == 30 and c.output_tokens == 6
+
+    def test_cached_tokens_accumulate_and_are_reported(self):
+        c = RunCost()
+        c.add_model(0.01, input_tokens=10, cached_tokens=500)
+        assert c.to_item()["cachedTokens"] == 500
+
+    def test_runtime_seconds_are_recorded_even_when_unpriced(self):
+        # Seconds are measured; a harness second has no verified price, so it
+        # is rated at zero rather than at a guess.
+        c = RunCost()
+        c.add_runtime(0.0, seconds=42.5)
+        assert c.to_item()["runtimeSeconds"] == 42.5
+        assert c.to_item()["runtimeUsd"] == 0.0

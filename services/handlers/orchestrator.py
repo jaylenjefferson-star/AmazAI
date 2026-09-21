@@ -37,6 +37,11 @@ from amazai.stream import EventKind, StreamParser
 
 MAX_HISTORY = 40
 
+#: Memory rows read per scope, newest first. A ceiling on the read, not on what
+#: reaches the prompt: `agentcore.build_system_prompt` injects every
+#: foundational row it is given and caps notes at `agentcore.RECENT_NOTES`.
+MAX_MEMORY = 50
+
 #: Model calls in one turn, each answering the tools the last one asked for. Not a
 #: limit on how much a Bot may do -- it can carry on in the next message -- but a stop
 #: for a loop that would otherwise run until the run's deadline.
@@ -189,20 +194,28 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # being asked to answer.
     history = list(reversed(store.query(K.thread_pk(run["threadId"]), sk_prefix="MSG#",
                                         limit=MAX_HISTORY, ascending=False)))
-    memories = memory.visible(store.query(K.agent_pk(run["agentId"]), sk_prefix="MEM#", limit=50))
+    # The *newest* MAX_MEMORY rows, for the same reason the history above is read
+    # backwards: `mem_` ids carry a millisecond timestamp (store.new_id), so MEM#
+    # sorts chronologically, and an ascending `limit=50` returns the fifty oldest
+    # facts a Bot ever saved. Past fifty it could no longer see anything it had
+    # recently learned -- the exact symptom of a Bot that does not remember.
+    memories = memory.visible(store.query(K.agent_pk(run["agentId"]), sk_prefix="MEM#",
+                                          limit=MAX_MEMORY, ascending=False))
     # Shared user memory (name, timezone, standing preferences) is visible to
     # every agent's context alongside its own, on by default -- see
     # docs/architecture/16-grokbot-ux-alignment.md §4 and open question 1.
     # `memory.visible` drops anything revoked/expired/still-proposed so a
     # publish approval or a revoke takes effect on the very next turn.
-    memories += memory.visible(store.query(K.user_pk(store.owner_id), sk_prefix="MEM#", limit=50))
+    memories += memory.visible(store.query(K.user_pk(store.owner_id), sk_prefix="MEM#",
+                                           limit=MAX_MEMORY, ascending=False))
     # Task-scoped memory only exists for a run that is actually part of that
     # task: its own runId, or the taskId a priority message spawned it under
     # (`trigger.taskId`, set only by an already-authorized send -- see
     # collab.send). A run outside that task never queries this partition, so
     # task memory cannot cross a task boundary by construction.
     effective_task_id = (run.get("trigger") or {}).get("taskId") or run["runId"]
-    memories += memory.visible(store.query(K.task_pk(effective_task_id), sk_prefix="MEM#", limit=50))
+    memories += memory.visible(store.query(K.task_pk(effective_task_id), sk_prefix="MEM#",
+                                           limit=MAX_MEMORY, ascending=False))
     assigned_skills = skills.assigned_active_skills(store, run["agentId"])
 
     # What a run said before it failed, or before the run it replaced was stopped, is
@@ -271,10 +284,14 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     carried: list[dict] = []
     rounds = 0
     drive_started = time.monotonic()
+    # Carried across invocations on the run row, so a run that pauses and
+    # resumes does not get a fresh allowance of failures.
+    tool_errors = run.get("toolErrorCount", 0)
+    consecutive_errors = run.get("consecutiveToolErrors", 0)
 
     def answer(parsed, at_seq: int) -> bool:
         """Handle one tool call. True when the run has to pause for a decision."""
-        nonlocal pending_approval
+        nonlocal pending_approval, tool_errors, consecutive_errors
         result = _handle_tool(store, run, agent, ev, push, resolution,
                               parsed, at_seq, spend, turn)
         if result.get("pause"):
@@ -282,9 +299,21 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             return True
         if parsed.tool_name in ROUND_TRIP_TOOLS:
             out = result.get("toolResult", {"ok": True})
+            failed = isinstance(out, dict) and "error" in out
+            # Counted here because this is the one place that already knows an
+            # inline tool refused. `runs.create` initialises both of these and
+            # nothing ever incremented them, so `cost.check`'s error ceilings
+            # could not be reached by any input -- a model could fail the same
+            # call with the same arguments until the round limit ran out, which
+            # is exactly what happened: nine identical denials in one turn.
+            if failed:
+                tool_errors += 1
+                consecutive_errors += 1
+            else:
+                consecutive_errors = 0
             answered.append({"toolUseId": parsed.tool_use_id, "name": parsed.tool_name,
                              "input": parsed.tool_input, "result": out,
-                             "error": isinstance(out, dict) and "error" in out})
+                             "error": failed})
         return False
 
     try:
@@ -308,6 +337,21 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                     if parsed.kind is EventKind.TEXT:
                         buffer.append(parsed.text)
                         push.delta(run["runId"], run["threadId"], parsed.text)
+                        continue
+
+                    if parsed.kind is EventKind.USAGE:
+                        # The only moment the provider says what a call cost.
+                        # Every ceiling below reads what this accumulates, so a
+                        # turn whose usage event went unparsed is a turn that
+                        # spent real money and reported zero.
+                        spend.add_model(
+                            cost.model_usd(model_id,
+                                           input_tokens=parsed.input_tokens,
+                                           output_tokens=parsed.output_tokens,
+                                           cached_tokens=parsed.cached_tokens),
+                            input_tokens=parsed.input_tokens,
+                            output_tokens=parsed.output_tokens,
+                            cached_tokens=parsed.cached_tokens or 0)
                         continue
 
                     if parsed.kind is EventKind.ERROR:
@@ -337,10 +381,29 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             rounds += 1
             out_of_rounds = rounds > MAX_TOOL_ROUNDS
             out_of_time = time.monotonic() - drive_started > ROUND_BUDGET_SECONDS
-            if out_of_rounds or out_of_time:
-                note = ("\n\n(I stopped here: that was more tool calls than one turn allows. Ask me to carry on.)"
-                        if out_of_rounds else
-                        "\n\n(I stopped here: that turn ran as long as one turn may. Ask me to carry on.)")
+            # Money, re-checked between rounds. The check at the top of this
+            # function only knows what *earlier* runs spent; a turn that calls
+            # the model forty times passes it once and could then spend past
+            # every ceiling without being asked again. This is the ceiling that
+            # actually holds inside one invocation. `warn` mode returns WARN
+            # rather than STOP here, so D7 still decides whether a ceiling
+            # stops a run or only reports it.
+            money = budget_check(budget,
+                                 spent_this_run=run.get("costUsd", 0.0) + spend.total_usd,
+                                 spent_this_month=spent_month + spend.total_usd,
+                                 tool_errors=tool_errors,
+                                 consecutive_tool_errors=consecutive_errors)
+            if out_of_rounds or out_of_time or money.should_stop:
+                if out_of_rounds:
+                    note = ("\n\n(I stopped here: that was more tool calls than one turn "
+                            "allows. Ask me to carry on.)")
+                elif out_of_time:
+                    note = ("\n\n(I stopped here: that turn ran as long as one turn may. "
+                            "Ask me to carry on.)")
+                else:
+                    note = f"\n\n(I stopped here: {money.reason}.)"
+                    push.notification(
+                        "warn", f"{agent['name']} stopped mid-task: {money.reason}")
                 buffer.append(note)
                 push.delta(run["runId"], run["threadId"], note)
                 break
@@ -353,6 +416,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     except Exception as exc:  # noqa: BLE001
         stream_error = f"{type(exc).__name__}: {exc}"
 
+    # Wall clock, not a price. What a harness second costs is not established
+    # for this account, so the seconds are recorded and rated at zero rather
+    # than multiplied by a number nobody verified -- an invented rate would
+    # move every budget ceiling by an unknown amount.
+    spend.add_runtime(0.0, seconds=time.monotonic() - drive_started)
+
     text = "".join(buffer).strip()
     if text or turn.steps or turn.cards:
         _persist_message(store, run, agent, text, spend, steps=turn.steps,
@@ -362,6 +431,8 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     run = store.update(run["pk"], "META", {
         "cursor": {"turn": run.get("cursor", {}).get("turn", 0) + 1, "lastEventSeq": seq},
         "costUsd": run.get("costUsd", 0.0) + spend.total_usd,
+        "toolErrorCount": tool_errors,
+        "consecutiveToolErrors": consecutive_errors,
     })
     _write_cost(store, run, agent, spend)
 
@@ -703,8 +774,10 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
 
     if name == "propose_shared_memory":
         # Same pattern as propose_agent/propose_skill: the model nominates, a
-        # person decides. Nothing here reaches shared_user until _decide
-        # approves it -- see memory.plan_write's status="proposed" default.
+        # person decides. No memory row is written here at all -- the proposed
+        # fields ride on the approval, and `api._decide` is the only thing that
+        # ever writes them to the shared partition. A denied proposal therefore
+        # leaves nothing behind to clean up.
         try:
             fields = memory.validate(args, scope="shared_user")
         except memory.ValidationError as exc:
@@ -1012,12 +1085,17 @@ def _propose_agent(store, run, agent, ev, push, turn, parsed, seq, args) -> dict
     """A Bot's own idea for a new Bot: shown to the operator to approve, never created."""
     proposal = _agent_creation_proposal(args, parent_agent_id=agent["agentId"])
     try:
-        A.validate_profile(proposal)
+        profile = A.validate_profile(proposal)
     except A.ValidationError as exc:
         ev.error(seq, "terminal", f"create_agent: {exc}")
         _step(push, run, turn, "agent.create", f"not proposed: {exc}",
               review.Review(review.DENIED, "agent", str(exc)))
         return {"pause": False, "toolResult": {"error": str(exc)}}
+    # Carry the *normalized* profile onto the card, not the raw arguments. The
+    # return value used to be discarded, so a name the validator had tidied --
+    # a title lifted out of it, an em dash folded to a hyphen -- was approved
+    # in its original form and the tidying was silently undone.
+    proposal.update({k: profile[k] for k in ("name", "title", "role", "description")})
     # The always-approve floor includes agent.create. Calling the central
     # policy gate here keeps that invariant explicit if the policy evolves.
     decision = policy.evaluate("agent.create", Capability.ADMIN)

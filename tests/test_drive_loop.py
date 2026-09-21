@@ -17,7 +17,7 @@ import pytest
 
 import handlers.api as api
 import handlers.orchestrator as orch
-from amazai import approvals, keys as K, runs
+from amazai import approvals, keys as K, memory, runs
 from amazai.states import RunState
 
 from tests.test_agents_api import api_table, call  # noqa: F401
@@ -244,3 +244,269 @@ class TestRequestNotes:
         fake = world.script([text("ok")])
         world.drive()
         assert "use the handoff tool" in fake.calls[0]["system_prompt"]
+
+
+
+class TestABotReadsBackWhatItSaved:
+    """The loop half of tests/test_memory_reaches_the_prompt.py.
+
+    `remember` wrote a row, the row was re-read on every later run, and the
+    prompt builder dropped it because `validate` defaults kind to `note` and
+    only foundational rows were injected. A Bot's own memory was a no-op it
+    had no way to notice.
+    """
+
+    def test_a_fact_a_bot_saved_is_in_its_next_prompt(self, world):
+        world.script([*tool_use("remember", {"scope": "agent",
+                                            "title": "Deploys",
+                                            "body": "staging is eu-west-1"}),
+                      text("Noted.")])
+        world.drive()
+
+        # A second run, after the first has settled.
+        second = runs.create(world.store, agent_id=world.agent_id,
+                             thread_id=world.run["threadId"], goal="where is staging?")
+        fake = world.script([text("eu-west-1.")])
+        orch._drive(world.store, second, {"runId": second["runId"]})
+        assert "staging is eu-west-1" in fake.calls[0]["system_prompt"], \
+            "the Bot saved a fact and could not see it on the next run"
+
+    def test_an_expiry_a_bot_set_is_stored_rather_than_discarded(self, world):
+        world.script([*tool_use("remember", {"scope": "agent", "body": "sprint ends Tuesday",
+                                            "expires_at": "2026-03-01T00:00:00Z"}),
+                      text("Noted.")])
+        world.drive()
+        rows = [r for r in world.store.query(K.agent_pk(world.agent_id), sk_prefix="MEM#")
+                if r.get("entity") == "Memory"]
+        assert rows and rows[0]["expiresAt"] == "2026-03-01T00:00:00Z"
+
+    def test_a_log_a_bot_wrote_stays_out_of_its_next_prompt(self, world):
+        world.script([*tool_use("remember", {"scope": "agent", "kind": "log",
+                                             "body": "ran the nightly export"}),
+                      text("Done.")])
+        world.drive()
+        second = runs.create(world.store, agent_id=world.agent_id,
+                             thread_id=world.run["threadId"], goal="anything else?")
+        fake = world.script([text("No.")])
+        orch._drive(world.store, second, {"runId": second["runId"]})
+        assert "ran the nightly export" not in fake.calls[0]["system_prompt"]
+
+    def test_the_newest_facts_are_the_ones_read_back(self, world):
+        # `mem_` ids are time-ordered, so an ascending limit returned the
+        # *oldest* rows. A Bot past the read ceiling stopped seeing anything it
+        # had recently learned.
+        for i in range(6):
+            world.store.put(memory.plan_write(
+                {"body": f"fact-{i:03d}-end", "kind": "foundational"},
+                K.agent_pk(world.agent_id), scope="agent",
+                source="agent", author=world.agent_id))
+
+        original = orch.MAX_MEMORY
+        orch.MAX_MEMORY = 3
+        try:
+            fake = world.script([text("ok")])
+            world.drive()
+            prompt = fake.calls[0]["system_prompt"]
+        finally:
+            orch.MAX_MEMORY = original
+
+        assert "fact-005-end" in prompt, "the newest fact was not read back"
+        assert "fact-000-end" not in prompt, "the oldest facts crowded out the newest"
+def usage(input_tokens=0, output_tokens=0, **extra):
+    """The trailing event that says what the call cost."""
+    return {"metadata": {"usage": {"inputTokens": input_tokens,
+                                   "outputTokens": output_tokens, **extra}}}
+
+
+class TestSpendIsRecorded:
+    """What a run cost has to reach the run row.
+
+    Before this, `add_model` had no caller anywhere in the codebase: the usage
+    event was parsed as UNKNOWN and dropped, so `totalUsd` was always 0.0,
+    `spent_this_month` summed a column of zeros, and the hard-stop branch in
+    `cost.check` could not be reached by any input. These assert the chain end
+    to end -- stream event, run row, cost row, `GET /usage`.
+    """
+
+    def test_a_turn_records_what_it_spent_on_the_run(self, world):
+        world.script([text("Done."), usage(input_tokens=1000, output_tokens=500)])
+        assert world.drive()["state"] == RunState.COMPLETED.value
+        assert world.store.get(world.run["pk"], "META")["costUsd"] > 0
+
+    def test_tokens_land_on_the_cost_row(self, world):
+        world.script([text("Done."), usage(input_tokens=1000, output_tokens=500)])
+        world.drive()
+        rows = [r for r in world.store.query(
+            K.cost_pk(world.agent_id, world.store.get(world.run["pk"], "META")["createdAt"][:7]))
+            if r.get("entity") == "Cost"]
+        assert rows, "no COST# row was written for the run"
+        assert rows[0]["inputTokens"] == 1000
+        assert rows[0]["outputTokens"] == 500
+        assert rows[0]["modelCalls"] == 1
+        assert rows[0]["totalUsd"] > 0
+
+    def test_the_usage_endpoint_reports_a_non_zero_total(self, world):
+        world.script([text("Done."), usage(input_tokens=1000, output_tokens=500)])
+        world.drive()
+        status, body = call("GET", "/usage", qs={"agentId": world.agent_id})
+        assert status == 200, body
+        assert body["totalUsd"] > 0, "the Usage screen would still read $0.00"
+
+    def test_a_turn_the_provider_reported_nothing_for_stays_free(self, world):
+        # No usage event: no invented number. A missing report is not a charge.
+        world.script([text("Done.")])
+        world.drive()
+        assert world.store.get(world.run["pk"], "META")["costUsd"] == 0.0
+
+    def test_spend_accumulates_across_tool_rounds(self, world):
+        world.script(
+            [*tool_use("find_agents", {"query": "ops"}), usage(input_tokens=500, output_tokens=100)],
+            [text("Found them."), usage(input_tokens=600, output_tokens=120)],
+        )
+        world.drive()
+        row = world.store.get(world.run["pk"], "META")
+        assert row["costUsd"] > 0
+        cost_rows = [r for r in world.store.query(K.cost_pk(world.agent_id, row["createdAt"][:7]))
+                     if r.get("entity") == "Cost"]
+        assert cost_rows[0]["modelCalls"] == 2, "only one round's usage was counted"
+        assert cost_rows[0]["inputTokens"] == 1100
+
+    def test_runtime_seconds_are_recorded(self, world):
+        world.script([text("Done."), usage(input_tokens=10, output_tokens=2)])
+        world.drive()
+        row = world.store.get(world.run["pk"], "META")
+        cost_rows = [r for r in world.store.query(K.cost_pk(world.agent_id, row["createdAt"][:7]))
+                     if r.get("entity") == "Cost"]
+        assert cost_rows[0]["runtimeSeconds"] >= 0
+
+
+class TestBudgetStopsARunawayTurn:
+    """The ceiling that holds *inside* one invocation.
+
+    The budget check at the top of `_drive` runs once and knows only what
+    earlier runs spent. A turn may call the model up to `MAX_TOOL_ROUNDS`
+    times after passing it, so without a check between rounds the per-run
+    ceiling is advisory. The World fixture's Bot has perRunUsd = 1.00.
+    """
+
+    def test_a_turn_that_blows_the_per_run_ceiling_stops_between_rounds(self, world):
+        fake = world.script(
+            # Round one asks for a tool and reports spend well past $1.00.
+            [*tool_use("find_agents", {"query": "ops"}), usage(output_tokens=200_000)],
+            # Round two must never be requested.
+            [text("still going")],
+        )
+        out = world.drive()
+        assert len(fake.calls) == 1, "the loop kept spending after the ceiling was reached"
+        assert out["state"] == RunState.COMPLETED.value
+        reply = [m for m in world.messages() if m["role"] == "assistant"][-1]
+        assert "I stopped here" in reply["text"]
+        assert "budget" in reply["text"]
+
+    def test_the_operator_is_told_why_it_stopped(self, world, monkeypatch):
+        # `_drive` builds its own Push; hand it the recording one so the
+        # notification the operator would receive is inspectable.
+        monkeypatch.setattr(orch, "Push", lambda *a, **k: world.push)
+        world.script(
+            [*tool_use("find_agents", {"query": "ops"}), usage(output_tokens=200_000)],
+            [text("still going")],
+        )
+        world.drive()
+        warnings = [e for e in world.push.sent
+                    if e["type"] == "notification" and e.get("level") == "warn"]
+        assert any("budget" in e.get("message", "") for e in warnings), \
+            "the run stopped for money and said nothing about it"
+
+    def test_a_turn_inside_its_budget_carries_on(self, world):
+        fake = world.script(
+            [*tool_use("find_agents", {"query": "ops"}), usage(input_tokens=100, output_tokens=20)],
+            [text("Found them."), usage(input_tokens=120, output_tokens=30)],
+        )
+        world.drive()
+        assert len(fake.calls) == 2, "a cheap turn was stopped as though it were expensive"
+
+    def test_warn_mode_reports_the_ceiling_without_stopping(self, world):
+        # D7: a ceiling stops a run only when the Bot is set to hard_stop.
+        world.store.update(K.agent_pk(world.agent_id), "META",
+                           {"budget": {"perRunUsd": 1.0, "perMonthUsd": 10.0,
+                                       "onCeiling": "warn"}})
+        fake = world.script(
+            [*tool_use("find_agents", {"query": "ops"}), usage(output_tokens=200_000)],
+            [text("carrying on"), usage(input_tokens=10, output_tokens=2)],
+        )
+        world.drive()
+        assert len(fake.calls) == 2, "warn mode stopped the run instead of reporting"
+
+    def test_a_resumed_run_that_already_spent_its_budget_does_not_start(self, world):
+        # Spend now lands on the run row, so the check at the top of `_drive`
+        # finally has a non-zero number to refuse on.
+        world.store.update(world.run["pk"], "META", {"costUsd": 5.0})
+        fake = world.script([text("should never be asked")])
+        out = world.drive()
+        assert out["ok"] is False
+        assert "budget" in out["reason"]
+        assert fake.calls == []
+
+
+
+class TestARepeatedToolFailureStopsTheTurn:
+    """The other half of the nine-denials failure.
+
+    `runs.create` initialises `toolErrorCount` and `consecutiveToolErrors` and
+    nothing ever incremented them, so `cost.check`'s two error ceilings could
+    not be reached by any input. A model that failed the same call with the
+    same arguments could keep failing it until MAX_TOOL_ROUNDS ran out -- forty
+    model calls, now billed, to accomplish nothing.
+    """
+
+    def test_three_failures_in_a_row_end_the_turn(self, world):
+        # The World's Bot allows 3 consecutive tool errors.
+        bad = {"scope": "nonsense", "body": "x"}     # `remember` refuses the scope
+        fake = world.script(
+            [*tool_use("remember", bad, "t1"), usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t2"), usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t3"), usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t4"), usage(output_tokens=10)],
+            [text("still going")],
+        )
+        world.drive()
+        assert len(fake.calls) <= 3, \
+            f"the same failing call was retried {len(fake.calls)} times"
+
+    def test_the_run_records_the_failures(self, world):
+        bad = {"scope": "nonsense", "body": "x"}
+        world.script(
+            [*tool_use("remember", bad, "t1"), usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t2"), usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t3"), usage(output_tokens=10)],
+            [text("done")],
+        )
+        world.drive()
+        row = world.store.get(world.run["pk"], "META")
+        assert row["toolErrorCount"] >= 3
+        assert row["consecutiveToolErrors"] >= 3
+
+    def test_a_success_clears_the_consecutive_count(self, world):
+        bad = {"scope": "nonsense", "body": "x"}
+        world.script(
+            [*tool_use("remember", bad, "t1"), usage(output_tokens=10)],
+            [*tool_use("remember", {"scope": "agent", "body": "a fact"}, "t2"),
+             usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t3"), usage(output_tokens=10)],
+            [text("done")],
+        )
+        world.drive()
+        row = world.store.get(world.run["pk"], "META")
+        # Two failures total, but they were not consecutive, so the run went on.
+        assert row["toolErrorCount"] == 2
+        assert row["consecutiveToolErrors"] == 1
+
+    def test_a_turn_whose_tools_all_work_is_not_stopped(self, world):
+        fake = world.script(
+            [*tool_use("find_agents", {"query": "ops"}, "t1"), usage(output_tokens=10)],
+            [*tool_use("find_agents", {"query": "eng"}, "t2"), usage(output_tokens=10)],
+            [text("Found them."), usage(output_tokens=10)],
+        )
+        world.drive()
+        assert len(fake.calls) == 3
+        assert world.store.get(world.run["pk"], "META")["consecutiveToolErrors"] == 0
