@@ -2667,3 +2667,73 @@ a.row-card:hover { border-color: var(--btn-line); }
 .tools-problem { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--danger-wash); color: var(--danger); }
 .tools-empty { color: var(--dim); text-align: center; }
 .tools-more { width: 100%; margin-top: 8px; }
+
+/* ------------------------------------------------------------- admin surface
+   The governance console (web/src/admin/*). Deliberately plain: this is not a
+   conversation, so it reuses the .page/.card-list chrome rather than the chat
+   shell, and adds only what the Directory / kill switch / audit rows need. */
+.admin { max-width: 900px; margin: 0 auto; padding: 0 16px 40px; }
+.admin-bar {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 16px 0 12px; border-bottom: 1px solid var(--hairline);
+}
+.admin-brand { display: flex; flex-direction: column; }
+.admin-brand strong { font-size: 17px; letter-spacing: -.02em; }
+.admin-scope { font-size: 12px; color: var(--dim); }
+.admin-nav { display: flex; gap: 4px; margin-left: 8px; }
+.admin-nav a {
+  padding: 7px 12px; border-radius: var(--r-sm); font-size: 13.5px;
+  color: var(--dim); text-decoration: none;
+}
+.admin-nav a.active { color: var(--text); background: var(--raised); }
+.admin-exit {
+  margin-left: auto; font-size: 13.5px; text-decoration: none;
+  padding: 7px 12px; border-radius: 999px; border: 1px solid var(--hairline);
+  color: var(--text);
+}
+.admin-note {
+  margin: 12px 0 0; padding: 10px 12px; font-size: 13px; line-height: 1.5;
+  color: var(--dim); background: var(--warn-wash); border-radius: var(--r-sm);
+}
+.admin-body { margin-top: 8px; }
+
+.state-chip.cc-tone-ok     { color: var(--ok); }
+.state-chip.cc-tone-warn   { color: var(--warn); }
+.state-chip.cc-tone-danger { color: var(--danger); }
+
+.admin-row {
+  padding: 14px; margin-bottom: 9px;
+  border-radius: var(--r-lg); border: 1px solid var(--hairline);
+  background: var(--panel); box-shadow: var(--lift);
+}
+.admin-row-head { display: flex; align-items: center; gap: 10px; }
+.admin-row-head strong { font-size: 14px; }
+.admin-row-head .state-chip { margin-left: auto; }
+.admin-row-meta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 6px; font-size: 12.5px; color: var(--dim); }
+.admin-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.admin-role-select { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--dim); }
+.admin-role-select select { padding: 6px 8px; border-radius: var(--r-sm); border: 1px solid var(--hairline); background: var(--panel); color: var(--text); }
+
+.admin-audit-row {
+  padding: 12px 14px; margin-bottom: 6px;
+  border-radius: var(--r-lg); border: 1px solid var(--hairline); background: var(--panel);
+}
+.admin-audit-head { display: flex; align-items: baseline; gap: 10px; }
+.admin-audit-action { font-size: 13.5px; }
+.admin-audit-at { margin-left: auto; font-size: 12px; color: var(--dim); }
+.admin-audit-detail { margin: 6px 0 0; font-size: 13px; color: var(--dim); }
+
+.admin-confirm {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  width: min(440px, calc(100vw - 32px));
+  padding: 18px; border-radius: var(--r-lg);
+  border: 1px solid var(--danger-edge); background: var(--panel);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .28); z-index: 40;
+}
+.admin-confirm h3 { margin: 0 0 6px; font-size: 15px; }
+.admin-confirm-desc { margin: 0 0 12px; font-size: 13px; color: var(--dim); line-height: 1.5; }
+.admin-field { display: block; margin-bottom: 12px; }
+.admin-field span { display: block; font-size: 12.5px; color: var(--dim); margin-bottom: 5px; }
+.admin-field input { width: 100%; }
+.admin-error { font-size: 13px; color: var(--danger); margin-bottom: 10px; }
+.admin-confirm-actions { display: flex; gap: 8px; }

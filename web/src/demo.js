@@ -349,9 +349,23 @@ const OPTIONS = {
 const ADMIN_MEMBERS = [
   { subject: 'you', role: 'owner', scope: 'org', scopeId: 'demo', state: 'active',
     invitedBy: null, invitedAt: iso(-864_000_00) },
+  { subject: 'auth0|teammate-avery', role: 'admin', scope: 'org', scopeId: 'demo', state: 'active',
+    invitedBy: 'you', invitedAt: iso(-30 * 86400_000) },
+  { subject: 'auth0|teammate-blair', role: 'member', scope: 'org', scopeId: 'demo', state: 'suspended',
+    invitedBy: 'you', invitedAt: iso(-12 * 86400_000) },
 ];
 let ADMIN_KILLSWITCH = { frozen: false, reason: '', setBy: null, setAt: null };
-const ADMIN_AUDIT = [];
+// A couple of rows so the audit screen has something chronological to render.
+// Append-only in the real control plane; here they seed the trail the /admin
+// actions then extend.
+const ADMIN_AUDIT = [
+  { action: 'member.invited', at: iso(-30 * 86400_000), actorUserId: 'you', actorAgentId: null,
+    correlationId: 'corr_seed01', before: {}, after: { subject: 'auth0|teammate-avery', role: 'admin' },
+    detail: 'invited a teammate as admin', v: 1 },
+  { action: 'member.suspended', at: iso(-2 * 86400_000), actorUserId: 'you', actorAgentId: null,
+    correlationId: 'corr_seed02', before: { state: 'active' }, after: { state: 'suspended' },
+    detail: 'suspended auth0|teammate-blair pending review', v: 1 },
+];
 
 function adminAudit(action, extra = {}) {
   ADMIN_AUDIT.push({

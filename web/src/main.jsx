@@ -8,7 +8,7 @@ import './styles.css';
 import './premium.css';
 import './characters/characters.css';
 
-import { AmazAIAuthProvider, configured, useAuth0 } from './auth0';
+import { AmazAIAuthProvider, configured, isOwner, useAuth0 } from './auth0';
 import { syncToPath } from './theme';
 import AuthGate from './components/AuthGate';
 import Shell from './app/Shell';
@@ -34,6 +34,10 @@ import CompanionSettings from './screens/CompanionSettings';
 import Room from './screens/Room';
 import Usage from './screens/Usage';
 import Gallery from './screens/Gallery';
+import AdminShell from './admin/AdminShell';
+import AdminDirectory from './admin/AdminDirectory';
+import AdminKillSwitch from './admin/AdminKillSwitch';
+import AdminAudit from './admin/AdminAudit';
 import Connectors from './screens/Connectors';
 import Marketplace from './screens/Marketplace';
 import OrgChart from './screens/OrgChart';
@@ -127,6 +131,23 @@ function PublicOnly({ children }) {
   return children;
 }
 
+/**
+ * The /admin surface is owner-only.
+ *
+ * A browser guard, not the boundary: the deployed /admin/* API validates the
+ * token and enforces the RBAC matrix server-side. This keeps a non-owner who
+ * types /admin out of a UI they cannot use, and bounces them to the member
+ * app rather than a blank governance console. In demo mode there is no Auth0
+ * user, so `isOwner` is satisfied by the same "owner check off => allow" rule
+ * the member app uses -- the demo has no real principal to gate on.
+ */
+function AdminOnly({ children }) {
+  const { user, isLoading } = useAuth0();
+  if (!DEMO && isLoading) return null;
+  if (!DEMO && isOwner(user) === false) return <Navigate to="/" replace />;
+  return children;
+}
+
 function Router() {
   return (
     <Routes>
@@ -172,6 +193,18 @@ function Router() {
         <Route path="/settings" element={<Settings />} />
         <Route path="/usage" element={<Usage />} />
         <Route path="/characters" element={<Gallery />} />
+      </Route>
+
+      {/* The admin surface: a sibling route group rendered OUTSIDE <Shell>, so
+          it carries none of the chat chrome (no Composer). Gated by the same
+          AuthGate the app uses, then owner-only. Deliberately NOT nested under
+          FirstRunGuard -- an owner who has not finished member onboarding must
+          still be able to reach governance rather than be walled into setup. */}
+      <Route path="/admin" element={<Protected><AdminOnly><AdminShell /></AdminOnly></Protected>}>
+        <Route index element={<AdminDirectory />} />
+        <Route path="directory" element={<AdminDirectory />} />
+        <Route path="killswitch" element={<AdminKillSwitch />} />
+        <Route path="audit" element={<AdminAudit />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
