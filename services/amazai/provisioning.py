@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import os
 
-from amazai import agentcore, agents as A, connectors, keys as K
+from amazai import agents as A, connectors, keys as K, standard_runtime
 from amazai.policy import Capability
 from amazai.store import Store
 
@@ -85,11 +85,17 @@ def resolve_model_id(agent: dict, seated: list[dict]) -> None:
 
 
 def provision_harness(store: Store, agent: dict) -> dict:
-    """Give the agent its runtime identity and mark it runnable.
+    """Attach a logical Bot to the owner's standard AgentCore runtime.
+
+    Bot identity and authority live in the control plane and travel on every
+    invocation. Standard Bots therefore share one restricted account harness;
+    AgentCore gives each `(owner, Bot, thread)` session its own isolated
+    microVM. `standard_runtime.provision_bot` retains the former dedicated
+    path behind `AMAZAI_SHARED_RUNTIME=false` for rollback.
 
     Separated so the whole create path can be exercised without an AWS
-    account: a test swaps this for a stub and still drives the transaction,
-    the rollback and the audit trail.
+    account: tests swap this seam and still drive transaction, rollback and
+    audit behavior.
     """
     model_id = (agent.get("model") or {}).get("modelId")
     if not model_id:
@@ -102,27 +108,7 @@ def provision_harness(store: Store, agent: dict) -> dict:
             "run scripts/resolve_models.py against this account first"
         )
 
-    # User-created Bots use the stack's restricted dynamic role. It has model
-    # and harness-state permissions only: no drive, evidence, connector,
-    # computer, or shell permissions. Passing no role makes AgentCore reject
-    # the request before it creates the harness, which previously made every
-    # new Bot and the first-Bot offer fail.
-    role_arn = os.environ.get("AGENT_ROLE_ARN", "").strip()
-    if not role_arn:
-        raise RuntimeError("no AgentCore execution role is configured for new Bots")
-    client = agentcore.AgentCore()
-    harness_arn = client.create_harness(
-        name=f"amazai_{agent['agentId']}",
-        execution_role_arn=role_arn,
-        tool_names=agent.get("allowedTools") or [],
-    )
-
-    return store.update(K.agent_pk(agent["agentId"]), "META", {
-        "harnessArn": harness_arn,
-        "executionRoleArn": role_arn,
-        "status": "active",
-        "state": "active",
-    })
+    return standard_runtime.provision_bot(store, agent)
 
 
 def child_body(store: Store, creator: dict, args: dict) -> dict:

@@ -20,7 +20,7 @@ import boto3
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors as C,
                     identity, keys as K, memory, models, routines as R,
-                    runs, schedules, settings as S, skills, threads)
+                    runs, schedules, settings as S, skills, standard_runtime, threads)
 from amazai import dispatch, org, provisioning
 from amazai.policy import Capability
 from amazai.states import PAUSED, RunState, TERMINAL
@@ -568,14 +568,19 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
                 f"a room holds at most {collab.MAX_ROOM_MEMBERS} agents")
         thread_id = new_id("th_")
         actor = _actor(event)
+        # A room has no single runtime session: every logical Bot in it gets a
+        # distinct owner/Bot/thread session when a run starts. A one-Bot task
+        # can expose its session for the Computer surface.
+        session = ({"sessionId": K.bot_session_id(store.owner_id, agent_ids[0], thread_id)}
+                   if len(agent_ids) == 1 else {})
         return _resp(201, store.put({
             "pk": K.thread_pk(thread_id), "sk": "META",
             "entity": "Thread", "threadId": thread_id,
             "gsi1pk": "THREADS", "gsi1sk": now_iso(),
             "kind": body.get("kind", "dm"),
             "title": body.get("title", "New task"),
-            "agentIds": body.get("agentIds", []),
-            "sessionId": K.session_id(thread_id),
+            "agentIds": agent_ids,
+            **session,
             "lastActivity": now_iso(),
             # A room is task-bound from creation: the human who opened it is
             # its owner of record, and it starts "active" so the Rooms list
@@ -1134,7 +1139,12 @@ def _pick_agent(thread: dict, text: str) -> str | None:
 
 
 def _exec(store: Store, thread_id: str, body: dict):
-    """Raw shell in the microVM. No model, no tokens."""
+    """Raw shell in one logical Bot's isolated runtime session.
+
+    Direct chats have one unambiguous Bot. A room may have several Bots on the
+    same account harness, so selecting its first member silently would put a
+    command in the wrong microVM; callers must name the member there.
+    """
     command = (body.get("command") or "").strip()
     if not command:
         return _resp(400, {"error": "command is required"})
@@ -1143,17 +1153,33 @@ def _exec(store: Store, thread_id: str, body: dict):
     agent_ids = thread.get("agentIds") or []
     if not agent_ids:
         return _resp(400, {"error": "no agent assigned to this thread"})
-    agent = store.get(K.agent_pk(agent_ids[0]), "META")
+    requested = (body.get("agentId") or "").strip()
+    if thread.get("kind") == "room" and not requested:
+        return _resp(400, {"error": "agentId is required for a group-chat computer"})
+    agent_id = requested or agent_ids[0]
+    if agent_id not in agent_ids:
+        return _resp(403, {"error": "that Bot is not a member of this thread"})
+    agent = store.get(K.agent_pk(agent_id), "META")
 
-    result = agentcore.AgentCore().exec(
-        harness_arn=agent["harnessArn"],
-        session_id=thread.get("sessionId") or K.session_id(thread_id),
+    core = agentcore.AgentCore()
+    harness_arn, session_id = standard_runtime.for_exec(store, agent, client=core)
+    # A direct thread and its model runs derive this same v2 key. For a room,
+    # shell access is explicit but still belongs to the selected Bot's room
+    # session, not its DM. The current console exposes Computer from DMs only;
+    # this branch keeps the API correct before a room UI is added.
+    if thread_id != f"dm-{agent_id}":
+        session_id = K.bot_session_id(store.owner_id, agent_id, thread_id)
+
+    result = core.exec(
+        harness_arn=harness_arn,
+        session_id=session_id,
         command=command,
     )
     return _resp(200, {
         "stdout": result.get("stdout", ""),
         "stderr": result.get("stderr", ""),
         "exitCode": result.get("exitCode", 0),
+        "agentId": agent_id,
     })
 
 

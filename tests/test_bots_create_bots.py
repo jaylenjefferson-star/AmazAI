@@ -34,11 +34,25 @@ SCOUT = {"name": "Scout", "title": "Research", "role": "Finds and summarises sou
 @pytest.fixture(autouse=True)
 def no_aws(monkeypatch):
     """Creating a Bot's harness is the one thing that needs an account."""
+    role = "arn:aws:iam::1:role/dynamic"
+    harness = "arn:aws:bedrock-agentcore:us-west-2:1:harness/amazai_shared-test"
+
     def provision(store, agent):
+        if not store.try_get(K.user_pk(store.owner_id), K.runtime_sk()):
+            store.put({
+                "pk": K.user_pk(store.owner_id), "sk": K.runtime_sk(),
+                "entity": "AccountRuntime", "runtimeKind": "standard",
+                "state": "ready", "harnessName": "amazai_shared_test",
+                "harnessArn": harness, "executionRoleArn": role,
+                "claimToken": "test", "claimedAt": "2026-01-01T00:00:00Z",
+            })
         return store.update(K.agent_pk(agent["agentId"]), "META", {
-            "harnessArn": f"arn:aws:bedrock-agentcore:us-west-2:1:harness/amazai_{agent['agentId']}",
-            "executionRoleArn": "arn:aws:iam::1:role/dynamic", "status": "active", "state": "active"})
+            "harnessArn": harness, "sharedHarnessArn": harness,
+            "executionRoleArn": role, "runtimeMode": "shared",
+            "status": "active", "state": "active"})
     monkeypatch.setattr(provisioning, "provision_harness", provision)
+    monkeypatch.setenv("AGENT_ROLE_ARN", role)
+    monkeypatch.setenv("AMAZAI_SHARED_RUNTIME", "true")
     monkeypatch.delenv("MAX_AGENTS", raising=False)
 
 
@@ -76,7 +90,8 @@ class TestCreatingABotWhenTheOperatorAsked:
         out = result["toolResult"]
         assert out["created"] is True and out["agentId"] == "scout" and out["reportsTo"] == world.agent_id
         assert agent_row(world, "scout")["status"] == "active"
-        assert agent_row(world, "scout")["harnessArn"].endswith("amazai_scout")
+        assert agent_row(world, "scout")["harnessArn"].endswith("amazai_shared-test")
+        assert agent_row(world, "scout")["runtimeMode"] == "shared"
 
     def test_it_reports_to_its_creator_and_is_recorded_as_its_creators(self, world, woken):  # noqa: F811
         create(world)

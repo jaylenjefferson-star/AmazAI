@@ -253,6 +253,11 @@ export class AmazaiStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    const sharedRuntime = String(this.node.tryGetContext('sharedRuntime') ?? 'true').toLowerCase();
+    if (!['true', 'false'].includes(sharedRuntime)) {
+      throw new Error(`context sharedRuntime must be true or false, got ${sharedRuntime}`);
+    }
+
     const commonEnv: Record<string, string> = {
       TABLE_NAME: table.tableName,
       DRIVE_BUCKET: driveBucket.bucketName,
@@ -261,6 +266,10 @@ export class AmazaiStack extends cdk.Stack {
       AUTH0_DOMAIN: props.auth0Domain,
       AUTH0_AUDIENCE: props.auth0Audience,
       POWERTOOLS_SERVICE_NAME: 'amazai',
+      // Standard Bots are logical control-plane identities over one restricted
+      // account harness. False is a deliberate rollback for existing Bots
+      // whose dedicated harness ARN is still retained on their row.
+      AMAZAI_SHARED_RUNTIME: sharedRuntime,
 
       COMPOSIO_SECRET_ID: composioSecret.secretName,
     };
@@ -338,29 +347,52 @@ export class AmazaiStack extends cdk.Stack {
       composioSecret.grantRead(fn);
     }
 
-    // Only the orchestrator and routine workers talk to AgentCore.
-    for (const fn of [apiFn, orchestratorFn, routineFn]) {
+    // Runtime creation is shared by the API (a person creates a Bot) and the
+    // orchestrator (a Bot creates one at the operator's request). Current AWS
+    // authorization evaluates the Harness call plus its underlying Runtime,
+    // Memory, endpoint and tag operations; missing any one can leave a named
+    // CREATE_FAILED resource that every retry rediscovers.
+    const harnessProvisionActions = [
+      'bedrock-agentcore:CreateHarness',
+      'bedrock-agentcore:CreateAgentRuntime',
+      'bedrock-agentcore:CreateMemory',
+      'bedrock-agentcore:GetMemory',
+      'bedrock-agentcore:TagResource',
+      'bedrock-agentcore:CreateHarnessEndpoint',
+      'bedrock-agentcore:CreateAgentRuntimeEndpoint',
+      'bedrock-agentcore:GetHarness',
+      // Crash recovery for a Lambda that died after CreateHarness succeeded
+      // but before the deterministic account-runtime row was updated.
+      'bedrock-agentcore:ListHarnesses',
+    ];
+    for (const fn of [apiFn, orchestratorFn]) {
       fn.addToRolePolicy(new iam.PolicyStatement({
-        sid: 'AgentCore',
-        actions: [
-          'bedrock-agentcore:CreateHarness',
-          // The control-plane SDK exposes create_harness, but AgentCore
-          // authorizes the underlying resource creation as CreateAgentRuntime.
-          // Keep both names: the former documents the SDK boundary and the
-          // latter is the action AWS evaluates for a new Bot harness.
-          'bedrock-agentcore:CreateAgentRuntime',
-          // A harness also provisions its runtime endpoint. Without this the
-          // harness record is created but ends CREATE_FAILED, so retries only
-          // see a name collision instead of a usable Bot.
-          'bedrock-agentcore:CreateAgentRuntimeEndpoint',
-          'bedrock-agentcore:InvokeHarness',
-          'bedrock-agentcore:InvokeAgentRuntime',
-          'bedrock-agentcore:InvokeAgentRuntimeCommand',
-          'bedrock-agentcore:GetHarness',
-        ],
+        sid: 'ProvisionAccountHarness',
+        actions: harnessProvisionActions,
         resources: ['*'],
       }));
     }
+
+    // The orchestrator performs model turns. InvokeHarness also evaluates the
+    // underlying runtime action.
+    orchestratorFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'InvokeAccountHarness',
+      actions: [
+        'bedrock-agentcore:InvokeHarness',
+        'bedrock-agentcore:InvokeAgentRuntime',
+      ],
+      resources: ['*'],
+    }));
+
+    // Only the API exposes deterministic shell commands from the Computer tab.
+    apiFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'CommandAccountHarness',
+      actions: [
+        'bedrock-agentcore:InvokeAgentRuntimeCommand',
+        'bedrock-agentcore:InvokeAgentRuntime',
+      ],
+      resources: ['*'],
+    }));
 
     // The orchestrator may hand a seat its own execution role, and nothing else.
     orchestratorFn.addToRolePolicy(new iam.PolicyStatement({
@@ -578,6 +610,8 @@ export class AmazaiStack extends cdk.Stack {
     out('EvidenceBucket', evidenceBucket.bucketName, 'Evidence bucket');
     out('KmsKeyArn', key.keyArn, 'Customer-managed key');
     out('OwnerEmail', props.ownerEmail, 'Private workspace owner email');
+    out('DynamicAgentRoleArn', dynamicAgentRole.roleArn,
+      'Restricted execution role for the account-level standard Bot harness');
 
     for (const seat of props.seats) {
       out(`ExecRoleArn${pascal(seat.key)}`, executionRoles[seat.key]!.roleArn,

@@ -4,8 +4,9 @@ Twice a call was denied for an action that was not the one it is named after, an
 failed loudly because the code swallowed the denial (a failed tool sync must not stop a
 run). `CreateHarness` is authorised as `CreateAgentRuntime` (the stack says so in a
 comment). `UpdateHarness` was granted by name and still denied: AWS evaluated it as
-`bedrock-agentcore:UpdateAgentRuntime` on the harness's runtime. A guard that only
-checked same-named actions passed both times.
+`bedrock-agentcore:UpdateAgentRuntime` on the harness's runtime. Current
+`CreateHarness` also evaluates Memory and tagging dependencies. A guard that
+only checked same-named actions passed both times.
 
 So this reads the control-plane and runtime calls `agentcore.py` makes, expands each to
 every action AWS is known to evaluate it as, and checks the stack grants all of them.
@@ -21,7 +22,10 @@ AGENTCORE = (ROOT / "services" / "amazai" / "agentcore.py").read_text()
 #: What AWS actually evaluates a call as. Add to this the next time a denial names an action
 #: the call is not called; the AccessDeniedException text says which.
 AUTHORISED_AS = {
-    "create_harness": {"CreateHarness", "CreateAgentRuntime", "CreateAgentRuntimeEndpoint"},
+    "create_harness": {
+        "CreateHarness", "CreateAgentRuntime", "CreateMemory", "GetMemory", "TagResource",
+        "CreateHarnessEndpoint", "CreateAgentRuntimeEndpoint",
+    },
     "update_harness": {"UpdateHarness", "UpdateAgentRuntime", "UpdateAgentRuntimeEndpoint"},
 }
 
@@ -66,3 +70,36 @@ def test_the_orchestrator_may_pass_the_dynamic_bot_role_and_only_for_agentcore()
 
 def test_the_orchestrator_knows_which_role_a_new_bot_gets():
     assert "orchestratorFn.addEnvironment('AGENT_ROLE_ARN', dynamicAgentRole.roleArn)" in STACK
+
+
+
+def test_current_create_harness_dependencies_are_pinned_explicitly():
+    # AWS's current Harness authorization table (2026-09-21) evaluates these
+    # dependent actions in addition to the public CreateHarness name.
+    required = {"CreateHarness", "CreateAgentRuntime", "CreateMemory", "GetMemory",
+                "TagResource", "CreateHarnessEndpoint", "CreateAgentRuntimeEndpoint"}
+    assert required <= granted()
+
+
+def test_runtime_permissions_are_split_by_caller():
+    m = re.search(
+        r"for \(const fn of \[apiFn, orchestratorFn\]\) \{\s*"
+        r"fn\.addToRolePolicy\(new iam\.PolicyStatement\(\{\s*"
+        r"sid: 'ProvisionAccountHarness'.*?\}\)\);\s*\}",
+        STACK, re.S)
+    assert m, "API and orchestrator do not share the provisioning-only policy"
+    provision_scope = m.group(0)
+    actions_match = re.search(r"const harnessProvisionActions = \[(.*?)\];", STACK, re.S)
+    assert actions_match
+    provision = actions_match.group(1)
+    invoke = statement_for("orchestratorFn", "InvokeAccountHarness")
+    command = statement_for("apiFn", "CommandAccountHarness")
+    assert "apiFn, orchestratorFn" in provision_scope and "routineFn" not in provision_scope
+    assert "CreateHarness" in provision and "InvokeHarness" not in provision
+    assert "InvokeHarness" in invoke and "InvokeAgentRuntimeCommand" not in invoke
+    assert "InvokeAgentRuntimeCommand" in command and "CreateHarness" not in command
+
+
+def test_routine_worker_has_no_agentcore_control_plane_policy():
+    assert not re.search(r"routineFn\.addToRolePolicy\(new iam\.PolicyStatement\(\{.*?bedrock-agentcore:",
+                         STACK, re.S)

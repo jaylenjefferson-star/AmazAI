@@ -1,5 +1,10 @@
 # 16 — GrokBot UX alignment
 
+> **Runtime section superseded (2026-09-21).** The UX and authorization rules
+> here remain active. Its per-agent harness claim does not: standard logical
+> Bots now share one restricted account harness while AgentCore isolates each
+> owner/Bot/thread session. See [20](20-account-runtime-and-logical-bots.md).
+
 Supersedes the "nothing more than delegation" posture in
 [09](09-multi-agent.md) for M2+. M1 (single Engineering seat) is unaffected.
 

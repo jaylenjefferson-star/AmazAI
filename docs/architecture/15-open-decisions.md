@@ -176,6 +176,35 @@ surprising later.
 
 ---
 
+### D12 · Runtime identity: one harness per Bot or per account? ✅ settled 2026-09-21
+
+**Decision:** one restricted AgentCore harness per AmazAI owner/workspace for
+standard Bots. A visible Bot is a logical identity assembled per invocation
+from its profile, memory, assigned skills, grants, organization position and
+chat history. Dedicated compute remains available when a Bot truly needs a
+different execution role or mounted environment.
+
+AgentCore isolates by runtime session. New session IDs therefore include the
+owner, Bot and thread; thread-only IDs are unsafe when several room members
+share a harness. Each run pins its harness and session before invocation, so a
+retry, approval resume or rollback cannot move work in flight. Existing v1
+runs stay on their dedicated harnesses.
+
+**Why not one global harness for every customer?** AgentCore sessions provide
+the technical isolation, but account-level harnesses keep lifecycle, quotas,
+execution-role policy and outage blast radius aligned with the owner boundary.
+There is no MVP benefit to making unrelated accounts share one control-plane
+resource.
+
+**Why not a pool?** A pool adds assignment, draining and resume affinity while
+providing no extra IAM isolation. Add one only if a live concurrency probe
+shows a single harness cannot meet the workload.
+
+Full reasoning, migration and acceptance checks: [20 — One account runtime,
+many logical Bots](20-account-runtime-and-logical-bots.md).
+
+---
+
 ## Summary: what I'd most like your input on
 
 | | Decision | Why it matters now |

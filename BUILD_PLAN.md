@@ -22,8 +22,8 @@ building that; you are building a console around it.
 
 | Client | Method | Purpose |
 |---|---|---|
-| `bedrock-agentcore-control` | `create_harness`, `get_harness`, `update_harness` | one harness per agent seat |
-| `bedrock-agentcore` | `invoke_harness` | streaming agent turn |
+| `bedrock-agentcore-control` | `create_harness`, `get_harness`, `list_harnesses` | one restricted standard harness per owner/workspace; dedicated exceptions only |
+| `bedrock-agentcore` | `invoke_harness` | streaming logical-Bot turn in an owner/Bot/thread session |
 | `bedrock-agentcore` | `invoke_agent_runtime_command` | raw shell in the microVM — no model, no tokens |
 
 Verified `invoke_harness` shape:
@@ -106,10 +106,13 @@ routine.
 
 Added in this revision:
 
-**One harness execution role *per agent*,** S3 prefix-scoped. The earlier plan's
-single shared role made every agent a peer of every other on the drive. This is
-the boundary that makes seats mean anything —
-[`01-identity-and-boundaries.md`](docs/architecture/01-identity-and-boundaries.md) B5.
+**One restricted account harness for standard Bots.** AgentCore isolates by
+runtime session, while AmazAI supplies a logical Bot's profile, memory, skills,
+grants, chats and tools on every invocation. New IDs include owner + Bot +
+thread, so parallel Bots in one room share a transcript but never a microVM.
+Dedicated harnesses remain the exception for a genuinely different IAM or
+mounted-compute boundary; never build a union role that can read every private
+prefix. Full migration and rollback: [architecture 20](docs/architecture/20-account-runtime-and-logical-bots.md).
 
 **Model IDs are resolved at deploy time, not hardcoded.** The earlier plan
 pinned `us.anthropic.claude-sonnet-4-6-...`; Sonnet 4.6 is previous-generation.
@@ -129,8 +132,10 @@ present-and-refused.
 
 | Product concept | Implementation |
 |---|---|
-| Agent seat | one harness + one execution role + `AGENT#` row |
-| Conversation thread | one `runtimeSessionId` (≥33 chars) |
+| Logical Bot | `AGENT#` profile + memory + skills + grants; supplied per invocation |
+| Standard account compute | one restricted AgentCore harness per owner/workspace |
+| Conversation execution | one v2 `runtimeSessionId` per `(owner, Bot, thread)` (33–100 chars) |
+| Run continuation | run-pinned `runtimeHarnessArn` + `sessionId` |
 | That thread's scratch computer | session storage at `/mnt/data` — **disposable** |
 | The agent's durable workspace | `s3://drive/agents/<id>/workspace/` — **versioned** |
 | Long-term memory | `MEM#` rows — user-editable, provenance-tagged |
@@ -187,7 +192,8 @@ you find. ([D4](docs/architecture/15-open-decisions.md))
   `iam:PassedToService = scheduler.amazonaws.com`
 - S3 + CloudFront (OAC), SPA error mappings 403/404 → `/index.html`
 - Outputs: ConsoleUrl, ApiUrl, WsUrl, UserPoolId, UserPoolClientId,
-  DriveBucket, EvidenceBucket, and one ExecutionRoleArn **per seat**
+  DriveBucket, EvidenceBucket, the restricted DynamicAgentRoleArn, and retained
+  dedicated-role outputs for rollback/specialized compute
 
 **Checkpoint:** `npx cdk synth` clean.
 
@@ -195,18 +201,22 @@ you find. ([D4](docs/architecture/15-open-decisions.md))
 
 `scripts/seats.json` defines the seats (M1: Engineering only) with system
 prompts, model IDs, tools, budgets, and accent colours.
-`scripts/provision_agents.py` creates one harness per seat, polls `get_harness`
-until `READY`, and writes agent + starter thread rows. Idempotent.
+`scripts/provision_agents.py` creates or discovers the owner's deterministic
+standard harness, verifies it is `READY` on the restricted dynamic role,
+registers it under `USER#<owner>/RUNTIME#standard`, and writes logical Bot +
+starter-thread rows. `--dedicated` retains the former path for rollback.
 
-**Checkpoint:** harness `READY`, agent row carries a real `harnessArn` **and**
-its own `executionRoleArn`.
+**Checkpoint:** one account harness `READY`; every initial logical Bot is active
+and new runs carry a v2 owner/Bot/thread session plus a run-pinned harness ARN.
 
 ### Phase 3 — The loop (the part that matters)
 
 `services/handlers/orchestrator.py`:
 
-1. Load run, thread, agent, memory, grants. Derive `sessionId` from the thread
-   ID (≥33 chars) and persist it.
+1. Load run, thread, logical Bot, memory, grants. New runs derive `sessionId`
+   from owner + Bot + thread (33–100 chars), resolve the account harness, and
+   pin both on the run before the first invocation. Existing v1 runs preserve
+   their thread-only ID and dedicated harness for safe resume.
 2. **Route**: classify the outcome, pick the narrowest tool path, resolve the
    effective tool list from grants ∩ budget ∩ rate limits. Drop `browser` when
    a connector covers the outcome.

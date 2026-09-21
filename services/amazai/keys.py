@@ -12,6 +12,7 @@ import re
 # AgentCore rejects a runtimeSessionId shorter than this. Getting it wrong
 # produces a validation error at invoke time, which is gotcha #2 in BUILD_PLAN.
 MIN_SESSION_ID_LEN = 33
+MAX_SESSION_ID_LEN = 100
 
 _SAFE = re.compile(r"[^A-Za-z0-9_-]")
 
@@ -127,6 +128,15 @@ def idempotency_pk(key: str) -> str:
     return f"IDEM#{key}"
 
 
+def runtime_sk(kind: str = "standard") -> str:
+    """One account-level execution assignment under `USER#<owner>`.
+
+    Kept under the owner partition because a standard harness belongs to the
+    workspace, not to any logical Bot that happens to use it first.
+    """
+    return f"RUNTIME#{kind}"
+
+
 # --- GSI keys ---------------------------------------------------------------
 
 def run_state_gsi(state: str) -> str:
@@ -141,19 +151,43 @@ def approval_expiry_gsi() -> str:
 # --- derived identifiers ----------------------------------------------------
 
 def session_id(thread_id: str) -> str:
-    """Derive a stable AgentCore runtimeSessionId from a thread ID.
+    """Legacy v1 session key, derived from a thread only.
 
-    Must be deterministic: resuming a paused run depends on landing on the same
-    session, which is what keeps the agent's files and git state intact across
-    an approval pause.
+    Retained for runs that were already active or paused when account-level
+    runtimes shipped. Those runs must resume on the exact old
+    `(harnessArn, runtimeSessionId)` pair; changing either loses their
+    continuation and session files. New runs use `bot_session_id` below.
     """
     base = f"amazai-{_clean(thread_id)}"
     if len(base) >= MIN_SESSION_ID_LEN:
-        return base
+        return base[:MAX_SESSION_ID_LEN]
     # Pad with a digest of the thread ID rather than a constant, so two short
     # thread IDs cannot collide onto one session.
     digest = hashlib.sha256(thread_id.encode()).hexdigest()
     return (base + "-" + digest)[:max(MIN_SESSION_ID_LEN, len(base) + 1)]
+
+
+def bot_session_id(owner_id: str, agent_id: str, thread_id: str) -> str:
+    """A stable v2 AgentCore session for one logical Bot in one thread.
+
+    A shared harness makes the complete namespace `(owner, Bot, thread)`.
+    `threadId` alone is unsafe: every Bot in a room has the same one, so room
+    kickoff would send several model/tool invocations into one microVM.
+
+    The readable prefix helps operations; the digest carries the untruncated
+    triple (including the owner) without exposing the Auth0 subject. Kept under
+    AgentCore's 100-character maximum and always above its 33-character floor.
+    """
+    seed = f"{owner_id}\0{agent_id}\0{thread_id}"
+    digest = hashlib.sha256(seed.encode()).hexdigest()[:20]
+    agent = _clean(agent_id)[:24].strip("-_") or "bot"
+    thread = _clean(thread_id)[:36].strip("-_") or "thread"
+    value = f"amazai-v2-{agent}-{thread}-{digest}"
+    return value[:MAX_SESSION_ID_LEN]
+
+
+def is_bot_session_id(value: str) -> bool:
+    return bool(value and value.startswith("amazai-v2-"))
 
 
 def schedule_idempotency_key(routine_id: str, scheduled_time: str) -> str:

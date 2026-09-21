@@ -1,5 +1,12 @@
 # 01 — Identity and security boundaries
 
+> **Runtime-topology update (2026-09-21).** [Decision 20](20-account-runtime-and-logical-bots.md)
+> supersedes the per-agent harness assumptions below for standard Bots.
+> AgentCore gives each owner/Bot/thread session an isolated microVM; all
+> standard sessions use one deliberately restricted role. Per-agent/dedicated
+> roles remain valid only for an explicit compute exception, and a union role
+> over private prefixes remains forbidden.
+
 Covers brief §1 (identity substrate) and **Deliverable 4** (concrete boundaries).
 
 ## Part 1 — Six kinds of identity, deliberately kept apart

@@ -105,8 +105,11 @@ class Store:
             raise Conflict(f"{item['pk']}/{item['sk']} already exists") from e
         return _decimals_to_native(item)
 
-    def get(self, pk: str, sk: str) -> dict:
-        resp = self._table.get_item(Key={"pk": pk, "sk": sk})
+    def get(self, pk: str, sk: str, *, consistent: bool = False) -> dict:
+        kwargs: dict[str, Any] = {"Key": {"pk": pk, "sk": sk}}
+        if consistent:
+            kwargs["ConsistentRead"] = True
+        resp = self._table.get_item(**kwargs)
         item = resp.get("Item")
         if not item:
             raise NotFound(f"{pk}/{sk}")
@@ -116,14 +119,22 @@ class Store:
             raise NotFound(f"{pk}/{sk}")
         return item
 
-    def try_get(self, pk: str, sk: str) -> dict | None:
+    def try_get(self, pk: str, sk: str, *, consistent: bool = False) -> dict | None:
         try:
-            return self.get(pk, sk)
+            return self.get(pk, sk, consistent=consistent)
         except NotFound:
             return None
 
-    def update(self, pk: str, sk: str, changes: dict, *, expect: dict | None = None) -> dict:
-        """Patch named attributes, optionally under a conditional expectation."""
+    def update(self, pk: str, sk: str, changes: dict, *, expect: dict | None = None,
+               expect_absent_or_null: tuple[str, ...] = ()) -> dict:
+        """Patch named attributes under optional conditional expectations.
+
+        `expect_absent_or_null` is the set-once primitive for migration fields:
+        a row written before the field existed and a new row that stores it as
+        DynamoDB NULL are both unclaimed. Once any worker writes a value, every
+        loser gets `Conflict` and must re-read the winner rather than overwrite
+        it.
+        """
         changes = dict(changes)
         changes["updatedAt"] = now_iso()
         names = {f"#a{i}": k for i, k in enumerate(changes)}
@@ -145,6 +156,12 @@ class Store:
                 kwargs["ExpressionAttributeNames"][f"#e{i}"] = k
                 kwargs["ExpressionAttributeValues"][f":e{i}"] = _floats_to_decimal(v)
                 conditions.append(f"#e{i} = :e{i}")
+        for i, key in enumerate(expect_absent_or_null):
+            alias = f"#n{i}"
+            null = f":null{i}"
+            kwargs["ExpressionAttributeNames"][alias] = key
+            kwargs["ExpressionAttributeValues"][null] = None
+            conditions.append(f"(attribute_not_exists({alias}) OR {alias} = {null})")
         kwargs["ConditionExpression"] = " AND ".join(conditions)
 
         try:

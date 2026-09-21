@@ -1,5 +1,10 @@
 # 04 — Execution plane: workspaces
 
+> **Harness sharing is not filesystem sharing.** [Decision 20](20-account-runtime-and-logical-bots.md)
+> uses one account-level harness but a distinct AgentCore microVM/filesystem for
+> every owner/Bot/thread session. “Shared machine” in the comparison below
+> means several Bots in one *session/filesystem*, which AmazAI still rejects.
+
 **Deliverable 2.** The recommendation, the reasoning, and the mechanics.
 
 ## Recommendation: D — hybrid. And not as a compromise.
