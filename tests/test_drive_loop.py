@@ -381,3 +381,67 @@ class TestBudgetStopsARunawayTurn:
         assert out["ok"] is False
         assert "budget" in out["reason"]
         assert fake.calls == []
+
+
+
+class TestARepeatedToolFailureStopsTheTurn:
+    """The other half of the nine-denials failure.
+
+    `runs.create` initialises `toolErrorCount` and `consecutiveToolErrors` and
+    nothing ever incremented them, so `cost.check`'s two error ceilings could
+    not be reached by any input. A model that failed the same call with the
+    same arguments could keep failing it until MAX_TOOL_ROUNDS ran out -- forty
+    model calls, now billed, to accomplish nothing.
+    """
+
+    def test_three_failures_in_a_row_end_the_turn(self, world):
+        # The World's Bot allows 3 consecutive tool errors.
+        bad = {"scope": "nonsense", "body": "x"}     # `remember` refuses the scope
+        fake = world.script(
+            [*tool_use("remember", bad, "t1"), usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t2"), usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t3"), usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t4"), usage(output_tokens=10)],
+            [text("still going")],
+        )
+        world.drive()
+        assert len(fake.calls) <= 3, \
+            f"the same failing call was retried {len(fake.calls)} times"
+
+    def test_the_run_records_the_failures(self, world):
+        bad = {"scope": "nonsense", "body": "x"}
+        world.script(
+            [*tool_use("remember", bad, "t1"), usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t2"), usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t3"), usage(output_tokens=10)],
+            [text("done")],
+        )
+        world.drive()
+        row = world.store.get(world.run["pk"], "META")
+        assert row["toolErrorCount"] >= 3
+        assert row["consecutiveToolErrors"] >= 3
+
+    def test_a_success_clears_the_consecutive_count(self, world):
+        bad = {"scope": "nonsense", "body": "x"}
+        world.script(
+            [*tool_use("remember", bad, "t1"), usage(output_tokens=10)],
+            [*tool_use("remember", {"scope": "agent", "body": "a fact"}, "t2"),
+             usage(output_tokens=10)],
+            [*tool_use("remember", bad, "t3"), usage(output_tokens=10)],
+            [text("done")],
+        )
+        world.drive()
+        row = world.store.get(world.run["pk"], "META")
+        # Two failures total, but they were not consecutive, so the run went on.
+        assert row["toolErrorCount"] == 2
+        assert row["consecutiveToolErrors"] == 1
+
+    def test_a_turn_whose_tools_all_work_is_not_stopped(self, world):
+        fake = world.script(
+            [*tool_use("find_agents", {"query": "ops"}, "t1"), usage(output_tokens=10)],
+            [*tool_use("find_agents", {"query": "eng"}, "t2"), usage(output_tokens=10)],
+            [text("Found them."), usage(output_tokens=10)],
+        )
+        world.drive()
+        assert len(fake.calls) == 3
+        assert world.store.get(world.run["pk"], "META")["consecutiveToolErrors"] == 0
