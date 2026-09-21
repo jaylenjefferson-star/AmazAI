@@ -216,6 +216,70 @@ def ensure_user(store: Store, principal: Principal) -> tuple[dict, bool]:
     return row, True
 
 
+# --- the membership seam ----------------------------------------------------
+#
+# The multi-user seam from docs/architecture/03-data-model.md § "The
+# multi-user seam": an org gains MEMBER#<sub> rows carrying a role. Until any
+# are written there is exactly one human -- the owner -- and this helper keeps
+# that default working by synthesising an implicit ACTIVE Owner membership
+# when the roster is empty. verify() and assert_owner() are untouched; the
+# token-derived subject rule stays inviolate.
+#
+# HONEST LIMITATION (the single-tenant seam, spelled out).
+# `Store` stamps and filters every row on `ownerId == principal.user_id`, and
+# `Principal.org_id` is `user_id` today ("one workspace per owner"). So an
+# invite writes MEMBER#<invitee> under ORG#<inviter-sub> owned by the inviter,
+# and when the invited human later authenticates, their own Store keys on
+# ORG#<invitee-sub> -- a DIFFERENT, empty partition -- and cannot see that
+# seat. This layer therefore genuinely serves exactly ONE human per Store: the
+# owner of that Store's org. A second real human cannot yet be seated into
+# someone else's org and read their own seat; that needs org-owned rows and a
+# subject->org lookup, which is the next slice (docs/architecture/03).
+#
+# Rather than paper over that, `load_membership` is explicit about which case
+# it is in: it synthesises the implicit Owner ONLY for the sole owner of the
+# org it is reading (the store's own org, org_id == the caller's subject).
+# The invitee-in-a-foreign-org case simply has no row to find in their own
+# org, so they resolve to Owner of their OWN (empty) org -- they are NOT
+# silently granted the inviter's org. The limitation is enforced by the data
+# boundary, not hidden by it, and tests/test_identity.py::TestMembershipSeam
+# authenticates as an invited subject to prove exactly this.
+
+def load_membership(store: Store, principal: Principal):
+    """The caller's standing in their own org.
+
+    Reads the MEMBER# row under the caller's org partition. When none exists,
+    return an implicit ACTIVE OWNER of that org -- preserving today's "one
+    workspace per owner" behaviour, where the sole owner governs everything
+    without a row having to be seeded. Once a real row is written for this
+    subject in this org, that stored row wins.
+
+    Note the boundary this respects: the lookup is scoped to the caller's OWN
+    org (store.owner_id == principal.org_id today), so a human invited into a
+    different owner's org does not resolve to that org here -- see the HONEST
+    LIMITATION note above. That is the single-tenant seam being explicit rather
+    than a silent cross-tenant read.
+
+    Imported lazily so identity.py keeps no import-time dependency on the
+    governance layer (directory.py already imports from agents.py, which does
+    not import identity).
+    """
+    from amazai import directory as D
+
+    org_id = principal.org_id
+    row = store.try_get(K.org_pk(org_id), K.member_sk(principal.user_id))
+    if row is not None:
+        return D.membership_of(row)
+
+    return D.Membership(
+        subject=principal.user_id,
+        role=D.Role.OWNER,
+        scope=D.Scope.ORG,
+        scope_id=org_id,
+        state=D.MemberState.ACTIVE,
+    )
+
+
 # --- the owner allowlist ----------------------------------------------------
 
 def owner_subjects() -> tuple[str, ...]:

@@ -21,7 +21,7 @@ import boto3
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors as C,
                     handoffs, identity, keys as K, memory, models, routines as R,
                     runs, schedules, settings as S, skills, standard_runtime, threads)
-from amazai import dispatch, org, provisioning
+from amazai import dispatch, directory as D, govern, org, provisioning
 from amazai.policy import Capability
 from amazai.states import PAUSED, RunState, TERMINAL
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
@@ -103,12 +103,46 @@ def _principal(event) -> identity.Principal:
     must not turn its context map into a second, weaker identity source. The
     raw bearer token is verified by ``identity`` and cached only for this
     in-memory Lambda invocation.
+
+    This function establishes WHO the caller is (token signature/iss/aud/exp);
+    it deliberately does NOT decide whether they may act. The owner allowlist
+    (`identity.assert_owner`) is a coarse "is this a workspace owner" gate that
+    is applied per-route in `handler()` -- see `_authorize`. Keeping the two
+    apart is what lets the finer-grained RBAC matrix govern `/admin/*` for a
+    non-owner Admin/Security/Billing/Auditor seat instead of the allowlist
+    rejecting them at 401 before RBAC ever runs.
     """
     principal = event.get("_amazai_principal")
     if principal is None:
         principal = identity.principal_from_event(event)
-        identity.assert_owner(principal)
         event["_amazai_principal"] = principal
+    return principal
+
+
+#: Routes that authorize via the RBAC capability matrix (directory.assert_can)
+#: rather than the owner allowlist. An invited Admin/Security/Billing/Auditor
+#: is by definition NOT an allowlisted owner, so gating these on the allowlist
+#: would reject every non-owner seat at 401 before RBAC could make its finer
+#: decision -- the two gates would encode conflicting models of who may act.
+#: The token is still fully verified for these routes; only the coarse
+#: owner-allowlist check is deferred to the per-capability gate inside each
+#: /admin/* handler.
+_RBAC_ROUTE_PREFIX = "/admin/"
+
+
+def _authorize(event, path: str) -> identity.Principal:
+    """Establish the caller and apply the coarse owner gate where it governs.
+
+    Every route verifies the token via `_principal`. For non-`/admin/*` routes
+    the owner allowlist is the authorization model (a private single-owner
+    workspace), so `assert_owner` runs here. For `/admin/*` routes the RBAC
+    matrix is the model, so the allowlist is skipped and each admin handler
+    gates on the specific capability instead. Neither path weakens token
+    verification or the Store's ownerId isolation.
+    """
+    principal = _principal(event)
+    if not (path == "/admin" or path.startswith(_RBAC_ROUTE_PREFIX)):
+        identity.assert_owner(principal)
     return principal
 
 
@@ -175,7 +209,7 @@ def handler(event, context):
         return _resp(400, {"error": "invalid JSON body"})
 
     try:
-        principal = _principal(event)
+        principal = _authorize(event, path)
         store = Store(principal.user_id)
         _, is_new_signup = identity.ensure_user(store, principal)
         if is_new_signup:
@@ -204,6 +238,9 @@ def handler(event, context):
     except NotFound as exc:
         return _resp(404, {"error": "not_found", "detail": str(exc)})
     except PermissionError as exc:
+        # The kill-switch (govern.Frozen) and offboarding (govern.PrincipalNotActive)
+        # gates both subclass PermissionError, so freezing an org or acting as a
+        # suspended principal surfaces here as 403 without a dedicated handler.
         return _resp(403, {"error": "forbidden", "detail": str(exc)})
     except Conflict as exc:
         return _resp(409, {"error": "conflict", "detail": str(exc)})
