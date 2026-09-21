@@ -24,7 +24,7 @@ const VERDICT = { allowed: 'Ran', asked: 'Asked', denied: 'Stopped' };
  * and the terminal it works in.
  *
  * Everything here is real. "Now" is the live run and its steps; "Files" are the
- * sealed bundles its finished runs left behind; "Activity" is its collaboration
+ * documents its finished runs left behind; "Activity" is its collaboration
  * feed; "Computer" is the existing workspace terminal. A live picture of its
  * screen is not connected yet, and the tab says so rather than drawing a fake one.
  */
@@ -95,12 +95,12 @@ export default function WorkspaceSheet({ agent, threadId, agents, live, steps, a
         <div className="ws-pane">
           {problem && <Problem error={problem} onRetry={() => { setProblem(null); setFiles(null); }} />}
           {!problem && files === null && <p className="ws-none">Loading…</p>}
-          {files?.length === 0 && <p className="ws-none">Nothing sealed yet. When a run finishes, what it did is kept here and never rewritten.</p>}
+          {files?.length === 0 && <p className="ws-none">No files yet. Ask {agent.name} to create a document, report or Markdown file.</p>}
           {files?.map((f) => (
-            <div className="ws-item" key={f.runId}>
-              <Icon name="layers" size={17} />
-              <span><strong>{f.goal || f.runId}</strong><small>{f.summary || f.outcome} · {ago(f.endedAt || f.startedAt)}</small></span>
-            </div>
+            <a className="ws-item" key={f.artifactId} href={f.downloadUrl} target="_blank" rel="noreferrer">
+              <Icon name="file" size={17} />
+              <span><strong>{f.name}</strong><small>{ago(f.updatedAt)}</small></span>
+            </a>
           ))}
         </div>
       )}

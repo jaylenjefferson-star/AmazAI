@@ -34,6 +34,60 @@ CORS = {
 }
 
 
+_ARTIFACT_KEY = re.compile(r"^evidence/(?P<run_id>[^/]+)/artifacts/(?P<name>.+)$")
+
+
+def _artifact_s3():
+    """The one bucket that holds immutable Bot-produced files.
+
+    Audit manifests live beside these objects, but they are deliberately not
+    library entries. A file library should contain things a person can open,
+    not a chronological mirror of every conversation or completed run.
+    """
+    return boto3.client("s3")
+
+
+def _artifacts(store: Store) -> list[dict]:
+    bucket = os.environ.get("EVIDENCE_BUCKET", "").strip()
+    if not bucket:
+        return []
+
+    client = _artifact_s3()
+    objects: list[dict] = []
+    request: dict = {"Bucket": bucket, "Prefix": "evidence/"}
+    while True:
+        page = client.list_objects_v2(**request)
+        objects.extend(page.get("Contents") or [])
+        token = page.get("NextContinuationToken")
+        if not token:
+            break
+        request["ContinuationToken"] = token
+
+    files: list[dict] = []
+    for obj in objects:
+        key = obj.get("Key", "")
+        match = _ARTIFACT_KEY.match(key)
+        if not match or not match.group("name"):
+            continue
+        # S3 is shared by every workspace, so an object is returned only after
+        # its run has been resolved through this owner's Store. Never use an
+        # object key alone as an authorization decision.
+        run = store.try_get(K.run_pk(match.group("run_id")), "META")
+        if not run:
+            continue
+        files.append({
+            "artifactId": key,
+            "runId": run["runId"],
+            "agentId": run.get("agentId"),
+            "name": match.group("name"),
+            "sizeBytes": obj.get("Size", 0),
+            "updatedAt": obj.get("LastModified"),
+            "downloadUrl": client.generate_presigned_url(
+                "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=300),
+        })
+    return sorted(files, key=lambda f: str(f.get("updatedAt") or ""), reverse=True)
+
+
 def _resp(status: int, body) -> dict:
     return {"statusCode": status, "headers": CORS, "body": json.dumps(body, default=str)}
 
@@ -709,24 +763,12 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         _schedule(store, archived)
         return _resp(200, archived)
 
-    # --- artifacts ---------------------------------------------------------
-    # A sealed evidence bundle, listed. The manifest lives in S3 and the run
-    # holds the pointer, so this is a projection of runs that produced one --
-    # never a second copy of the bundle, which is append-only and must have
-    # exactly one home.
+    # --- files -------------------------------------------------------------
+    # Only named files a Bot produced live in this library. A sealed evidence
+    # manifest is an audit record, not a document, and conversations belong in
+    # their threads rather than being presented as files.
     if path == "/artifacts" and method == "GET":
-        rows = store.query_index("gsi1", "gsi1pk", "RUNS", limit=500)
-        sealed = [r for r in rows if r.get("evidenceKey")]
-        sealed.sort(key=lambda r: r.get("endedAt") or r.get("startedAt") or "",
-                    reverse=True)
-        return _resp(200, {"artifacts": [{
-            "runId": r["runId"], "agentId": r.get("agentId"),
-            "threadId": r.get("threadId"), "goal": r.get("goal"),
-            "outcome": r.get("state"), "summary": r.get("summary"),
-            "evidenceKey": r.get("evidenceKey"),
-            "startedAt": r.get("startedAt"), "endedAt": r.get("endedAt"),
-            "costUsd": r.get("costUsd"),
-        } for r in sealed]})
+        return _resp(200, {"artifacts": _artifacts(store)})
 
     # --- settings ----------------------------------------------------------
     # Owner preferences. One row, defaulted on read rather than seeded on

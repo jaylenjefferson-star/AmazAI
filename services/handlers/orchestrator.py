@@ -201,6 +201,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
     run = runs.advance(store, run, RunState.PLANNING) if run["state"] == RunState.QUEUED.value else run
     run = runs.advance(store, run, RunState.EXECUTING) if run["state"] == RunState.PLANNING.value else run
+    # A retry is a fresh execution attempt. Moving it back through EXECUTING
+    # before invoking preserves the state-machine edge and, crucially, lets a
+    # second transient startup error return to RETRYING instead of attempting
+    # the illegal RETRYING -> RETRYING transition.
+    run = runs.advance(store, run, RunState.EXECUTING) if run["state"] == RunState.RETRYING.value else run
     push.state(run["runId"], run["threadId"], run["state"], run.get("costUsd", 0.0))
 
     # --- stream ------------------------------------------------------------

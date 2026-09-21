@@ -256,10 +256,10 @@ export function Routines() {
   );
 }
 
-function outcomeTone(outcome) {
-  if (outcome === 'completed') return 'ok';
-  if (outcome === 'failed' || outcome === 'cancelled' || outcome === 'expired') return 'danger';
-  return 'neutral';
+function fileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 1024) return `${bytes || 0} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function Artifacts() {
@@ -277,36 +277,31 @@ export function Artifacts() {
   }, []);
 
   return (
-    <Page title="Artifacts" sub="What runs produced. Sealed bundles are never rewritten.">
+    <Page title="Files" sub="Documents and files your Bots create.">
       {loading && <RosterSkeleton rows={4} />}
       {error && <Problem message={friendly(error, "Couldn't load your files.")} />}
       {!loading && !error && artifacts.length === 0 && (
         <div className="empty">
-          <strong>Nothing sealed yet</strong>
-          <span>A run that finishes seals an evidence bundle here — a manifest of what it did, never rewritten once sealed.</span>
+          <strong>No files yet</strong>
+          <span>Ask a Bot to create a document, report or Markdown file. Conversations stay in their threads.</span>
         </div>
       )}
       <div className="row-list">
         {artifacts.map((f) => {
           const a = byId[f.agentId];
           return (
-            <article key={f.runId} className="row-card">
+            <a key={f.artifactId} className="row-card" href={f.downloadUrl} target="_blank" rel="noreferrer">
               <span className="artifact-glyph" aria-hidden="true">
-                <Icon name="layers" size={17} />
+                <Icon name="file" size={17} />
               </span>
               <div className="row-body">
-                <strong>{f.goal || f.runId}</strong>
+                <strong>{f.name}</strong>
                 <span>
-                  {a?.name || f.agentId} · {timeAgo(f.endedAt || f.startedAt)}
-                  {typeof f.costUsd === 'number' ? ` · $${f.costUsd.toFixed(3)}` : ''}
+                  {a?.name || f.agentId} · {timeAgo(f.updatedAt)} · {fileSize(f.sizeBytes)}
                 </span>
-                {f.summary && <span>{f.summary}</span>}
               </div>
-              <span className={`state-chip cc-tone-${outcomeTone(f.outcome)}`}>
-                <i className="cc-dot" aria-hidden="true" />
-                {f.outcome || 'unknown'}
-              </span>
-            </article>
+              <Icon name="arrowright" size={17} />
+            </a>
           );
         })}
       </div>
