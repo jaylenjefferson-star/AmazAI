@@ -36,6 +36,7 @@ const TITLES = [
   [/^\/marketplace/, 'Skills'],
   [/^\/connectors/, 'Connect a tool'],
   [/^\/rooms/, 'Rooms'],
+  [/^\/org/, 'Org chart'],
   [/^\/routines/, 'Routines'],
   [/^\/artifacts/, 'Files and artifacts'],
   [/^\/settings/, 'Settings'],

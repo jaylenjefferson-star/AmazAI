@@ -46,7 +46,7 @@ function Step({ n, icon, title, summary, open, onOpen, children }) {
  * after a bad connection lands on the same agent, never a second one.
  *
  * What is decided *here* is who the agent is. What it may do is decided by the
- * server, per action, and the Autonomy step says exactly what those rules are.
+ * server, per action; the one line under the steps says the part that matters.
  */
 export default function NewAgent() {
   const navigate = useNavigate();
@@ -59,6 +59,8 @@ export default function NewAgent() {
   const [tools, setToolsOpen] = useState(false);
   const [installed, setInstalled] = useState([]);
   const [skip, setSkip] = useState(() => new Set());
+  const [roster, setRoster] = useState([]);
+  const [reportsTo, setReportsTo] = useState('');   // '' = the default, which needs nothing said
 
   const [name, setName] = useState('');
   const [title, setTitle] = useState('');
@@ -70,8 +72,6 @@ export default function NewAgent() {
   const [tier, setTier] = useState('balanced');
   const [style, setStyle] = useState('collaborative');
   const [builtin, setBuiltin] = useState([]);
-  const [perMonth, setPerMonth] = useState(20);
-  const [perRun, setPerRun] = useState(1);
   const nameRef = useRef(null);
   const key = useMemo(() => `create-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`, []);
 
@@ -83,11 +83,13 @@ export default function NewAgent() {
       if (o.colors?.length && !o.colors.includes(color)) setColor(o.colors[5] ?? o.colors[0]);
     }).catch(setLoadError);
     api.connectors().then((r) => setInstalled(r.connectors || [])).catch(() => {});
+    api.agents().then((r) => setRoster(r.agents || [])).catch(() => {});
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [tools]);
   useEffect(() => { if (options) nameRef.current?.focus({ preventScroll: true }); }, [options]);
 
+  const chief = roster.find((a) => a.entrypoint);
   const canCreate = name.trim().length >= 2 && role.trim().length >= 2 && !busy;
   const next = (n) => setStep(n);
   const carousel = useRef(null);
@@ -105,8 +107,12 @@ export default function NewAgent() {
         // Read once by the API so the agent can say hello by name; stored nowhere.
         operatorName: operatorFirstName(user),
         tools: builtin,
-        budget: { perRunUsd: Number(perRun), perMonthUsd: Number(perMonth), onCeiling: 'hard_stop' },
+        // No budget here on purpose: the server applies its default limit and hard-stops
+        // at it. It is one thing to change later, from the agent's settings, not a
+        // question to answer before the agent exists.
       };
+      // Left alone, a new Bot reports to Chief, and nothing is stored for that.
+      if (reportsTo) body.reportsTo = reportsTo;
       // Connected apps are given by default. Only if some were switched off is the
       // list sent, so leaving them alone keeps the server's default.
       if (skip.size) {
@@ -166,6 +172,15 @@ export default function NewAgent() {
               <input value={title} maxLength={24} placeholder="Operations" onChange={(e) => setTitle(e.target.value)} /></label>
             <label className="pf-field"><span>Role</span>
               <input value={role} maxLength={200} placeholder="Sr Director, Head of Ops" onChange={(e) => setRole(e.target.value)} /></label>
+            {roster.length > 0 && (
+              <label className="pf-field"><span>Reports to</span>
+                <select value={reportsTo} onChange={(e) => setReportsTo(e.target.value)}>
+                  <option value="">{chief ? `${chief.name} (default)` : 'You (default)'}</option>
+                  {roster.filter((a) => !chief || a.agentId !== chief.agentId)
+                    .map((a) => <option key={a.agentId} value={a.agentId}>{a.name}</option>)}
+                  {chief && <option value="owner">You</option>}
+                </select></label>
+            )}
             <label className="pf-field"><span>Description <em>optional</em></span>
               <textarea rows={3} value={description} maxLength={2000} placeholder="Head of business operations and strategy"
                         onChange={(e) => setDescription(e.target.value)} /></label>
@@ -229,24 +244,11 @@ export default function NewAgent() {
               </div>
             </div>
             <p className="pf-hint">Skills are assigned from the agent&apos;s profile once it exists.</p>
-            <button type="button" className="na-next" onClick={() => next(4)}>Continue</button>
           </Step>
 
-          <Step n={4} icon="bolt" title="Autonomy" summary={`Up to $${perMonth} a month`} open={step === 4} onOpen={() => setStep(4)}>
-            <div className="pf-auto">
-              <div><strong>Acts on its own</strong><span>Reading, searching, looking things up.</span></div>
-              <div><strong>Must ask first</strong><span>Sending, posting, changing or deleting anything, spending money. You can pre-approve one action for one agent later; destructive actions can never be.</span></div>
-              <div><strong>Never allowed</strong><span>Organization admin, cloud administrator credentials, turning off the audit trail.</span></div>
-            </div>
-            <div className="pf-field"><span>Spending limit</span>
-              <div className="na-budget">
-                <label><em>per run</em><input type="number" min="0.1" step="0.1" value={perRun} onChange={(e) => setPerRun(e.target.value)} /></label>
-                <label><em>per month</em><input type="number" min="1" step="1" max={options?.limits?.maxMonthlyUsd} value={perMonth} onChange={(e) => setPerMonth(e.target.value)} /></label>
-              </div>
-              <p className="pf-hint">It stops at the monthly limit instead of overspending.</p>
-            </div>
-          </Step>
         </div>
+
+        <p className="na-assure">It asks before it sends, posts, changes or deletes anything.</p>
 
         {problem && <Problem message={problem.message} error={problem.error} onRetry={create} />}
       </div>

@@ -61,7 +61,7 @@ const AGENTS = [
     memory: [],
   },
   {
-    agentId: 'ops', name: 'Cloud Operations', state: 'active', title: 'AWS',
+    agentId: 'ops', name: 'Cloud Operations', state: 'active', title: 'AWS', reportsTo: 'eng',
     avatar: { shape: 'cloud', color: '#12a594' },
     role: 'AWS investigations, logs, alarms, controlled deployments.',
     budget: { perMonthUsd: 30, perRunUsd: 1.5 },
@@ -104,6 +104,33 @@ const AGENTS = [
     workspace: { mode: 'ephemeral', sessionBytes: 0 }, memory: [],
   },
 ];
+
+// Who reports to whom, by the server's rule (services/amazai/org.py): the line a person
+// chose if it names a live Bot (or "owner"), otherwise Chief. Nothing is stored for the
+// default, so a Bot made later lands in the right place. Same refusals, same words.
+const GONE = ['archived', 'failed'];
+const liveBots = () => AGENTS.filter((a) => !GONE.includes(a.status || a.state));
+function managerOf(agent) {
+  const live = liveBots();
+  const stored = agent.reportsTo;
+  if (stored === 'owner') return null;
+  if (stored && stored !== agent.agentId && live.some((a) => a.agentId === stored)) return stored;
+  const chief = live.find((a) => a.entrypoint);
+  return chief && chief.agentId !== agent.agentId ? chief.agentId : null;
+}
+const withManager = (a) => ({ ...a, managerId: managerOf(a) });
+function checkReportsTo(agentId, target) {
+  if (target === 'owner') return 'owner';
+  if (typeof target !== 'string' || !target) throw new Error('reportsTo must be a Bot id, or "owner"');
+  if (target === agentId) throw new Error('a Bot cannot report to itself');
+  if (!liveBots().some((a) => a.agentId === target)) throw new Error(`'${target}' is not an active Bot`);
+  for (let cursor = target; cursor; cursor = managerOf(AGENTS.find((a) => a.agentId === cursor) || {})) {
+    if (agentId && cursor === agentId) {
+      throw new Error(`'${target}' already reports up to '${agentId}'; that would make a loop`);
+    }
+  }
+  return target;
+}
 
 const THREADS = [
   { threadId: 't-deploy', title: 'Ship the console to CloudFront', kind: 'task', agentIds: ['eng'] },
@@ -318,7 +345,7 @@ const OPTIONS = {
 const demoTheme = () => { try { return localStorage.getItem('amazai.demo.theme'); } catch { return null; } };
 
 export const demoApi = {
-  agents: async () => (await wait(120), { agents: AGENTS }),
+  agents: async () => (await wait(120), { agents: liveBots().map(withManager) }),
   agentOptions: async () => (await wait(90), OPTIONS),
   createAgent: async (agent) => {
     await wait(400);
@@ -328,9 +355,10 @@ export const demoApi = {
       throw new Error('this organization already has a first Bot');
     }
     const agentId = agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const { operatorName, ...profile } = agent;
+    const { operatorName, reportsTo, ...profile } = agent;
     const created = {
       ...profile, agentId, status: 'active', state: 'active',
+      ...(reportsTo ? { reportsTo: checkReportsTo('', reportsTo) } : {}),
       title: profile.title || (profile.entrypoint ? 'Chief' : ''),
       role: profile.role || (profile.entrypoint
         ? 'Your first Bot. Finds out what you need most, takes the first real task, connects your tools as it needs them, and ships the result.'
@@ -348,7 +376,7 @@ export const demoApi = {
     MESSAGES[`dm-${agentId}`] = [
       greeting(agent.name, { entrypoint: created.entrypoint, operator: operatorName || '', at: iso() }),
     ];
-    return created;
+    return withManager(created);
   },
   archiveAgent: async (id) => {
     await wait(150);
@@ -356,7 +384,7 @@ export const demoApi = {
     if (agent) { agent.status = 'archived'; agent.state = 'offline'; }
     return { ...(agent || {}) };
   },
-  agent: async (id) => (await wait(80), AGENTS.find((a) => a.agentId === id) || AGENTS[0]),
+  agent: async (id) => (await wait(80), withManager(AGENTS.find((a) => a.agentId === id) || AGENTS[0])),
   updateAgent: async (id, changes) => {
     await wait(200);
     const agent = AGENTS.find((a) => a.agentId === id);
@@ -364,12 +392,13 @@ export const demoApi = {
     // Applied rather than acknowledged. Returning {} was a fake success --
     // the settings screen renders what comes back, so a save would have
     // blanked the companion it had just written.
-    const { avatar, budget, modelTier, ...rest } = changes;
+    const { avatar, budget, modelTier, reportsTo, ...rest } = changes;
     Object.assign(agent, rest);
+    if (reportsTo !== undefined) agent.reportsTo = checkReportsTo(id, reportsTo);
     if (avatar) agent.avatar = { ...agent.avatar, ...avatar };
     if (budget) agent.budget = { ...agent.budget, ...budget };
     if (modelTier) agent.model = { ...(agent.model || {}), tier: modelTier };
-    return { ...agent };
+    return withManager(agent);
   },
   setGrant: async (agentId, connectorId, body) => {
     await wait(120);

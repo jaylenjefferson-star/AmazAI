@@ -36,6 +36,7 @@ import Usage from './screens/Usage';
 import Gallery from './screens/Gallery';
 import Connectors from './screens/Connectors';
 import Marketplace from './screens/Marketplace';
+import OrgChart from './screens/OrgChart';
 import HowItWorks from './screens/marketing/HowItWorks';
 import Product from './screens/marketing/Product';
 import Pricing from './screens/marketing/Pricing';
@@ -164,6 +165,7 @@ function Router() {
         <Route path="/connectors" element={<Connectors />} />
         <Route path="/rooms" element={<Navigate to="/" replace />} />
         <Route path="/rooms/:roomId" element={<RoomRoute />} />
+        <Route path="/org" element={<OrgChart />} />
         <Route path="/routines" element={<Routines />} />
         <Route path="/routines/new" element={<Routines />} />
         <Route path="/artifacts" element={<Artifacts />} />

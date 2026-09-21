@@ -532,7 +532,7 @@ a.card:hover { border-color: var(--btn-line); background: var(--hover); }
 }
 .steps-list li { display: grid; gap: 1px; font: var(--t-label); color: var(--dim); min-width: 0; }
 .steps-list li.is-current { color: var(--text); }
-.steps-list code { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.steps-list .step-name { font-size: 13px; font-weight: 550; color: var(--text); }
 .steps-list span { overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) {
   .steps-spin { animation: none; border-right-color: var(--accent); }
@@ -1278,9 +1278,12 @@ a.card:hover { border-color: var(--btn-line); background: var(--hover); }
   background: var(--panel); border: 1px solid var(--hairline);
   border-radius: var(--r);
 }
-.setting-row > div:first-child { flex: 1; min-width: 0; }
+/* The label keeps a floor. With `min-width: 0` and `word-break: break-word` (which
+   lets a word break anywhere, so its minimum width is one letter) a wide control
+   took the whole row and the hint wrapped a letter to a line. */
+.setting-row > div:first-child { flex: 1; min-width: 8rem; }
 .setting-row strong { display: block; font-size: 14px; }
-.setting-row span { font-size: 12.5px; color: var(--dim); word-break: break-word; }
+.setting-row span { font-size: 12.5px; color: var(--dim); overflow-wrap: break-word; }
 
 /* ---------------------------------------------------------------- usage */
 
@@ -2331,6 +2334,7 @@ a.row-card:hover { border-color: var(--btn-line); }
    halves become harder to read than either would be alone. */
 @media (max-width: 520px) {
   .setting-row { align-items: stretch; flex-direction: column; gap: 10px; }
+  .setting-row > div:first-child { min-width: 0; }
   .setting-row .seg,
   .setting-row .inline-input { width: 100%; max-width: none; }
   /* The toggle is the exception: it is small enough to stay on the line,
@@ -2340,7 +2344,10 @@ a.row-card:hover { border-color: var(--btn-line); }
 
 /* An input that sits in a settings row rather than in a form. */
 .inline-input {
-  flex: none; width: 180px; max-width: 45vw;
+  /* Capped by its *row*, not the window: the same row renders in a phone sheet,
+     a centred dialog and a full page, and a viewport-relative cap is meaningless
+     in all but one of them. The label's floor (8rem) and the row gap come first. */
+  flex: none; width: 180px; min-width: 0; max-width: calc(100% - 8rem - 14px);
   padding: 8px 10px; border-radius: 9px;
   border: 1px solid var(--line); background: var(--panel); color: var(--text);
   font: var(--t-label);
