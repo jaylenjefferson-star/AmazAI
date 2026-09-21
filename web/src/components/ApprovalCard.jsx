@@ -20,7 +20,7 @@ const PROPOSALS = {
   'agent.create': {
     title: 'A Bot is proposed', yes: 'Create Bot', no: 'Not now',
     fields: ['name', 'role', 'description'],
-    note: 'It starts with no connectors and a small budget; you widen either later.',
+    note: 'It starts with the apps you have connected and a small budget. Anything that changes something still asks you.',
   },
   'skill.create': {
     title: 'A skill is proposed', yes: 'Save skill', no: 'Not now',
@@ -66,6 +66,7 @@ const clip = (v, n = 220) => {
 export default function ApprovalCard({ approval, onDecide }) {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [always, setAlways] = useState(false);
   const [left, setLeft] = useState(() => remaining(approval.expiresAt));
 
   useEffect(() => {
@@ -88,10 +89,14 @@ export default function ApprovalCard({ approval, onDecide }) {
   const urgent = !!left && left.ms < 60000;
   const high = approval.risk === 'high' && !proposal;
   const irreversible = approval.reversible === false && !proposal;
+  // Only an ordinary write can be waved through next time: never a destructive or
+  // irreversible one, and never one on the always-approve floor (policy ignores a
+  // pre-approval there anyway, so offering it would be a promise the server breaks).
+  const canAlways = !proposal && approval.policy?.rule === 'default' && approval.reversible !== false;
 
   async function decide(approve) {
     setBusy(true);
-    try { await onDecide(approve, note.trim() || undefined); }
+    try { await onDecide(approve, note.trim() || undefined, { always: approve && always }); }
     finally { setBusy(false); }
   }
 
@@ -171,6 +176,13 @@ export default function ApprovalCard({ approval, onDecide }) {
 
       {!settled && !expired && (
         <>
+          {canAlways && (
+            <label className="approval-always">
+              <input type="checkbox" checked={always} onChange={(e) => setAlways(e.target.checked)} />
+              <span>Don&apos;t ask again for <strong>{approval.action}</strong>
+                <small>Only this action, only for this agent. Undo it any time in its Permissions.</small></span>
+            </label>
+          )}
           <input placeholder="Optional note, recorded either way…" value={note}
                  onChange={(e) => setNote(e.target.value)} style={{ marginBottom: 11 }} />
           <div className="actions">

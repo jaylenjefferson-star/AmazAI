@@ -146,7 +146,7 @@ export default function Timeline({
             <>
               {live.status === 'pending' && <div className="tl-label tl-label--ask"><i aria-hidden="true" />Waiting on you</div>}
               <ApprovalCard approval={live}
-                            onDecide={(ok, note) => onDecide(live, ok, note)} />
+                            onDecide={(ok, note, opts) => onDecide(live, ok, note, opts)} />
             </>
           );
         } else {

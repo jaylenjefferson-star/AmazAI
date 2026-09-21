@@ -12,6 +12,7 @@ import ToolsSheet from '../components/ToolsSheet';
 import WorkspaceSheet from '../components/WorkspaceSheet';
 import { api } from '../api';
 import { presentAgent, useAgents } from '../hooks/useAgents';
+import { alwaysAllow } from '../lib/approvals';
 import { download } from '../lib/download';
 import { COPY, friendly } from '../lib/errors';
 import { usePresence, useSteps } from '../presence';
@@ -199,8 +200,9 @@ export default function Task() {
     else if (kind === 'artifact') composer.current?.insert('Create a document: ');
   }
 
-  async function decide(approval, approve, note) {
+  async function decide(approval, approve, note, opts) {
     await api.decide(approval.runId, approval.approvalId, approve, note);
+    if (approve && opts?.always) await alwaysAllow(approval).catch((e) => setError(e.message));
     setPendingApprovals((current) => current.map((a) => (
       a.approvalId === approval.approvalId ? { ...a, status: approve ? 'approved' : 'denied' } : a
     )));

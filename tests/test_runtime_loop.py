@@ -97,6 +97,22 @@ class TestAConnectorWriteStopsForAPersonInCode:
         assert result["pause"] is False and len(world.executed) == 1
         assert world.last["review"]["rule"] == "preapproved"
 
+    def test_dont_ask_again_saved_through_the_api_takes_effect_on_the_next_call(self, world):
+        # What the approval card's checkbox does: the owner's own audited PATCH.
+        status, _ = call("PATCH", f"/agents/{world.agent_id}", {"preapproved": [WRITE]})
+        assert status == 200
+        world.agent = world.store.get(K.agent_pk(world.agent_id), "META")
+        assert world.use(WRITE, POST)["pause"] is False
+        assert world.last["review"]["rule"] == "preapproved"
+        # It named one action: a different write on the same app still asks.
+        assert world.use("SLACK_A_TOOL_WITH_NO_TAGS", {}, tool_use_id="tu-2")["pause"] is True
+
+    def test_a_destructive_tool_stays_gated_even_if_it_is_saved_as_pre_approved(self, world):
+        call("PATCH", f"/agents/{world.agent_id}", {"preapproved": [WRITE, DELETE]})
+        world.agent = world.store.get(K.agent_pk(world.agent_id), "META")
+        assert world.use(DELETE, {"channel": "C1", "ts": "1"})["pause"] is True
+        assert world.executed == []
+
     def test_a_destructive_tool_can_never_be_pre_approved(self, world):
         world.agent = {**world.agent, "preapproved": [DELETE]}
         result = world.use(DELETE, {"channel": "C1", "ts": "1"})

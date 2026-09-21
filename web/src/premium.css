@@ -500,3 +500,8 @@ button.tl-label:disabled { cursor: default; }
 .chat .cmp-row, .chat .cmp-note, .chat .cmp-files { max-width: 760px; margin-left: auto; margin-right: auto; }
 .chat .cmp-row { width: 100%; }
 @media (min-width: 900px) { .chat .timeline { padding-left: 28px; padding-right: 28px; } .chat .cmp { padding-left: 28px; padding-right: 28px; } }
+
+.chat .approval-always { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border-radius: 16px; background: var(--raised-2); font-size: 14.5px; cursor: pointer; }
+.chat .approval-always input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--accent); }
+.chat .approval-always span { display: grid; gap: 2px; }
+.chat .approval-always small { font-size: 12.5px; color: var(--dim); }

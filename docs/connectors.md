@@ -71,7 +71,9 @@ means *no cap*, not *everything is allowed*). Narrow it and the narrower rule wi
 - An explicit `allowedTools` list allows only those tools.
 
 Reconnecting an app never widens a grant someone narrowed. A Bot that another Bot
-proposes still starts with **no** connectors: an agent cannot mint authority.
+proposes carries no grants in its proposal (a model cannot ask for any), but when
+the owner approves it the server gives it the apps the *owner* has connected: it
+inherits nothing from the agent that proposed it, and writes still ask.
 
 ## Credentials
 

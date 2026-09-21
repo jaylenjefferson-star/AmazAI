@@ -12,6 +12,7 @@ import Timeline from '../components/Timeline';
 import ToolsSheet from '../components/ToolsSheet';
 import { api } from '../api';
 import { useAgents } from '../hooks/useAgents';
+import { alwaysAllow } from '../lib/approvals';
 import { COPY, friendly } from '../lib/errors';
 import { usePresence } from '../presence';
 import { threadsChanged } from '../threadsBus';
@@ -106,8 +107,9 @@ export default function Room() {
     } catch (err) { setError(err.message); }
   }
 
-  async function decide(approval, approve, note) {
+  async function decide(approval, approve, note, opts) {
     await api.decide(approval.runId, approval.approvalId, approve, note);
+    if (approve && opts?.always) await alwaysAllow(approval).catch((e) => setError(e.message));
     setPendingApprovals((cur) => cur.map((a) => (
       a.approvalId === approval.approvalId ? { ...a, status: approve ? 'approved' : 'denied' } : a
     )));

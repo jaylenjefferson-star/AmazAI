@@ -1243,9 +1243,17 @@ def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict
     browser payload. It was normalized in the orchestrator, so it carries no
     grants or optional tools. This closes the approval-to-execution
     substitution gap for agent creation as well as connector actions.
+
+    What the new agent starts with is decided *here*, not by the proposal: the
+    apps its owner has connected. Approving is the owner's own act, so the agent
+    is usable straight away instead of being an empty seat that needs a second
+    round of setup. It inherits nothing from the agent that proposed it -- a
+    parent limited to read-only does not pass that on, and does not pass on more
+    than the owner holds either -- and writes still ask.
     """
     active = [row for row in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
               if row.get("status", row.get("state")) in A.SEATED]
+    proposal = {**proposal, "grants": C.default_grants(store)}
     plan = A.plan_create(
         proposal, actor,
         org_connectors=_org_connectors(store),
