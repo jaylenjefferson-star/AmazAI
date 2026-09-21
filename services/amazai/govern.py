@@ -106,6 +106,9 @@ ADMIN_AUDITED_ACTIONS = (
     "member.role_changed", "org.policy_changed", "org.frozen", "org.unfrozen",
     "harness.terminated", "connector.revoked_by_admin",
     "impersonation.started", "impersonation.ended",
+    # Admin agent-lifecycle actions (FEAT-003): re-running the entrypoint Bot
+    # through onboarding, and archiving (revoking) a Bot's accumulated memory.
+    "onboarding.reset", "agent.memory_archived",
 )
 
 

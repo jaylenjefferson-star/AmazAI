@@ -342,6 +342,32 @@ const OPTIONS = {
 
 // A real account keeps its theme across a reload; the demo's in-memory settings do not, so it
 // remembers the choice the way a server would.
+// --- admin governance fixtures --------------------------------------------
+// The Directory, kill switch and admin audit trail the console's /admin group
+// renders against. Mutated by demoApi.admin.* so a demo session behaves like a
+// real one without a control plane.
+const ADMIN_MEMBERS = [
+  { subject: 'you', role: 'owner', scope: 'org', scopeId: 'demo', state: 'active',
+    invitedBy: null, invitedAt: iso(-864_000_00) },
+];
+let ADMIN_KILLSWITCH = { frozen: false, reason: '', setBy: null, setAt: null };
+const ADMIN_AUDIT = [];
+
+function adminAudit(action, extra = {}) {
+  ADMIN_AUDIT.push({
+    action, at: iso(), actorUserId: 'you', actorAgentId: null,
+    correlationId: `corr_${Math.random().toString(36).slice(2, 8)}`,
+    before: extra.before || {}, after: extra.after || {}, detail: extra.detail || '', v: 1,
+  });
+}
+
+function adminSetState(subject, state, action) {
+  const m = ADMIN_MEMBERS.find((x) => x.subject === subject);
+  if (m) m.state = state;
+  adminAudit(action, { after: { state } });
+  return { member: m, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+}
+
 const demoTheme = () => { try { return localStorage.getItem('amazai.demo.theme'); } catch { return null; } };
 
 export const demoApi = {
@@ -622,6 +648,54 @@ export const demoApi = {
     totalUsd: { eng: 11.42, ops: 4.06, cos: 1.88, res: 0.71, fin: 0 }[agentId] ?? 0,
     runs: [],
   }),
+
+  // The admin governance surface, against fixtures so the console renders
+  // without a control plane. Mirrors live.admin exactly; the ADMIN_* state
+  // below stands in for the org's Directory, kill switch and audit trail.
+  admin: {
+    directory: async () => (await wait(90), { members: [...ADMIN_MEMBERS] }),
+    invite: async (body) => {
+      await wait(90);
+      const member = {
+        subject: body.subject || body.email, role: body.role || 'member',
+        scope: 'org', scopeId: 'demo', state: 'invited',
+        invitedBy: 'you', invitedAt: iso(),
+      };
+      ADMIN_MEMBERS.push(member);
+      adminAudit('member.invited', { after: { subject: member.subject, role: member.role } });
+      return { member, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+    },
+    suspend: async (subject) => (await wait(80), adminSetState(subject, 'suspended', 'member.suspended')),
+    reactivate: async (subject) => (await wait(80), adminSetState(subject, 'active', 'member.reactivated')),
+    changeRole: async (subject, body) => {
+      await wait(80);
+      const m = ADMIN_MEMBERS.find((x) => x.subject === subject);
+      if (m) m.role = body.role;
+      adminAudit('member.role_changed', { after: { role: body.role } });
+      return { member: m, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+    },
+    killswitch: async () => (await wait(70), { ...ADMIN_KILLSWITCH }),
+    setKillswitch: async (body) => {
+      await wait(80);
+      ADMIN_KILLSWITCH = { frozen: !!body.frozen, reason: body.reason || '',
+                           setBy: 'you', setAt: iso() };
+      adminAudit(body.frozen ? 'org.frozen' : 'org.unfrozen', { after: { frozen: !!body.frozen } });
+      return { ...ADMIN_KILLSWITCH, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+    },
+    audit: async () => (await wait(90), { audit: [...ADMIN_AUDIT].reverse() }),
+    resetOnboarding: async (agentId) => {
+      await wait(120);
+      adminAudit('onboarding.reset', { detail: `reset ${agentId} to onboarding` });
+      return { agentId, reset: true, clearedMessages: 0,
+               correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+    },
+    archiveMemory: async (agentId) => {
+      await wait(120);
+      adminAudit('agent.memory_archived', { before: { published: 3 }, after: { published: 0 } });
+      return { agentId, revoked: 3, publishedBefore: 3,
+               correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+    },
+  },
 };
 
 /* ------------------------------------------------------------ the socket */

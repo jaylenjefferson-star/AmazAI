@@ -25,9 +25,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
-                    continuation, cost, handoffs, keys as K, memory, metrics, onboarding, org,
-                    policy, provisioning, redact, review, router, routines, runs, skills,
-                    standard_runtime, threads)
+                    continuation, cost, govern, handoffs, keys as K, memory, metrics,
+                    onboarding, org, policy, provisioning, redact, review, router, routines,
+                    runs, skills, standard_runtime, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
@@ -232,6 +232,16 @@ def _paused_turn(store: Store, run: dict, event: dict) -> dict | None:
 def _drive(store: Store, run: dict, event: dict) -> dict:
     push = Push(store)
     agent = store.get(K.agent_pk(store.owner_id, run["agentId"]), "META")
+
+    # The kill switch is the pre-model chokepoint: a frozen org fails every run
+    # closed here, before a single token is spent. Checked ahead of the budget
+    # and tool resolution so freezing an org stops work immediately on the next
+    # run rather than after the model has already been invoked. The org id is
+    # the agent's owner today (the one-workspace-per-owner seam).
+    org_id = agent.get("orgId") or store.owner_id
+    if govern.is_frozen(store.try_get(K.org_pk(org_id), "KILLSWITCH")):
+        _fail(store, run, "this organization is frozen by an administrator")
+        return {"ok": False, "reason": "org frozen"}
 
     if agent.get("state") != "active":
         _fail(store, run, f"agent {agent.get('name')} is {agent.get('state')}")

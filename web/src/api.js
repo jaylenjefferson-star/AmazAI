@@ -110,6 +110,25 @@ const live = {
 
   usage: (agentId, month) =>
     call('GET', `/usage?agentId=${encodeURIComponent(agentId)}${month ? `&month=${month}` : ''}`),
+
+  // The admin governance surface (FEAT-003). Every one of these is gated on the
+  // RBAC capability matrix server-side and audited; the client only names the
+  // action. The {subject} in a directory path is the TARGET, never the actor --
+  // the actor is always the verified token.
+  admin: {
+    directory: () => call('GET', '/admin/directory'),
+    invite: (body) => call('POST', '/admin/directory/invites', body),
+    suspend: (subject) => call('POST', `/admin/directory/${encodeURIComponent(subject)}/suspend`, {}),
+    reactivate: (subject) => call('POST', `/admin/directory/${encodeURIComponent(subject)}/reactivate`, {}),
+    changeRole: (subject, body) => call('PATCH', `/admin/directory/${encodeURIComponent(subject)}`, body),
+    killswitch: () => call('GET', '/admin/killswitch'),
+    setKillswitch: (body) => call('POST', '/admin/killswitch', body),
+    audit: () => call('GET', '/admin/audit'),
+    // Put the entrypoint Bot back through onboarding; archive (revoke) a Bot's
+    // accumulated memory. Neither ever deletes an audit/evidence row.
+    resetOnboarding: (agentId) => call('POST', `/admin/agents/${encodeURIComponent(agentId)}/reset-onboarding`, {}),
+    archiveMemory: (agentId) => call('POST', `/admin/agents/${encodeURIComponent(agentId)}/archive-memory`, {}),
+  },
 };
 
 // In demo mode the console runs against fixtures instead of the control
