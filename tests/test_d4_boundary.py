@@ -167,67 +167,6 @@ class TestTheSpikeCommand:
 
 # --- harnesses made before the new inline tools ---------------------------------
 
-class FakeControl:
-    def __init__(self, tools):
-        self.tools, self.updated = tools, []
-
-    def get_harness(self, harnessId):
-        return {"harness": {"tools": self.tools}}
-
-    def update_harness(self, **kw):
-        self.updated.append(kw)
-
-
-def core_with(tools):
-    core = agentcore.AgentCore(runtime=object(), control=FakeControl(tools))
-    return core
-
-
-class TestExistingHarnessesAreReportedNotGuessedAt:
-    OLD = [{"type": "inline_function", "name": n} for n in
-           ("propose_agent", "request_approval", "handoff", "message_agent",
-            "propose_skill", "remember", "propose_shared_memory")]
-
-    def test_a_harness_from_before_the_new_tools_is_missing_exactly_them(self):
-        report = core_with(self.OLD).missing_inline_tools("arn")
-        assert report["known"] is True
-        assert sorted(report["missing"]) == ["connector_call", "connector_search",
-                                            "create_agent", "propose_routine",
-                                            "request_connector", "update_agent"]
-
-    def test_a_current_harness_is_missing_nothing(self):
-        every = [{"type": "inline_function", "name": n} for n in agentcore.INLINE_TOOLS]
-        assert core_with(every).missing_inline_tools("arn")["missing"] == []
-
-    def test_a_response_without_tools_is_reported_as_unknown_not_as_empty(self):
-        core = agentcore.AgentCore(runtime=object(), control=type("C", (), {
-            "get_harness": lambda self, harnessId: {"harness": {"name": "x"}}})())
-        report = core.missing_inline_tools("arn")
-        assert report["known"] is False and "keys were ['name']" in report["note"]
-
-    def test_the_sync_merges_rather_than_replaces(self):
-        """UpdateHarness replaces what it is given (BUILD_PLAN gotcha 3)."""
-        control = FakeControl(self.OLD + [{"type": "agentcore_browser", "name": "browser"}])
-        agentcore.AgentCore(runtime=object(), control=control).add_inline_tools("arn")
-        sent = control.updated[0]["tools"]
-        names = [t["name"] for t in sent]
-        assert "browser" in names and "propose_routine" in names and "request_connector" in names
-        assert len(names) == len(set(names)), "a tool was declared twice"
-        assert control.updated[0]["harnessId"] == "arn"
-
-    def test_an_arn_is_converted_to_the_control_plane_harness_id(self):
-        control = FakeControl(self.OLD)
-        core = agentcore.AgentCore(runtime=object(), control=control)
-        core.add_inline_tools("arn:aws:bedrock-agentcore:us-west-2:1:harness/eng-123")
-        assert control.updated[0]["harnessId"] == "eng-123"
-
-    def test_the_report_alone_never_calls_update(self):
-        script = load_script("sync_harness_tools")
-        control = FakeControl(self.OLD)
-        script.main(["--harness-arn", "arn"], core=agentcore.AgentCore(runtime=object(), control=control))
-        assert control.updated == []
-
-
 class TestTheFirstBotOffersWithRealTools:
     def test_the_brief_only_names_tools_that_exist(self):
         import re

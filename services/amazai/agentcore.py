@@ -3,14 +3,13 @@
 Wraps the three verified calls from BUILD_PLAN §0. Every shape here is from
 that section; do not improvise these signatures.
 
-  bedrock-agentcore-control : create_harness / get_harness / update_harness
+  bedrock-agentcore-control : create_harness / get_harness
   bedrock-agentcore         : invoke_harness / invoke_agent_runtime_command
 """
 
 from __future__ import annotations
 
 import os
-import time
 
 import boto3
 
@@ -290,7 +289,11 @@ INLINE_TOOLS = {
 
 
 def harness_tools(tool_names: list[str]) -> list[dict]:
-    """Build the `tools` argument for create_harness.
+    """Build the `tools` argument sent with every invocation (`AgentCore.invoke_stream`).
+
+    The inline tools the loop is written around, plus whichever optional built-ins the
+    Bot is allowed (`browser`, `code_interpreter`). The router removes what a Bot may not
+    have this run -- `browser` when a connector covers the outcome -- by leaving it out.
 
     `shell` and `file_operations` are deliberately dropped: they are on by
     default and declaring them is rejected (BUILD_PLAN gotcha 7). They are
@@ -316,20 +319,6 @@ def harness_tools(tool_names: list[str]) -> list[dict]:
     return tools
 
 
-def tools_version() -> str:
-    """A short fingerprint of which inline tools a harness should carry, and how they read.
-
-    Recorded on a Bot once its harness has been checked, so the check is a one-off
-    per Bot and per set of tools. It covers each tool's description and inputs as
-    well as its name: what a tool says about itself is how a model decides to use
-    it, so improving the wording has to reach the Bots that already have the tool.
-    """
-    import hashlib
-    import json
-    blob = json.dumps({n: INLINE_TOOLS[n] for n in sorted(INLINE_TOOLS)}, sort_keys=True)
-    return hashlib.sha256(blob.encode()).hexdigest()[:12]
-
-
 def _harness_id(harness_arn: str) -> str:
     """Return the control-plane identifier from an ARN or an id.
 
@@ -353,8 +342,20 @@ class AgentCore:
 
     def invoke_stream(self, *, harness_arn: str, session_id: str, messages: list[dict],
                       model_id: str, system_prompt: str,
-                      allowed_tools: list[str] | None = None):
-        """Start a streaming agent turn. Yields raw stream events."""
+                      tools: list[dict] | None = None):
+        """Start a streaming agent turn. Yields raw stream events.
+
+        `tools` are declared **on this call**, not stored on the harness. A harness is
+        created bare, and updating one needs permissions and a wait; the invoke API takes
+        the tools per request and that overrides the harness's own list, so the tools a
+        Bot has are exactly what the code says on every run, and a change to a tool's
+        wording reaches every Bot at once. The terminal and the files stay on regardless.
+
+        Deliberately no `allowedTools`: at invoke time it *overrides* the harness default
+        (`*`) and only `*` lets an inline tool through -- naming them does not -- so a list
+        of built-ins hides every tool declared here. Which optional tools a Bot has is
+        decided by what is put in `tools`: what it may not use is absent, not refused.
+        """
         kwargs = {
             "harnessArn": harness_arn,
             "runtimeSessionId": session_id,
@@ -362,8 +363,8 @@ class AgentCore:
             "model": {"bedrockModelConfig": {"modelId": model_id}},
             "systemPrompt": [{"text": system_prompt}],
         }
-        if allowed_tools:
-            kwargs["allowedTools"] = allowed_tools
+        if tools:
+            kwargs["tools"] = tools
         response = self._runtime.invoke_harness(**kwargs)
         yield from response["stream"]
 
@@ -409,100 +410,6 @@ class AgentCore:
         # `harnessId`. Keeping the conversion here stops callers from mixing
         # the two service shapes.
         return self._control.get_harness(harnessId=_harness_id(harness_arn))
-
-    def missing_inline_tools(self, harness_arn: str) -> dict:
-        """Which of `INLINE_TOOLS` this harness does not have yet. Read-only.
-
-        Inline functions are declared when a harness is created, so a harness made
-        before `request_connector` and `propose_routine` existed cannot call them --
-        the model is simply never offered them. That is the gap this reports; it
-        never guesses the shape of an update.
-        """
-        resp = self.get_harness(harness_arn)
-        body = resp.get("harness", resp) if isinstance(resp, dict) else {}
-        tools = body.get("tools")
-        if tools is None:
-            return {"known": False, "have": [], "missing": sorted(INLINE_TOOLS),
-                    "note": f"get_harness returned no `tools`; keys were {sorted(body)}"}
-        have = sorted(t.get("name", "") for t in tools if t.get("type") == "inline_function")
-        return {"known": True, "have": have,
-                "missing": sorted(n for n in INLINE_TOOLS if n not in have)}
-
-    def add_inline_tools(self, harness_arn: str) -> dict:
-        """Bring a harness's inline tools up to date: add the missing, refresh the reworded.
-
-        `update_harness` *replaces* what it is given, so this reads the harness,
-        merges, and sends the whole list. Engineering's harness in this account
-        carries inline tools that creation never declared, so an update of this
-        shape has worked here before; the first sync of any other harness is still
-        that harness's first, which is why `ensure_inline_tools` is written so a
-        failure is reported and never stops a run.
-
-        A tool already there is rewritten only when its description is readable
-        and differs from ours. If the service hands the description back in a shape
-        this cannot read, the tool is left alone rather than rewritten on every run.
-        """
-        resp = self.get_harness(harness_arn)
-        body = resp.get("harness", resp)
-        current = list(body.get("tools") or [])
-        desired = {t["name"]: t for t in harness_tools([]) if t.get("type") == "inline_function"}
-
-        def described(tool: dict) -> str | None:
-            cfg = (tool.get("config") or {}).get("inlineFunction") or {}
-            return cfg.get("description") if isinstance(cfg.get("description"), str) else None
-
-        kept, changed = [], []
-        have = set()
-        for tool in current:
-            name = tool.get("name")
-            if tool.get("type") == "inline_function" and name in desired:
-                have.add(name)
-                theirs = described(tool)
-                if theirs is not None and theirs != described(desired[name]):
-                    kept.append(desired[name])           # reworded: refresh it
-                    changed.append(name)
-                    continue
-            kept.append(tool)
-        added = [desired[n] for n in desired if n not in have]
-        changed += [t["name"] for t in added]
-        if not changed:
-            return {"changed": False, "added": []}
-        self._control.update_harness(harnessId=_harness_id(harness_arn), tools=kept + added)
-        return {"changed": True, "added": changed}
-
-    def ensure_inline_tools(self, harness_arn: str, *, wait_seconds: int = 60,
-                            poll_seconds: float = 3.0, sleep=time.sleep) -> dict:
-        """Add any missing inline tools, and return only once the harness can be invoked.
-
-        An update leaves a harness UPDATING for a while, and invoking it then fails
-        for a reason that looks like anything but "wait". So a change waits for
-        READY, and a harness that goes FAILED or DELETING is an error here rather
-        than a mystery at the next invoke.
-        """
-        self._await_ready(harness_arn, "before its tools were updated", wait_seconds,
-                           poll_seconds, sleep)
-        result = self.add_inline_tools(harness_arn)
-        if not result["changed"]:
-            return result
-        self._await_ready(harness_arn, "after its tools were updated", wait_seconds,
-                          poll_seconds, sleep)
-        return result
-
-    def _await_ready(self, harness_arn: str, when: str, wait_seconds: int,
-                     poll_seconds: float, sleep) -> None:
-        """Return once the harness is READY. A Bot made a moment ago may still be creating."""
-        waited = 0.0
-        while True:
-            resp = self.get_harness(harness_arn)
-            status = (resp.get("harness", resp) or {}).get("status")
-            if status in (None, "READY"):
-                return
-            if status in ("FAILED", "DELETING", "UPDATE_FAILED", "CREATE_FAILED"):
-                raise RuntimeError(f"harness went {status} {when}")
-            if waited >= wait_seconds:
-                raise TimeoutError(f"harness still {status} {wait_seconds}s {when}")
-            sleep(poll_seconds)
-            waited += poll_seconds
 
     def update_filesystem(self, harness_arn: str, mounts: list[dict]) -> dict:
         """Filesystem mounts are not enabled in this deployment."""

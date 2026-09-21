@@ -374,6 +374,5 @@ def test_agentcore_keeps_every_method_after_the_harness_id_helper():
     # A module-level helper defined between two methods silently swallowed
     # update_filesystem into its own body; nothing failed until it was called.
     from amazai import agentcore
-    for name in ("get_harness", "missing_inline_tools", "add_inline_tools",
-                 "update_filesystem"):
+    for name in ("get_harness", "update_filesystem", "invoke_stream", "create_harness"):
         assert callable(getattr(agentcore.AgentCore, name)), name

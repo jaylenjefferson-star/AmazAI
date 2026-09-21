@@ -53,10 +53,6 @@ class FakeCore:
         script = self.scripts.pop(0) if self.scripts else []
         yield from (script(kw) if callable(script) else script)
 
-    def ensure_inline_tools(self, harness_arn):
-        """The pre-run tool sync: this harness is already up to date."""
-        return {"changed": False, "added": []}
-
 
 @pytest.fixture
 def world(api_table, monkeypatch):
