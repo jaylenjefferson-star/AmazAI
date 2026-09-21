@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Companion from '../characters/Companion';
+import { ContactChip } from './ContactCard';
 import Handoff from './Handoff';
 import Icon from './Icon';
 
@@ -52,7 +53,12 @@ export default function Delegation({ handoff, agents = [] }) {
         </span>
         <Icon name={open ? 'x' : 'forward'} size={16} />
       </button>
-      {open && <div className="dg-detail"><Handoff handoff={handoff} agents={agents} /></div>}
+      {open && (
+        <div className="dg-detail">
+          <div className="dg-people"><ContactChip agent={from} /><Icon name="arrowright" size={14} /><ContactChip agent={to} /></div>
+          <Handoff handoff={handoff} agents={agents} />
+        </div>
+      )}
     </div>
   );
 }

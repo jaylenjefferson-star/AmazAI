@@ -26,9 +26,9 @@ export function AppLogo({ app, size = 40 }) {
     : <span className="app-logo fallback" aria-hidden="true" style={{ width: size, height: size }}>{initial}</span>;
 }
 
-export default function Connectors({ embedded = false }) {
+export default function Connectors({ embedded = false, initialQuery = '' }) {
   const [apps, setApps] = useState([]);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery);
   const [cursor, setCursor] = useState('');
   const [installed, setInstalled] = useState({});
   const [pending, setPending] = useState({});     // slug -> true while a sign-in tab is open

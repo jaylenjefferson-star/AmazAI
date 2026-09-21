@@ -80,6 +80,15 @@ export default function Task() {
 
   useEffect(() => { loadAgent(); loadThread(); }, [loadAgent, loadThread]);
 
+  // A contact card's "Profile" arrives here with `profile` in navigation state.
+  useEffect(() => {
+    if (agent && location.state?.profile) {
+      setProfileOpen(true);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent]);
+
   // "New task" hands the goal over in navigation state; it is sent once, as a
   // normal message, and the state is cleared so a refresh cannot send it again.
   useEffect(() => {

@@ -1,4 +1,5 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { ContactsProvider } from '../components/ContactCard';
 import Icon from '../components/Icon';
 import PresenceFeed from '../components/PresenceFeed';
 import Inbox from '../screens/Inbox';
@@ -81,6 +82,7 @@ export default function Shell() {
   const split = desktop && (home || focused);
 
   return (
+    <ContactsProvider>
     <div className="app" data-focused={focused ? 'true' : undefined}>
       <PresenceFeed />
       <main className={`app-main${split ? ' app-main--split' : ''}`}>
@@ -99,5 +101,6 @@ export default function Shell() {
         )}
       </main>
     </div>
+    </ContactsProvider>
   );
 }
