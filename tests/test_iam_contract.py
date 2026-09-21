@@ -1,12 +1,14 @@
 """What the code calls in AWS is what the stack grants.
 
-The tool sync shipped calling `update_harness` from the orchestrator, whose role was
-never granted `bedrock-agentcore:UpdateHarness`. The call was denied, logged and
-swallowed (by design: a failed sync must not stop a run), so nothing failed loudly and
-no test could see it -- the gap was between two files in two languages.
+Twice a call was denied for an action that was not the one it is named after, and nothing
+failed loudly because the code swallowed the denial (a failed tool sync must not stop a
+run). `CreateHarness` is authorised as `CreateAgentRuntime` (the stack says so in a
+comment). `UpdateHarness` was granted by name and still denied: AWS evaluated it as
+`bedrock-agentcore:UpdateAgentRuntime` on the harness's runtime. A guard that only
+checked same-named actions passed both times.
 
-This reads the control-plane calls `agentcore.py` makes and checks the CDK stack grants
-each one, and that the orchestrator holds the other permissions creating a Bot needs.
+So this reads the control-plane and runtime calls `agentcore.py` makes, expands each to
+every action AWS is known to evaluate it as, and checks the stack grants all of them.
 """
 
 import re
@@ -15,6 +17,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STACK = (ROOT / "infra" / "lib" / "amazai-stack.ts").read_text()
 AGENTCORE = (ROOT / "services" / "amazai" / "agentcore.py").read_text()
+
+#: What AWS actually evaluates a call as. Add to this the next time a denial names an action
+#: the call is not called; the AccessDeniedException text says which.
+AUTHORISED_AS = {
+    "create_harness": {"CreateHarness", "CreateAgentRuntime", "CreateAgentRuntimeEndpoint"},
+    "update_harness": {"UpdateHarness", "UpdateAgentRuntime", "UpdateAgentRuntimeEndpoint"},
+}
 
 
 def pascal(snake: str) -> str:
@@ -29,16 +38,23 @@ def statement_for(function: str, sid: str) -> str:
     return m.group(0)
 
 
-def test_every_control_plane_call_the_code_makes_is_granted_to_the_orchestrator():
-    calls = set(re.findall(r"self\._control\.(\w+)\(", AGENTCORE))
-    assert {"create_harness", "get_harness", "update_harness"} <= calls, calls
-    granted = set(re.findall(r"'bedrock-agentcore:(\w+)'", STACK))
-    missing = sorted(pascal(c) for c in calls if pascal(c) not in granted)
-    assert missing == [], f"called but never granted anywhere in the stack: {missing}"
+def granted() -> set[str]:
+    return set(re.findall(r"'bedrock-agentcore:(\w+)'", STACK))
 
 
-def test_updating_a_harness_is_granted_to_the_orchestrator_specifically():
-    assert "bedrock-agentcore:UpdateHarness" in statement_for("orchestratorFn", "KeepHarnessToolsCurrent")
+def test_every_aws_call_the_code_makes_is_granted_including_what_aws_evaluates_it_as():
+    calls = set(re.findall(r"self\._(?:control|runtime)\.(\w+)\(", AGENTCORE))
+    assert {"create_harness", "invoke_harness"} <= calls, calls
+    needed = set().union(*(AUTHORISED_AS.get(c, {pascal(c)}) for c in calls))
+    missing = sorted(needed - granted())
+    assert missing == [], f"the code calls these (or what AWS evaluates them as) and the stack never grants them: {missing}"
+
+
+def test_the_orchestrator_cannot_rewrite_a_harness_because_nothing_needs_to():
+    # Tools travel with each invocation, so nothing updates a harness. Not granting it is the
+    # least privilege that works, and it is the permission whose absence broke the first attempt.
+    assert not {"UpdateHarness", "UpdateAgentRuntime", "UpdateAgentRuntimeEndpoint"} & granted()
+    assert "._control.update_harness(" not in AGENTCORE
 
 
 def test_the_orchestrator_may_pass_the_dynamic_bot_role_and_only_for_agentcore():

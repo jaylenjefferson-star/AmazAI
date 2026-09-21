@@ -183,19 +183,31 @@ Every inline handler returns something the model can act on: a result, or `{"err
 
 ## A Bot's tools
 
-A harness is created bare (the call that is known to work in this account) and its inline tools --
-`create_agent`, `update_agent`, `request_approval`, `message_agent`, `remember`, `connector_search`,
-`connector_call` -- arrive by an update. Nothing did that for a Bot made through the console, so it could talk
-but not make a Bot, ask for an approval, bring in a teammate, or use a connected app. Before a Bot's first run
-`orchestrator._ensure_harness_tools` waits for the harness to be READY, adds what is missing, refreshes a tool
-whose wording has changed, waits for READY again, and records `harnessToolsVersion` on the Bot (a fingerprint of
-each tool's name, description and inputs, so improving the wording reaches every Bot). It never fails a run: a
-refused update is logged, the Bot goes on with the tools it has, and the next run tries again.
-`scripts/sync_harness_tools.py` does the same ahead of time.
+A Bot's tools -- `create_agent`, `update_agent`, `request_approval`, `message_agent`, `remember`,
+`connector_search`, `connector_call` and the rest of `INLINE_TOOLS`, plus `browser` / `code_interpreter`
+when the router leaves them -- are **sent with every invocation** (`AgentCore.invoke_stream(tools=...)`),
+not stored on the harness. A harness is created bare (the call that is known to work in this account).
 
-The orchestrator's role must allow this: `bedrock-agentcore:UpdateHarness` was missing, so the update was
-denied and swallowed. `tests/test_iam_contract.py` reads the control-plane calls the code makes and checks the
-stack grants each one.
+That is the design because two earlier attempts failed and the live service showed why (probed against Chief's
+own harness, a few cents, nothing executed):
+
+- Storing the tools meant updating the harness before a Bot's first run. AWS evaluates `UpdateHarness` as
+  `bedrock-agentcore:UpdateAgentRuntime` on the harness's runtime, so granting `UpdateHarness` by name was still
+  denied, and the code (rightly) swallowed the denial: Chief kept talking with no tools and said `create_agent`
+  was not available. `tests/test_iam_contract.py` now expands each call to the actions AWS evaluates it as.
+- `invoke_harness` takes `tools` per request and that overrides the harness's own list. With it, the built-ins
+  stay on, every inline tool is visible, and nothing needs updating: a Bot made a second ago and Engineering both
+  have exactly what the code declares, and a reworded description reaches every Bot on its next run.
+- `allowedTools` at invoke time also *overrides* the harness default (`*`) and only `*` lets an inline tool
+  through; naming them, or using `@inline/*`, does not. The orchestrator used to pass `["shell", "file_operations"]`,
+  which hides every tool declared. It sends none now. What a Bot may not have is left out of `tools` -- absent
+  from the schema, not refused -- which is how the router removes `browser` when a connector covers the job.
+- A full round trip for a tool that is not an approval was confirmed live: the model called `remember`, was answered
+  with a `toolResult` on the same conversation, and carried on from it.
+
+The orchestrator is therefore not granted `UpdateHarness` / `UpdateAgentRuntime`; nothing updates a harness. It is
+granted what creating one needs (`CreateHarness`, the runtime actions it is evaluated as, and `PassRole` on the
+restricted dynamic Bot role only), because a Bot the operator asks another Bot to make is created from there.
 
 ## Bots that make Bots
 

@@ -250,7 +250,6 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     push.state(run["runId"], run["threadId"], run["state"], run.get("costUsd", 0.0))
 
     # --- stream ------------------------------------------------------------
-    _ensure_harness_tools(store, agent)
     core = agentcore.AgentCore()
     parser = StreamParser()
     ev = EvidenceWriter(run["runId"])
@@ -261,6 +260,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     stream_error: str | None = None
     turn = Turn()
     started_at = now_iso()
+
+    # The tools this Bot has on this run: the inline ones, plus the optional built-ins the
+    # router left it. Sent with every call; see `AgentCore.invoke_stream`.
+    call_tools = agentcore.harness_tools(
+        [t for t in resolution.tools if t in ("browser", "code_interpreter")])
 
     # Inline tools the code answered this round, to hand back so the model can go on.
     answered: list[dict] = []
@@ -294,7 +298,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                 messages=messages + carried,
                 model_id=model_id,
                 system_prompt=system_prompt,
-                allowed_tools=list(resolution.tools) or None,
+                tools=call_tools,
             )
 
             for raw in stream:
@@ -529,29 +533,6 @@ def _connected_apps_note(store: Store, agent_id: str) -> str:
             "you can do in them, then connector_call to do it. Reading runs at once; "
             "anything that creates, changes or removes data waits for the operator's "
             "approval. For an app not listed, use request_connector.")
-
-
-def _ensure_harness_tools(store: Store, agent: dict) -> None:
-    """Make sure this Bot's harness has the tools the loop is written around.
-
-    A harness is created bare, and its inline tools (`propose_agent`,
-    `request_approval`, `message_agent`, `connector_call`, ...) are added by an update.
-    Nothing did that for a Bot made through the console, so it could talk but not
-    ask for an approval, bring in a teammate, propose a Bot or use a connected app --
-    and the prompt still told it to. This closes that once per Bot and per set of
-    tools, and records that it did.
-
-    It never fails the run. If the update is refused the Bot goes on with the tools
-    it has, the reason is logged, and the next run tries again.
-    """
-    version = agentcore.tools_version()
-    if not agent.get("harnessArn") or agent.get("harnessToolsVersion") == version:
-        return
-    try:
-        agentcore.AgentCore().ensure_inline_tools(agent["harnessArn"])
-        store.update(K.agent_pk(agent["agentId"]), "META", {"harnessToolsVersion": version})
-    except Exception:  # noqa: BLE001
-        traceback.print_exc()
 
 
 def _reporting_note(store: Store, agent: dict) -> str:

@@ -109,12 +109,8 @@ python3 scripts/check_composio.py --user-id <your Auth0 sub> --tool <A_READ_ONLY
 
 Composio's bar for "it works" is a real read-only call that returns a provider result
 and a log id; the second form does exactly that and refuses anything that is not a
-read. Existing harnesses (Engineering) need the two new inline tools:
-
-```bash
-python3 scripts/sync_harness_tools.py --harness-arn <ARN>          # report
-python3 scripts/sync_harness_tools.py --harness-arn <ARN> --apply  # merge them in
-```
+read. No Bot's harness needs updating for the connector tools: the inline tools are
+declared on every invocation, so Engineering and every Bot made later have them.
 
 ## What is verified and what is not
 

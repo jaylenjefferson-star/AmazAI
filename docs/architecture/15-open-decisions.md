@@ -93,12 +93,10 @@ fallback. What D4 changes is the *shape of the resume turn*. Cards (`request_con
 `propose_routine`) do not depend on it at all: they are made as a turn's last
 action, after the reply, so nothing needs to continue past them.
 
-**Separately: existing harnesses.** Inline tools are declared when a harness is
-created, so the Engineering seat (made before `request_connector` and
-`propose_routine` existed) cannot call them. `scripts/sync_harness_tools.py
---harness-arn <ARN>` reports what is missing (read-only). `--apply` calls
-`update_harness`, whose parameter shape BUILD_PLAN has not verified -- read the
-report first, and read the error if it refuses.
+**Separately: existing harnesses.** Superseded. Inline tools are no longer declared when a
+harness is created or updated on it: they are sent with every invocation (`invoke_harness`
+takes `tools` per request and that overrides the harness's own list), so no harness needs
+updating and every Bot has the same, current tools. See architecture 19, "A Bot's tools".
 
 ---
 

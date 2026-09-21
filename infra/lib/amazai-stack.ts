@@ -372,16 +372,6 @@ export class AmazaiStack extends cdk.Stack {
       },
     }));
 
-    // A Bot's harness is created bare and its tools are added by an update: before a
-    // Bot's first run the orchestrator brings its harness up to date. Without this the
-    // update is denied, the run carries on without the tools, and a Bot made in the
-    // console can talk but cannot propose, ask, message a teammate or use an app.
-    orchestratorFn.addToRolePolicy(new iam.PolicyStatement({
-      sid: 'KeepHarnessToolsCurrent',
-      actions: ['bedrock-agentcore:UpdateHarness'],
-      resources: ['*'],
-    }));
-
     // A Bot the operator asks another Bot to make is created by the orchestrator, so it
     // needs what the API needs to create one: the restricted dynamic role, and nothing
     // wider. It already may pass the seat roles.
