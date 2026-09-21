@@ -172,7 +172,7 @@ export default function Timeline({
               {speaker && (
                 <button type="button" className="tl-label tl-label--who" disabled={!speaker.who}
                         onClick={() => speaker.who && openContact(speaker.who.agentId)}>
-                  {speaker.who && <Companion archetype={speaker.who.archetype} color={speaker.who.color} state="idle" size={18} name={speaker.name} />}
+                  {speaker.who && <Companion archetype={speaker.who.archetype} color={speaker.who.color} state="idle" size={18} decorative />}
                   {speaker.name}
                 </button>
               )}

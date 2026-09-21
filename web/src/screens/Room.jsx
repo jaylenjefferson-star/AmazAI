@@ -157,7 +157,7 @@ export default function Room() {
     <span className="rs-stack ch-stack" aria-hidden="true">
       {members.slice(0, 3).map((a, i) => (
         <span key={a.agentId} className="rs-stack-item" style={{ zIndex: 3 - i }}>
-          <Companion archetype={a.archetype} color={a.color} state={presence[a.agentId]?.state || a.state} size={28} />
+          <Companion archetype={a.archetype} color={a.color} state={presence[a.agentId]?.state || a.state} size={28} decorative />
         </span>
       ))}
       {members.length > 3 && <span className="rs-more">+{members.length - 3}</span>}

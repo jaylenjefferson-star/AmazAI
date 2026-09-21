@@ -23,7 +23,7 @@ import boto3
 from dataclasses import dataclass, field
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
-                    continuation, cost, keys as K, memory, policy, redact, review,
+                    continuation, cost, keys as K, memory, onboarding, policy, redact, review,
                     router, routines, runs, skills, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
@@ -193,9 +193,15 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # The greeting is stored (so every browser shows the same one) but never sent as
     # a turn; the model is told about it instead. See agentcore.identity_block.
     opening = next((m.get("text", "") for m in history if m.get("starter")), "")
-    system_prompt = agentcore.build_system_prompt(agent, memories, skills=assigned_skills,
+    # The first-conversation script is written for a private chat and is wrong in a
+    # group; a room leaves it out (the role and identity still say who this Bot is).
+    prompt_agent = agent
+    if thread.get("kind") == "room" and onboarding.is_brief(agent.get("systemPrompt")):
+        prompt_agent = {**agent, "systemPrompt": ""}
+    system_prompt = agentcore.build_system_prompt(prompt_agent, memories, skills=assigned_skills,
                                                   opening=opening)
     system_prompt += _request_notes(run, agent, thread)
+    system_prompt += _room_note(store, thread, agent, run["threadId"])
     system_prompt += _connected_apps_note(store, run["agentId"])
 
 
@@ -385,6 +391,45 @@ def _request_notes(run: dict, agent: dict, thread: dict) -> str:
     if not notes:
         return ""
     return "\n\n## This request\n" + "\n".join(f"- {n}" for n in notes)
+
+
+def _room_note(store: Store, thread: dict, agent: dict, thread_id: str) -> str:
+    """Where this Bot is, and who is with it, when the thread is a group chat.
+
+    Without this a Bot in a room knows nothing of the others beyond whatever they
+    happened to say, so it answers for them ("Chief handles inbox and calendar...")
+    instead of letting them speak -- and it cannot pull one in, because
+    `message_agent` needs the room's id and nothing ever told it. Guidance, not
+    enforcement: `collab.send` is what actually checks who may message whom.
+    """
+    if thread.get("kind") != "room":
+        return ""
+    me = agent["agentId"]
+    mates = []
+    for aid in thread.get("agentIds") or []:
+        if aid == me:
+            continue
+        row = store.try_get(K.agent_pk(aid), "META")
+        if not row or row.get("status") not in A.RUNNABLE:
+            continue
+        detail = ", ".join(b for b in (row.get("title"), row.get("role")) if b)
+        mates.append(f"- {row.get('name', aid)} (@{aid})" + (f": {detail}" if detail else ""))
+    title = thread.get("title") or "this room"
+    who = ("the operator and:\n" + "\n".join(mates)) if mates else "the operator"
+    return (
+        f'\n\n## This room\nYou are in a group chat, "{title}", with {who}\n'
+        "Everyone here sees every message.\n"
+        "- Speak only for yourself. Never answer on a teammate's behalf, and never "
+        "describe what a teammate does or will do as though they had said it. If a "
+        "question is about them, or the job is theirs, bring them in: call "
+        f'message_agent with `to` set to their id, `collaboration_context_id` "{thread_id}", '
+        "`priority` true and a plain request, then tell the operator you asked them.\n"
+        "- If you have already introduced yourself here, do not do it again. When "
+        "greeted, one short line: your name, your role, what you can take on.\n"
+        "- This is not a private chat: do not run a first-conversation menu. Keep "
+        "replies short unless asked for more. If a teammate has already said what "
+        "you would, add only what is new, or say nothing."
+    )
 
 
 def _connected_apps_note(store: Store, agent_id: str) -> str:

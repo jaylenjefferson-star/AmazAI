@@ -276,7 +276,7 @@ export default function Task() {
     <div className="chat">
       <ChatHeader
         back="/"
-        mark={<Companion archetype={agent.archetype} color={agent.color} state={shown} size={30} name={agent.name} />}
+        mark={<Companion archetype={agent.archetype} color={agent.color} state={shown} size={30} decorative />}
         name={agent.name}
         status={status}
         tone={stateInfo.tone}

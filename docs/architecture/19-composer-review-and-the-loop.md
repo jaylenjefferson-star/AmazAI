@@ -81,3 +81,31 @@ that was **paused on an approval** used to flag it `CANCELLING` and leave it the
   that did not exist.
 * A guard test forbids a function assigning to a name the module imports; it found
   the `threads` shadowing that made `POST /skills` fail in one branch only.
+
+
+## Group chats
+
+A room is an open group chat: every member sees every message (doc 16 §3). How agents
+behave in one is decided in three places, so it can be tested rather than hoped for.
+
+**Who a message wakes** (`dispatch.targets_for`, deterministic code). `@id` wakes exactly
+the Bots named, in parallel. A message to the whole room (`@all`, "you two", "both of
+you", "everyone", "hi team") wakes all of them. Anything else that names no one goes to
+the lead (the first member), who is told who else is here. A bare "team" in a sentence is
+deliberately not a call to the room: each Bot woken costs a run.
+
+**What each agent is told** (`orchestrator._room_note`, guidance not enforcement). That it
+is in a group; who else is in it, with each teammate's name, `@id`, title and role; and the
+room's id, which `message_agent` needs as `collaboration_context_id` and which nothing
+supplied before, so no agent could bring a teammate in. The rules: speak only for yourself,
+never answer on a teammate's behalf (bring them in instead), introduce yourself once and
+briefly, no first-conversation menu, keep it short. `collab.send` still decides who may
+message whom.
+
+**The first Bot's script stays in the private chat.** Its stored prompt is the
+first-conversation brief ("your opening message asked..."). In a room it is left out
+(`onboarding.is_brief`); a prompt the owner has rewritten is kept.
+
+What is still true, and not fixed here: agents in the same wake run in parallel and cannot
+see each other's replies to that message. A teammate brought in with `message_agent` runs
+afterwards and does see them.

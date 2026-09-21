@@ -31,7 +31,7 @@ export function ContactChip({ agent, size = 20 }) {
   if (!agent) return null;
   return (
     <button type="button" className="contact-chip" onClick={(e) => { e.stopPropagation(); open(agent.agentId); }}>
-      <Companion archetype={agent.archetype} color={agent.color} state="idle" size={size} name={agent.name} />
+      <Companion archetype={agent.archetype} color={agent.color} state="idle" size={size} decorative />
       <span>{agent.name}</span>
     </button>
   );
