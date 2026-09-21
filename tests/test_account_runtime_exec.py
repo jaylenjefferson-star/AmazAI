@@ -102,3 +102,18 @@ def test_two_room_members_get_different_computer_sessions(api_table, monkeypatch
         })[0] == 200
 
     assert Core.calls[0]["session_id"] != Core.calls[1]["session_id"]
+
+
+
+def test_one_member_room_still_requires_an_explicit_bot(api_table, monkeypatch):
+    bot = _bot("Engle")
+    status, room = call("POST", "/threads", {
+        "kind": "room", "title": "Solo room", "agentIds": [bot["agentId"]],
+    })
+    assert status == 201
+    monkeypatch.setattr(api.agentcore, "AgentCore", Core)
+
+    status, out = call("POST", f"/threads/{room['threadId']}/exec", {"command": "pwd"})
+
+    assert status == 400
+    assert out["error"] == "agentId is required for a group-chat computer"

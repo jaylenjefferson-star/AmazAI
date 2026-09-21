@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from amazai import agentcore, keys as K
@@ -25,9 +26,10 @@ READY = "ready"
 PROVISIONING = "provisioning"
 FAILED = "failed"
 STALE_CLAIM_SECONDS = 90
-WAIT_SECONDS = 5.0
+WAIT_SECONDS = 20.0
 POLL_SECONDS = 0.25
 HARNESS_READY_SECONDS = 18.0
+CLAIM_RENEW_SECONDS = 30.0
 
 
 class RuntimeUnavailable(RuntimeError):
@@ -106,7 +108,7 @@ def _wait_for_other(store: Store, role_arn: str, seconds: float) -> str | None:
     deadline = time.monotonic() + max(0.0, seconds)
     while time.monotonic() < deadline:
         time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
-        row = store.try_get(_pk(store), _sk())
+        row = store.try_get(_pk(store), _sk(), consistent=True)
         if not row:
             return None
         ready = _ready_arn(row, role_arn)
@@ -138,7 +140,7 @@ def _take_claim(store: Store, role_arn: str) -> tuple[str, str]:
             }, unique=True)
             return token, name
         except Conflict:
-            row = store.get(_pk(store), _sk())
+            row = store.get(_pk(store), _sk(), consistent=True)
 
     ready = _ready_arn(row, role_arn)
     if ready:
@@ -164,7 +166,11 @@ def _take_claim(store: Store, role_arn: str) -> tuple[str, str]:
             "state": PROVISIONING, "claimToken": token, "claimedAt": now_iso(),
             "harnessName": name, "generation": generation,
             "harnessArn": None, "rotateName": False, "error": None,
-        }, expect={"claimToken": old_token})
+        }, expect={
+            "claimToken": old_token,
+            "state": row.get("state"),
+            "claimedAt": row.get("claimedAt"),
+        })
         return token, name
     except Conflict:
         return "waiting", row.get("harnessName") or name
@@ -180,10 +186,15 @@ def _wait_until_ready(
     role_arn: str,
     *,
     seconds: float = HARNESS_READY_SECONDS,
+    renew: Callable[[], None] | None = None,
 ) -> None:
     """Refuse a wrong-role harness and wait until AWS says it is runnable."""
     deadline = time.monotonic() + max(0.0, seconds)
+    next_renew = time.monotonic()
     while True:
+        if renew and time.monotonic() >= next_renew:
+            renew()
+            next_renew = time.monotonic() + CLAIM_RENEW_SECONDS
         record = _harness(core.get_harness(harness_arn))
         actual_role = record.get("executionRoleArn")
         if actual_role and actual_role != role_arn:
@@ -193,7 +204,8 @@ def _wait_until_ready(
         status = str(record.get("status") or "").upper()
         if status in {"READY", "ACTIVE"}:
             return
-        if status in {"FAILED", "CREATE_FAILED", "DELETING", "DELETED"}:
+        if status in {"FAILED", "CREATE_FAILED", "UPDATE_FAILED", "DELETE_FAILED",
+                      "DELETING", "DELETED"}:
             detail = record.get("failureReason") or status
             raise HarnessRejected(f"the account harness entered {status}: {detail}")
         if time.monotonic() >= deadline:
@@ -225,19 +237,18 @@ def ensure_shared_harness(
 
     token, name = _take_claim(store, role)
     if token == "":
-        return store.get(_pk(store), _sk())["harnessArn"]
+        return store.get(_pk(store), _sk(), consistent=True)["harnessArn"]
     if token == "waiting":
         ready = _wait_for_other(store, role, wait_seconds)
         if ready:
             return ready
-        # The claim may have gone stale while we waited. One recursive pass can
-        # take it over; zero wait prevents an unbounded wait/recursion loop.
-        token, name = _take_claim(store, role)
-        if token in {"", "waiting"}:
-            if token == "":
-                return store.get(_pk(store), _sk())["harnessArn"]
-            raise RuntimeUnavailable(
-                "the account runtime is still being provisioned; retry this request")
+        # Do not create a second harness in the same request after waiting for
+        # a winner. The creator may legitimately spend the full readiness
+        # window; a takeover here can exceed API Lambda's 30-second timeout and
+        # turn one slow create into two abandoned callers. A retry can take a
+        # failed or stale claim through the normal path.
+        raise RuntimeUnavailable(
+            "the account runtime is still being provisioned; retry this request")
 
     core = client or agentcore.AgentCore()
     try:
@@ -249,24 +260,55 @@ def ensure_shared_harness(
         # READY recreates the original failure as a model error on its first
         # message. GetHarness also lets us verify that a crash-recovered name
         # did not point at a harness with a wider role.
-        _wait_until_ready(core, harness_arn, role, seconds=ready_wait_seconds)
-        store.update(_pk(store), _sk(), {
-            "state": READY, "harnessArn": harness_arn,
-            "executionRoleArn": role, "readyAt": now_iso(), "error": None,
-        }, expect={"claimToken": token})
-        return harness_arn
+        def renew_claim() -> None:
+            store.update(_pk(store), _sk(), {"claimedAt": now_iso()}, expect={
+                "claimToken": token, "state": PROVISIONING,
+            })
+
+        _wait_until_ready(
+            core, harness_arn, role, seconds=ready_wait_seconds,
+            renew=renew_claim)
+        try:
+            store.update(_pk(store), _sk(), {
+                "state": READY, "harnessArn": harness_arn,
+                "executionRoleArn": role, "readyAt": now_iso(), "error": None,
+            }, expect={"claimToken": token, "state": PROVISIONING})
+            return harness_arn
+        except Conflict:
+            # A takeover and READY publication can race at a lease boundary.
+            # Never move the row backward: strongly adopt a winner that already
+            # published, otherwise report that this caller lost ownership.
+            winner = store.get(_pk(store), _sk(), consistent=True)
+            ready = _ready_arn(winner, role)
+            if ready:
+                return ready
+            raise RuntimeUnavailable(
+                "another provisioner took ownership of the account runtime; "
+                "retry this request")
     except Exception as exc:
         try:
             store.update(_pk(store), _sk(), {
                 "state": FAILED, "failedAt": now_iso(),
                 "error": f"{type(exc).__name__}: {str(exc)[:500]}",
                 "rotateName": isinstance(exc, HarnessRejected),
-            }, expect={"claimToken": token})
+            }, expect={"claimToken": token, "state": PROVISIONING})
         except Conflict:
             pass
         raise RuntimeUnavailable(
             f"the account runtime could not be provisioned ({type(exc).__name__}: "
             f"{str(exc)[:200]})") from exc
+
+
+def _dedicated_harness(agent: dict) -> str | None:
+    explicit = agent.get("dedicatedHarnessArn")
+    if explicit:
+        return explicit
+    # Rows created before account runtimes had only `harnessArn`; that value is
+    # their dedicated rollback target. A shared-mode row's compatibility ARN
+    # is not one -- treating it as dedicated makes the rollback switch lie.
+    if agent.get("runtimeMode") != "shared":
+        return agent.get("harnessArn")
+    return None
 
 
 def provision_bot(store: Store, agent: dict, *, client: agentcore.AgentCore | None = None) -> dict:
@@ -276,18 +318,30 @@ def provision_bot(store: Store, agent: dict, *, client: agentcore.AgentCore | No
     behavior for a deliberate rollback. It does not move runs already pinned.
     """
     role = _role()
+    core = client or agentcore.AgentCore()
     if shared_enabled():
-        harness_arn = ensure_shared_harness(store, client=client, role_arn=role)
+        harness_arn = ensure_shared_harness(store, client=core, role_arn=role)
         mode = "shared"
+        changes = {
+            "harnessArn": harness_arn,       # compatibility for existing readers
+            "sharedHarnessArn": harness_arn,
+        }
+        dedicated = _dedicated_harness(agent)
+        if dedicated:
+            changes["dedicatedHarnessArn"] = dedicated
     else:
-        core = client or agentcore.AgentCore()
         harness_arn = core.create_harness(
             name=f"amazai_{agent['agentId']}", execution_role_arn=role,
             tool_names=agent.get("allowedTools") or [])
+        _wait_until_ready(core, harness_arn, role)
         mode = "dedicated"
+        changes = {
+            "harnessArn": harness_arn,
+            "dedicatedHarnessArn": harness_arn,
+        }
 
     return store.update(K.agent_pk(agent["agentId"]), "META", {
-        "harnessArn": harness_arn,
+        **changes,
         "executionRoleArn": role,
         "runtimeMode": mode,
         "status": "active", "state": "active",
@@ -315,14 +369,20 @@ def pin_run(
     dedicated = agent.get("runtimeMode") == "dedicated"
     mode = "dedicated"
 
+    dedicated_target = _dedicated_harness(agent)
     if legacy or dedicated or not shared_enabled():
-        harness_arn = agent.get("harnessArn")
+        harness_arn = dedicated_target
+        if not harness_arn:
+            raise RuntimeUnavailable(
+                f"Bot {agent.get('agentId')!r} has no dedicated rollback harness; "
+                "run scripts/provision_agents.py --dedicated before disabling the "
+                "account runtime")
     else:
         try:
             harness_arn = ensure_shared_harness(store, client=client)
             mode = "shared"
         except RuntimeUnavailable:
-            harness_arn = agent.get("harnessArn")
+            harness_arn = dedicated_target
             mode = "dedicated-fallback"
             if not harness_arn:
                 raise
@@ -330,11 +390,21 @@ def pin_run(
     if not harness_arn:
         raise RuntimeUnavailable(f"Bot {agent.get('agentId')!r} has no runnable harness")
 
-    return store.update(run["pk"], "META", {
-        "runtimeHarnessArn": harness_arn,
-        "runtimeMode": mode,
-        "runtimePinnedAt": now_iso(),
-    }, expect={"sessionId": run["sessionId"]})
+    try:
+        return store.update(run["pk"], "META", {
+            "runtimeHarnessArn": harness_arn,
+            "runtimeMode": mode,
+            "runtimePinnedAt": now_iso(),
+        }, expect={"sessionId": run["sessionId"]},
+           expect_absent_or_null=("runtimeHarnessArn",))
+    except Conflict:
+        # A duplicate Lambda delivery can run the same handler twice. The first
+        # worker owns the choice; the loser adopts the complete pair from the
+        # row instead of overwriting it with a fallback it resolved later.
+        winner = store.get(run["pk"], "META", consistent=True)
+        if winner.get("runtimeHarnessArn"):
+            return winner
+        raise
 
 
 def for_exec(
@@ -346,13 +416,18 @@ def for_exec(
     """The account harness and Bot-scoped session for deterministic shell use."""
     session_id = K.bot_session_id(store.owner_id, agent["agentId"],
                                   f"dm-{agent['agentId']}")
+    dedicated = _dedicated_harness(agent)
     if agent.get("runtimeMode") == "dedicated" or not shared_enabled():
-        harness_arn = agent.get("harnessArn")
+        harness_arn = dedicated
+        if not harness_arn:
+            raise RuntimeUnavailable(
+                f"Bot {agent.get('agentId')!r} has no dedicated rollback harness; "
+                "provision one before disabling the account runtime")
     else:
         try:
             harness_arn = ensure_shared_harness(store, client=client)
         except RuntimeUnavailable:
-            harness_arn = agent.get("harnessArn")
+            harness_arn = dedicated
     if not harness_arn:
         raise RuntimeUnavailable(
             f"Bot {agent.get('agentId')!r} has no runtime for shell commands")

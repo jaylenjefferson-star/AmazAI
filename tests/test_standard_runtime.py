@@ -16,7 +16,6 @@ from amazai.store import Store
 ROLE = "arn:aws:iam::1:role/amazai-agent-dynamic"
 ARN = "arn:aws:bedrock-agentcore:us-west-2:1:harness/amazai_shared-test"
 
-
 class Core:
     def __init__(self, *, existing=None, fail=None, status="READY", role=ROLE):
         self.existing = existing
@@ -59,7 +58,6 @@ def agent(store, agent_id="chief", **extra):
         **extra,
     })
 
-
 class TestSessionIdentityV2:
     def test_is_stable_for_the_same_logical_bot_and_thread(self):
         a = K.bot_session_id("owner", "chief", "room-1")
@@ -95,7 +93,6 @@ class TestSessionIdentityV2:
 
     def test_legacy_ids_remain_recognisable_for_migration(self):
         assert not K.is_bot_session_id(K.session_id("room-1"))
-
 
 class TestOneHarnessPerAccount:
     def test_first_request_creates_and_registers_one(self, store):
@@ -152,7 +149,6 @@ class TestOneHarnessPerAccount:
         RT.ensure_shared_harness(store, client=Core())
         with pytest.raises(RT.RuntimeUnavailable, match="different execution role"):
             RT.ensure_shared_harness(store, client=Core(), role_arn="arn:aws:iam::1:role/wider")
-
 
 class TestRunPinning:
     def test_a_v2_run_pins_the_shared_harness(self, store):
@@ -216,7 +212,6 @@ class TestRunPinning:
         with pytest.raises(RT.RuntimeUnavailable, match="down"):
             RT.pin_run(store, run, bot)
 
-
 class TestRollbackMode:
     def test_new_bot_gets_a_dedicated_harness_when_disabled(self, store, monkeypatch):
         monkeypatch.setenv("AMAZAI_SHARED_RUNTIME", "false")
@@ -224,13 +219,13 @@ class TestRollbackMode:
         core = Core()
         saved = RT.provision_bot(store, bot, client=core)
         assert saved["runtimeMode"] == "dedicated"
+        assert saved["dedicatedHarnessArn"] == saved["harnessArn"]
         assert core.creates[0]["name"] == "amazai_ops"
 
     def test_bad_feature_switch_fails_closed(self, monkeypatch):
         monkeypatch.setenv("AMAZAI_SHARED_RUNTIME", "maybe")
         with pytest.raises(RT.RuntimeUnavailable, match="true or false"):
             RT.shared_enabled()
-
 
 class TestAgentCoreDiscovery:
     def test_finds_a_harness_across_paginated_response_shapes(self):
@@ -259,7 +254,6 @@ class TestAgentCoreDiscovery:
         assert core.find_harness("missing") is None
 
 
-
 class TestHarnessReadinessAndRole:
     def test_a_recovered_harness_with_a_wider_role_is_refused(self, store):
         wider = "arn:aws:iam::1:role/admin"
@@ -286,7 +280,6 @@ class TestHarnessReadinessAndRole:
                                         ready_wait_seconds=1) == ARN
 
 
-
 class TestProvisioningClaim:
     def _claim(self, store, *, claimed_at):
         return store.put({
@@ -311,7 +304,6 @@ class TestProvisioningClaim:
         assert len(core.creates) == 1
 
 
-
 def test_a_terminal_provider_harness_rotates_to_a_new_generation(store):
     with pytest.raises(RT.RuntimeUnavailable, match="CREATE_FAILED"):
         RT.ensure_shared_harness(
@@ -325,3 +317,133 @@ def test_a_terminal_provider_harness_rotates_to_a_new_generation(store):
     assert retry.finds[0] == RT.shared_harness_name(store.owner_id, 2)
     ready = store.get(K.user_pk(store.owner_id), K.runtime_sk())
     assert ready["generation"] == 2 and ready["state"] == RT.READY
+
+
+def test_duplicate_worker_adopts_the_first_runtime_pin(store, monkeypatch):
+    bot = agent(store)
+    run = runs.create(store, agent_id="chief", thread_id="dm-chief", goal="work")
+    original = store.update
+    raced = False
+
+    def update(pk, sk, changes, **kwargs):
+        nonlocal raced
+        if not raced and "runtimeHarnessArn" in changes:
+            raced = True
+            original(pk, sk, {
+                "runtimeHarnessArn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/first",
+                "runtimeMode": "dedicated-fallback", "runtimePinnedAt": "first",
+            }, expect_absent_or_null=("runtimeHarnessArn",))
+            from amazai.store import Conflict
+            raise Conflict("the first worker won")
+        return original(pk, sk, changes, **kwargs)
+
+    monkeypatch.setattr(store, "update", update)
+    pinned = RT.pin_run(store, run, bot, client=Core())
+    assert pinned["runtimeHarnessArn"].endswith("/first")
+    assert pinned["runtimeMode"] == "dedicated-fallback"
+    assert pinned["runtimePinnedAt"] == "first"
+
+
+class TestHonestRollbackTargets:
+    def test_shared_provisioning_preserves_an_existing_dedicated_target(self, store):
+        bot = agent(store, "chief")
+        old = bot["harnessArn"]
+        saved = RT.provision_bot(store, bot, client=Core())
+        assert saved["sharedHarnessArn"] == ARN
+        assert saved["dedicatedHarnessArn"] == old
+        assert saved["harnessArn"] == ARN
+
+    def test_disabling_shared_uses_the_distinct_dedicated_target(self, store, monkeypatch):
+        bot = agent(store, "chief")
+        bot = RT.provision_bot(store, bot, client=Core())
+        monkeypatch.setenv("AMAZAI_SHARED_RUNTIME", "false")
+        run = runs.create(store, agent_id="chief", thread_id="dm-chief", goal="work")
+        pinned = RT.pin_run(store, run, bot, client=Core())
+        assert pinned["runtimeHarnessArn"] == bot["dedicatedHarnessArn"]
+        assert pinned["runtimeHarnessArn"] != bot["sharedHarnessArn"]
+        assert pinned["runtimeMode"] == "dedicated"
+
+    def test_disabling_shared_fails_closed_without_a_dedicated_target(self, store, monkeypatch):
+        bot = agent(store, "new")
+        bot = store.update(bot["pk"], "META", {
+            "runtimeMode": "shared", "harnessArn": ARN,
+            "sharedHarnessArn": ARN, "dedicatedHarnessArn": None,
+        })
+        monkeypatch.setenv("AMAZAI_SHARED_RUNTIME", "false")
+        run = runs.create(store, agent_id="new", thread_id="dm-new", goal="work")
+        with pytest.raises(RT.RuntimeUnavailable, match="--dedicated"):
+            RT.pin_run(store, run, bot)
+
+    def test_raw_exec_also_fails_closed_without_a_dedicated_target(self, store, monkeypatch):
+        bot = agent(store, "new")
+        bot = store.update(bot["pk"], "META", {
+            "runtimeMode": "shared", "harnessArn": ARN,
+            "sharedHarnessArn": ARN, "dedicatedHarnessArn": None,
+        })
+        monkeypatch.setenv("AMAZAI_SHARED_RUNTIME", "false")
+        with pytest.raises(RT.RuntimeUnavailable, match="provision one"):
+            RT.for_exec(store, bot)
+
+
+
+def test_stale_taker_cannot_move_a_newly_ready_row_back_to_provisioning(store, monkeypatch):
+    """The exact lease-boundary interleaving from the semantic review."""
+    name = RT.shared_harness_name(store.owner_id)
+    store.put({
+        "pk": K.user_pk(store.owner_id), "sk": K.runtime_sk(),
+        "entity": "AccountRuntime", "runtimeKind": "standard",
+        "state": RT.PROVISIONING, "harnessName": name, "harnessArn": None,
+        "generation": 1, "rotateName": False, "executionRoleArn": ROLE,
+        "claimToken": "original", "claimedAt": "2020-01-01T00:00:00Z",
+    })
+    original = store.update
+    interleaved = False
+
+    def update(pk, sk, changes, **kwargs):
+        nonlocal interleaved
+        if (not interleaved and changes.get("state") == RT.PROVISIONING
+                and changes.get("claimToken", "").startswith("rtclaim_")):
+            interleaved = True
+            # The healthy original owner publishes between the stale taker's
+            # read and CAS. A token-only condition used to let the taker erase
+            # this READY row because publication retained the token.
+            original(pk, sk, {
+                "state": RT.READY, "harnessArn": ARN,
+                "executionRoleArn": ROLE, "readyAt": "now",
+            }, expect={"claimToken": "original", "state": RT.PROVISIONING})
+        return original(pk, sk, changes, **kwargs)
+
+    monkeypatch.setattr(store, "update", update)
+    monkeypatch.setattr(RT, "POLL_SECONDS", 0.001)
+    core = Core(fail=AssertionError("READY winner should be adopted without AWS"))
+
+    assert RT.ensure_shared_harness(store, client=core, wait_seconds=0.05) == ARN
+    row = store.get(K.user_pk(store.owner_id), K.runtime_sk(), consistent=True)
+    assert row["state"] == RT.READY and row["harnessArn"] == ARN
+    assert core.finds == [] and core.creates == []
+
+
+def test_healthy_provisioner_renews_its_claim_while_waiting(store, monkeypatch):
+    statuses = iter(["CREATING", "CREATING", "READY"])
+
+    class SlowCore(Core):
+        def get_harness(self, harness_arn):
+            return {"harness": {"status": next(statuses),
+                                "executionRoleArn": ROLE}}
+
+    original = store.update
+    renewals = []
+
+    def update(pk, sk, changes, **kwargs):
+        if set(changes) == {"claimedAt"}:
+            renewals.append(kwargs.get("expect"))
+        return original(pk, sk, changes, **kwargs)
+
+    monkeypatch.setattr(store, "update", update)
+    monkeypatch.setattr(RT, "CLAIM_RENEW_SECONDS", 0)
+    monkeypatch.setattr(RT.time, "sleep", lambda _seconds: None)
+
+    assert RT.ensure_shared_harness(store, client=SlowCore(), ready_wait_seconds=1) == ARN
+    assert len(renewals) >= 2
+    assert all(r == {"claimToken": store.get(K.user_pk(store.owner_id), K.runtime_sk())["claimToken"],
+                     "state": RT.PROVISIONING} for r in renewals)

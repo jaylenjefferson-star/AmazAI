@@ -6,9 +6,10 @@ its own owner/Bot/thread runtime session. `--dedicated` preserves the former
 one-harness-per-seat path as a rollback and for a deliberate IAM exception.
 
 Idempotent: re-running reuses an existing READY harness rather than creating a
-second one. Existing Bot rows keep their dedicated harness ARN so a v1 run that
-was already paused can resume where it started; new v2 runs resolve the account
-runtime from its owner-scoped registry row.
+second one. Existing Bot rows preserve their dedicated harness as
+`dedicatedHarnessArn` so a v1 run that was already paused can resume where it
+started; new v2 runs resolve the account runtime from its owner-scoped registry
+row.
 
 Refuses to run while any enabled seat has `modelId: null`. That is deliberate.
 Guessing a Bedrock inference-profile identifier produces a failure that
@@ -32,7 +33,7 @@ import boto3
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
 
-from amazai import keys as K, standard_runtime  # noqa: E402
+from amazai import agentcore, keys as K, standard_runtime  # noqa: E402
 from amazai.store import Store, now_iso  # noqa: E402
 
 READY_TIMEOUT_SECONDS = 300
@@ -95,11 +96,24 @@ def ensure_harness(control, name: str, role_arn: str, region: str) -> str:
         if status in {"READY", "ACTIVE"}:
             print(f"  status: {status}")
             return existing
-        if status in {"FAILED", "CREATE_FAILED", "DELETING", "DELETED"}:
+        if status in {"FAILED", "CREATE_FAILED", "UPDATE_FAILED", "DELETE_FAILED",
+                      "DELETING", "DELETED"}:
             raise RuntimeError(f"harness {name} entered {status}: {record.get('failureReason', '')}")
         print(f"  status: {status}; waiting…")
         time.sleep(POLL_SECONDS)
     raise TimeoutError(f"harness {name} not READY after {READY_TIMEOUT_SECONDS}s")
+
+
+def ensure_account_harness(store: Store, control, role_arn: str) -> tuple[str, dict]:
+    """Use the application's claim/generation protocol at deploy time too."""
+    core = agentcore.AgentCore(runtime=object(), control=control)
+    harness_arn = standard_runtime.ensure_shared_harness(
+        store, client=core, role_arn=role_arn,
+        wait_seconds=READY_TIMEOUT_SECONDS,
+        ready_wait_seconds=READY_TIMEOUT_SECONDS,
+    )
+    return harness_arn, store.get(
+        K.user_pk(store.owner_id), K.runtime_sk(), consistent=True)
 
 
 def write_agent(store: Store, seat: dict, harness_arn: str, role_arn: str,
@@ -132,15 +146,24 @@ def write_agent(store: Store, seat: dict, harness_arn: str, role_arn: str,
         for field in ("systemPrompt", "budget", "preapproved", "state", "allowedTools"):
             if field in existing:
                 item[field] = existing[field]
-        # Migration hinge: a pre-v2 paused run has only the Bot row's old
-        # harness to return to. Keep it there. New v2 runs resolve the shared
-        # account row instead; `runtimeMode` remains absent so they are not
-        # forced back to this dedicated fallback.
-        if existing.get("harnessArn"):
-            item["harnessArn"] = existing["harnessArn"]
-            item["executionRoleArn"] = existing.get("executionRoleArn")
-            item.pop("runtimeMode", None)
+        old_dedicated = existing.get("dedicatedHarnessArn")
+        if not old_dedicated and existing.get("runtimeMode") != "shared":
+            old_dedicated = existing.get("harnessArn")
+        if runtime_mode == "shared":
+            item["harnessArn"] = harness_arn
+            item["sharedHarnessArn"] = harness_arn
+            if old_dedicated:
+                item["dedicatedHarnessArn"] = old_dedicated
+        else:
+            item["harnessArn"] = harness_arn
+            item["dedicatedHarnessArn"] = harness_arn
+            if existing.get("sharedHarnessArn"):
+                item["sharedHarnessArn"] = existing["sharedHarnessArn"]
         item["createdAt"] = existing.get("createdAt")
+    elif runtime_mode == "shared":
+        item["sharedHarnessArn"] = harness_arn
+    else:
+        item["dedicatedHarnessArn"] = harness_arn
 
     store.put(item)
     print(f"  agent row written: {agent_id}")
@@ -214,20 +237,12 @@ def main() -> int:
             write_agent(store, seat, harness_arn, role_arn, runtime_mode="dedicated")
     else:
         role_arn = f"arn:aws:iam::{account}:role/amazai-agent-dynamic"
-        name = standard_runtime.shared_harness_name(args.owner)
-        print(f"\nStandard account runtime ({name})")
-        harness_arn = ensure_harness(control, name, role_arn, region)
-        # The application reads this owner-scoped row for every new v2 run.
-        # Put is intentionally convergent: deploy and lazy provisioning can
-        # discover/create the same deterministic harness in either order.
-        store.put({
-            "pk": K.user_pk(args.owner), "sk": K.runtime_sk(),
-            "entity": "AccountRuntime", "runtimeKind": "standard",
-            "state": "ready", "harnessName": name, "harnessArn": harness_arn,
-            "generation": 1, "rotateName": False,
-            "executionRoleArn": role_arn, "readyAt": now_iso(),
-            "claimToken": "provision-script", "claimedAt": now_iso(),
-        })
+        print("\nStandard account runtime")
+        # Use the same owner claim, generation rotation, role verification and
+        # crash recovery as lazy API/orchestrator provisioning. Two independent
+        # provisioners must never overwrite one another's runtime row.
+        harness_arn, runtime = ensure_account_harness(store, control, role_arn)
+        print(f"  harness: {runtime['harnessName']} ({harness_arn})")
         for seat in seats:
             print(f"\n{seat['name']} ({seat['key']})")
             write_agent(store, seat, harness_arn, role_arn, runtime_mode="shared")

@@ -93,6 +93,9 @@ class TestCreate:
                 calls.append(kwargs)
                 return "arn:aws:bedrock-agentcore:us-west-2:1:harness/new"
 
+            def get_harness(self, harness_arn):
+                return {"harness": {"status": "READY", "executionRoleArn": role}}
+
         class StoreStub:
             def update(self, pk, sk, values):
                 return {"agentId": "tanzie", **values}

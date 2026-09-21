@@ -347,38 +347,52 @@ export class AmazaiStack extends cdk.Stack {
       composioSecret.grantRead(fn);
     }
 
-    // Only the orchestrator and routine workers talk to AgentCore.
-    for (const fn of [apiFn, orchestratorFn, routineFn]) {
+    // Runtime creation is shared by the API (a person creates a Bot) and the
+    // orchestrator (a Bot creates one at the operator's request). Current AWS
+    // authorization evaluates the Harness call plus its underlying Runtime,
+    // Memory, endpoint and tag operations; missing any one can leave a named
+    // CREATE_FAILED resource that every retry rediscovers.
+    const harnessProvisionActions = [
+      'bedrock-agentcore:CreateHarness',
+      'bedrock-agentcore:CreateAgentRuntime',
+      'bedrock-agentcore:CreateMemory',
+      'bedrock-agentcore:GetMemory',
+      'bedrock-agentcore:TagResource',
+      'bedrock-agentcore:CreateHarnessEndpoint',
+      'bedrock-agentcore:CreateAgentRuntimeEndpoint',
+      'bedrock-agentcore:GetHarness',
+      // Crash recovery for a Lambda that died after CreateHarness succeeded
+      // but before the deterministic account-runtime row was updated.
+      'bedrock-agentcore:ListHarnesses',
+    ];
+    for (const fn of [apiFn, orchestratorFn]) {
       fn.addToRolePolicy(new iam.PolicyStatement({
-        sid: 'AgentCore',
-        actions: [
-          'bedrock-agentcore:CreateHarness',
-          // The control-plane SDK exposes create_harness, but AgentCore
-          // authorizes the underlying resource creation as CreateAgentRuntime.
-          // Keep both names: the former documents the SDK boundary and the
-          // latter is the action AWS evaluates for a new Bot harness.
-          'bedrock-agentcore:CreateAgentRuntime',
-          // Current Harness authorization also evaluates the managed Memory
-          // resource created underneath it. Without this, the account runtime
-          // can exist as a failed shell and every later retry finds only the
-          // name collision.
-          'bedrock-agentcore:CreateMemory',
-          // A harness also provisions its runtime endpoint. Authorize both the
-          // public harness API and its underlying runtime operation; AWS checks
-          // both layers independently.
-          'bedrock-agentcore:CreateHarnessEndpoint',
-          'bedrock-agentcore:CreateAgentRuntimeEndpoint',
-          'bedrock-agentcore:InvokeHarness',
-          'bedrock-agentcore:InvokeAgentRuntime',
-          'bedrock-agentcore:InvokeAgentRuntimeCommand',
-          'bedrock-agentcore:GetHarness',
-          // Recovery for a Lambda that died after CreateHarness succeeded but
-          // before the deterministic account-runtime row was updated.
-          'bedrock-agentcore:ListHarnesses',
-        ],
+        sid: 'ProvisionAccountHarness',
+        actions: harnessProvisionActions,
         resources: ['*'],
       }));
     }
+
+    // The orchestrator performs model turns. InvokeHarness also evaluates the
+    // underlying runtime action.
+    orchestratorFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'InvokeAccountHarness',
+      actions: [
+        'bedrock-agentcore:InvokeHarness',
+        'bedrock-agentcore:InvokeAgentRuntime',
+      ],
+      resources: ['*'],
+    }));
+
+    // Only the API exposes deterministic shell commands from the Computer tab.
+    apiFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'CommandAccountHarness',
+      actions: [
+        'bedrock-agentcore:InvokeAgentRuntimeCommand',
+        'bedrock-agentcore:InvokeAgentRuntime',
+      ],
+      resources: ['*'],
+    }));
 
     // The orchestrator may hand a seat its own execution role, and nothing else.
     orchestratorFn.addToRolePolicy(new iam.PolicyStatement({

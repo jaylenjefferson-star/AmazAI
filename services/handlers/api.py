@@ -1154,7 +1154,7 @@ def _exec(store: Store, thread_id: str, body: dict):
     if not agent_ids:
         return _resp(400, {"error": "no agent assigned to this thread"})
     requested = (body.get("agentId") or "").strip()
-    if len(agent_ids) > 1 and not requested:
+    if thread.get("kind") == "room" and not requested:
         return _resp(400, {"error": "agentId is required for a group-chat computer"})
     agent_id = requested or agent_ids[0]
     if agent_id not in agent_ids:

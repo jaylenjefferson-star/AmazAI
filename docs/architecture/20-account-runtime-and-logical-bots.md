@@ -105,16 +105,22 @@ The harness and session chosen for a run are pinned on its `RUN#` row before
 the first invocation.
 
 - A new v2 run resolves the account's shared harness and stores that ARN.
-- A retry or approval resume reuses the pinned `(runtimeHarnessArn, sessionId)`.
+- A retry or approval resume reuses the pinned `(runtimeHarnessArn, sessionId)`;
+  a duplicate worker cannot overwrite the first choice.
 - A pre-migration v1 run has a thread-only session ID. If it was already
   paused, it stays on the Bot's existing dedicated harness so its continuation
   and session files are not lost.
-- Existing Bot rows retain their old `harnessArn` as a rollback target. New
-  shared-mode Bot rows name the shared harness and record `runtimeMode:
-  shared`.
+- Existing Bot rows retain their former harness as `dedicatedHarnessArn`, a
+  rollback target. Their compatibility `harnessArn` may point at the current
+  primary runtime; v1 selection uses the explicit dedicated field.
+- New shared-mode Bot rows name the shared harness and record `runtimeMode:
+  shared`. They have no invented dedicated target.
 
 Rollback changes where **new** runs resolve. Nonterminal runs finish where
-they started.
+they started. Before deploying with `-c sharedRuntime=false`, run
+`scripts/provision_agents.py --dedicated` so every initial Bot has a distinct
+`dedicatedHarnessArn`; a shared-only Bot without one fails closed rather than
+silently calling the shared harness and labelling it dedicated.
 
 ## Provisioning and lifecycle
 
@@ -122,11 +128,18 @@ The first standard run or the first Bot created after deployment lazily ensures
 one deterministic account harness and records it under the owner's DynamoDB
 partition. Later Bots reuse that row instead of creating AWS resources.
 
-Provisioning uses a small owner-scoped claim so two simultaneous first requests
-do not create two harnesses. The harness name contains a digest of the owner,
-not the raw owner ID. If creation succeeded but the process died before the row
-was updated, the next attempt can recover the deterministically named harness
-through `ListHarnesses` rather than orphaning another one.
+Provisioning uses a renewable owner-scoped claim so two simultaneous first
+requests do not create two harnesses. A healthy claimant renews while AWS is
+still creating the harness; a stale takeover compares the observed token,
+state and lease timestamp, so it cannot move a row backward after the original
+claimant publishes `READY`. Deployment-time and lazy provisioning use the same
+claim and generation protocol; neither can overwrite the other's live claim.
+The harness name contains a digest of the owner, not the raw owner ID. If
+creation succeeded but the process died before the row was updated, the next
+attempt can recover the deterministically named harness through `ListHarnesses`
+rather than orphaning another one. A terminal or wrong-role recovered harness
+rotates to the next deterministic generation rather than rediscovering the same
+unusable name forever.
 
 Archiving a logical Bot does not delete the account harness. That harness
 belongs to the account, not to any one Bot. The former per-Bot harnesses are
@@ -155,7 +168,8 @@ also retained until a separate, audited garbage-collection operation exists.
 1. Two Bots in one room resolve the same account harness but different runtime
    session IDs.
 2. Direct and room runs for the same Bot use different sessions.
-3. A retry and an approval resume reuse the run-pinned harness and session.
+3. A retry and an approval resume reuse the set-once run-pinned harness and
+   session; a duplicate worker adopts the first pin rather than overwriting it.
 4. An old v1 paused run stays on its old dedicated harness.
 5. Creating five logical Bots creates or discovers one account harness.
 6. A connector grant, memory or skill assigned to Bot A never appears in Bot
