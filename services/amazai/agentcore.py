@@ -40,14 +40,28 @@ INLINE_TOOLS = {
             "standard budget. When the operator's own message asked for it, it exists at once and you "
             "are told its id. Otherwise the operator is asked to approve it first, and you are told "
             "that instead. Give `firstTask`: a concrete first job with a clear finish line, and the "
-            "new Bot starts on it immediately."
+            "new Bot starts on it immediately.\n"
+            "`name`, `title` and `role` are three different fields and each takes one thing. A brief "
+            "usually arrives as one line -- \"Janai Williams - Chief of Staff, Operations: owns "
+            "internal operations and follow-through\" -- and it is your job to split it, not to pass "
+            "it through. That line is name \"Janai Williams\", title \"Chief of Staff\", role \"Owns "
+            "internal operations, project execution and company follow-through\"."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "What the roster calls it"},
-                "title": {"type": "string", "description": "A short label, at most 24 characters"},
-                "role": {"type": "string", "description": "One line: what it is for"},
+                "name": {"type": "string", "description": (
+                    "The roster name and nothing else: a person's name (\"Janeisha Carter\") or a "
+                    "role used as one (\"Expense Manager\"). No title, department or description "
+                    "here, and never two of those joined by a dash or a colon. 2-60 characters of "
+                    "letters, digits, spaces or - ' & , . ( ) /")},
+                "title": {"type": "string", "description": (
+                    "The short label shown beside the name, at most 24 characters: \"Chief of "
+                    "Staff\", \"Finance\", \"Growth\". A label, not a sentence, and not repeated "
+                    "from the name")},
+                "role": {"type": "string", "description": (
+                    "One sentence saying what this Bot is for. The job description belongs here, "
+                    "not in the name")},
                 "description": {"type": "string",
                                 "description": "Standing orders: owns, does not own, produces, never without approval"},
                 "systemPrompt": {"type": "string", "description": "Optional deeper instructions"},
@@ -74,9 +88,11 @@ INLINE_TOOLS = {
             "type": "object",
             "properties": {
                 "agentId": {"type": "string", "description": "The Bot to refine"},
-                "name": {"type": "string"},
-                "title": {"type": "string"},
-                "role": {"type": "string"},
+                "name": {"type": "string", "description": (
+                    "The roster name only -- no title or description joined onto it")},
+                "title": {"type": "string", "description": (
+                    "The short label beside the name, at most 24 characters")},
+                "role": {"type": "string", "description": "One sentence: what it is for"},
                 "description": {"type": "string"},
             },
             "required": ["agentId"],

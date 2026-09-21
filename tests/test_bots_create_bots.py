@@ -510,3 +510,87 @@ class TestTheToolDescriptionsTeachTheLogic:
 
     def test_the_old_name_is_not_declared_on_new_harnesses(self):
         assert "propose_agent" not in agentcore.INLINE_TOOLS and "propose_agent" in orch.ROUND_TRIP_TOOLS
+
+
+
+class TestABriefingRelayedAsOneLine:
+    """The live failure: nine denials in one turn, all the same message.
+
+    Chief was relaying a briefing written the way people write them --
+    "Janai Williams — Chief of Staff, Operations" -- and the em dash was not in
+    the name pattern. The message it got back restated the rule without naming
+    the offending character or echoing what had been sent, so the only move
+    left was to send the same string again.
+    """
+
+    BRIEFED = [
+        ("Janeisha Carter \u2014 President, Chief of AI Strategy", "Janeisha Carter"),
+        ("Janai Williams \u2014 Chief of Staff, Operations", "Janai Williams"),
+        ("Tania Rodriguez \u2014 VP, Product & Engineering", "Tania Rodriguez"),
+        ("Kiana Mitchell \u2014 VP, Growth & Customer Experience", "Kiana Mitchell"),
+        ("Imani Brooks \u2014 VP, People & Agent Performance", "Imani Brooks"),
+    ]
+
+    @pytest.mark.parametrize("briefed,expected", BRIEFED)
+    def test_each_one_is_created_rather_than_denied(self, world, woken, briefed, expected):  # noqa: F811
+        result = create(world, name=briefed)
+        assert result["toolResult"].get("created") is True, result["toolResult"]
+        assert result["toolResult"]["name"] == expected
+
+    def test_the_title_lands_in_the_title_not_the_name(self, world, woken):  # noqa: F811
+        create(world, name="Janai Williams \u2014 Chief of Staff, Operations", title="")
+        row = agent_row(world, "janai-williams")
+        assert row["name"] == "Janai Williams"
+        assert row["title"] == "Chief of Staff"
+
+    def test_the_agent_id_comes_from_the_name_alone(self, world, woken):  # noqa: F811
+        # The id is slugged from the name, so a title left in it produced
+        # `janai-williams-chief-of-staff-operations` as the Bot's identity.
+        create(world, name="Tania Rodriguez \u2014 VP, Product & Engineering", title="")
+        assert "tania-rodriguez" in all_agents(world)
+
+    def test_all_five_can_be_created_in_sequence(self, world, woken):  # noqa: F811
+        for briefed, _ in self.BRIEFED:
+            assert create(world, name=briefed, title="")["toolResult"].get("created") is True
+        made = all_agents(world) - {world.agent_id}
+        assert len(made) == 5, f"expected five Bots, got {sorted(made)}"
+
+    def test_a_curly_apostrophe_is_not_a_refusal(self, world, woken):  # noqa: F811
+        result = create(world, name="Sha\u2019Ron O\u2019Brien")
+        assert result["toolResult"].get("created") is True
+        assert result["toolResult"]["name"] == "Sha'Ron O'Brien"
+
+
+class TestARefusalCanBeActedOn:
+    def test_the_offending_character_is_named(self, world, woken):  # noqa: F811
+        out = create(world, name="Ops [EU]")["toolResult"]
+        assert "error" in out
+        assert "'['" in out["error"], f"still not actionable: {out['error']}"
+
+    def test_the_rejected_value_is_echoed_back(self, world, woken):  # noqa: F811
+        out = create(world, name="Talent Scout!")["toolResult"]
+        assert "Talent Scout!" in out["error"]
+
+    def test_an_over_long_name_says_which_field_to_use_instead(self, world, woken):  # noqa: F811
+        out = create(world, name="Janai Williams, who owns internal operations, project "
+                                 "execution, process quality and company follow-through")["toolResult"]
+        assert "`title`" in out["error"] and "`role`" in out["error"]
+
+    def test_nothing_is_created_when_the_name_is_refused(self, world, woken):  # noqa: F811
+        create(world, name="Ops [EU]")
+        assert all_agents(world) == {world.agent_id}
+
+
+class TestAProposalCarriesTheTidiedName:
+    def test_the_card_shows_the_normalized_name(self, world, woken):  # noqa: F811
+        # `_propose_agent` validated the profile and then stored the untouched
+        # arguments, so the tidying was undone on the way to the operator.
+        started_by(world, {"type": "agent"})
+        result = create(world, name="Imani Brooks \u2014 VP, People & Agent Performance", title="")
+        assert result["pause"] is True
+        assert result["approval"]["arguments"]["name"] == "Imani Brooks"
+
+    def test_the_card_shows_a_title_lifted_out_of_the_name(self, world, woken):  # noqa: F811
+        started_by(world, {"type": "agent"})
+        result = create(world, name="Janai Williams \u2014 Chief of Staff, Operations", title="")
+        assert result["approval"]["arguments"]["title"] == "Chief of Staff"
