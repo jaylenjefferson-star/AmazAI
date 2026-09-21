@@ -173,3 +173,38 @@ class TestABotOpeningATaskRoom:
             "title": "Solo room", "agentIds": [], "goal": "Do the work.",
         })["toolResult"]
         assert "at least one other active Bot" in result["error"]
+
+
+
+class TestOneAccountHarnessManyRoomBots:
+    def test_room_members_share_compute_but_not_a_session(self, world, monkeypatch):
+        """The real orchestrator boundary, not only the key helper.
+
+        A room intentionally gives every Bot the same stored transcript. On a
+        shared harness that must not mean the same microVM: each invocation has
+        its own system prompt, tools, filesystem and continuation state.
+        """
+        chief = _bot("Chief", entrypoint=True, title="Chief of staff", role="Runs the day.")
+        eng = _bot("Engle", title="Sr Engineer", role="Repositories and tests.")
+        status, room = call("POST", "/threads", {
+            "kind": "room", "title": "Eng Ops", "agentIds": [eng, chief],
+        })
+        assert status == 201, room
+        shared = "arn:aws:bedrock-agentcore:us-west-2:1:harness/account-shared"
+        monkeypatch.setenv("AGENT_ROLE_ARN", "arn:aws:iam::1:role/amazai-agent-dynamic")
+        monkeypatch.setenv("AMAZAI_SHARED_RUNTIME", "true")
+        monkeypatch.setattr(orch.standard_runtime, "ensure_shared_harness",
+                            lambda *a, **k: shared)
+
+        calls = []
+        for bot_id in (eng, chief):
+            run = runs.create(world.store, agent_id=bot_id, thread_id=room["threadId"], goal="Plan it")
+            fake = world.script([text(f"{bot_id} ready")])
+            orch._drive(world.store, run, {"runId": run["runId"]})
+            calls.append(fake.calls[0])
+            saved = world.store.get(run["pk"], "META")
+            assert saved["runtimeHarnessArn"] == shared
+
+        assert calls[0]["harness_arn"] == calls[1]["harness_arn"] == shared
+        assert calls[0]["session_id"] != calls[1]["session_id"]
+        assert eng in calls[0]["session_id"] and chief in calls[1]["session_id"]

@@ -24,8 +24,8 @@ import boto3
 from dataclasses import dataclass, field
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
-                    continuation, cost, keys as K, memory, onboarding, org, policy, provisioning, redact, review,
-                    router, routines, runs, skills, threads)
+                    continuation, cost, keys as K, memory, onboarding, org, policy, provisioning,
+                    redact, review, router, routines, runs, skills, standard_runtime, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
@@ -264,6 +264,10 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
     # --- stream ------------------------------------------------------------
     core = agentcore.AgentCore()
+    # The run, not the Bot row, owns this choice once work starts. A paused
+    # approval must return to the exact harness/session it left; a deployment
+    # toggle or migration while it waits cannot move it underneath itself.
+    run = standard_runtime.pin_run(store, run, agent, client=core)
     parser = StreamParser()
     ev = EvidenceWriter(run["runId"])
     spend = RunCost()
@@ -322,7 +326,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             answered.clear()
             round_from = len(buffer)
             stream = core.invoke_stream(
-                harness_arn=agent["harnessArn"],
+                harness_arn=run["runtimeHarnessArn"],
                 session_id=run["sessionId"],
                 messages=messages + carried,
                 model_id=model_id,
@@ -1302,7 +1306,10 @@ def _create_group_chat(store: Store, run: dict, agent: dict, args: dict) -> dict
         "entity": "Thread", "threadId": thread_id,
         "gsi1pk": "THREADS", "gsi1sk": now_iso(),
         "kind": "room", "title": title, "agentIds": agent_ids,
-        "sessionId": K.session_id(thread_id), "lastActivity": now_iso(),
+        # No thread-level session. Each member's run derives its own
+        # owner/Bot/thread ID; storing one here would imply the opposite and
+        # send parallel room members into the same shared-harness microVM.
+        "lastActivity": now_iso(),
         "createdBy": f"agent:{agent['agentId']}", "openedFromRunId": run["runId"],
         "status": "active",
     })

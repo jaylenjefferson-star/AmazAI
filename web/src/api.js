@@ -64,7 +64,9 @@ const live = {
   // new one only once the old has really ended, so two never share a session.
   send: (id, text, opts = {}) => call('POST', `/threads/${id}/messages`, { text, ...opts }),
   patchThread: (id, changes) => call('PATCH', `/threads/${id}`, changes),
-  exec: (id, command) => call('POST', `/threads/${id}/exec`, { command }),
+  exec: (id, command, agentId = null) => call('POST', `/threads/${id}/exec`, {
+    command, ...(agentId ? { agentId } : {}),
+  }),
   // Read-only: agent<->agent handoffs and messages bound to this thread.
   // Never a write path — sender/recipient are the only agents who may
   // address one another here.

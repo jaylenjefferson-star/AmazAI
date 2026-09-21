@@ -36,8 +36,9 @@ def no_aws(monkeypatch):
     """Creating a Bot's harness is the one thing that needs an account."""
     def provision(store, agent):
         return store.update(K.agent_pk(agent["agentId"]), "META", {
-            "harnessArn": f"arn:aws:bedrock-agentcore:us-west-2:1:harness/amazai_{agent['agentId']}",
-            "executionRoleArn": "arn:aws:iam::1:role/dynamic", "status": "active", "state": "active"})
+            "harnessArn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/amazai_shared-test",
+            "executionRoleArn": "arn:aws:iam::1:role/dynamic", "runtimeMode": "shared",
+            "status": "active", "state": "active"})
     monkeypatch.setattr(provisioning, "provision_harness", provision)
     monkeypatch.delenv("MAX_AGENTS", raising=False)
 
@@ -76,7 +77,8 @@ class TestCreatingABotWhenTheOperatorAsked:
         out = result["toolResult"]
         assert out["created"] is True and out["agentId"] == "scout" and out["reportsTo"] == world.agent_id
         assert agent_row(world, "scout")["status"] == "active"
-        assert agent_row(world, "scout")["harnessArn"].endswith("amazai_scout")
+        assert agent_row(world, "scout")["harnessArn"].endswith("amazai_shared-test")
+        assert agent_row(world, "scout")["runtimeMode"] == "shared"
 
     def test_it_reports_to_its_creator_and_is_recorded_as_its_creators(self, world, woken):  # noqa: F811
         create(world)

@@ -1,5 +1,12 @@
 # 00 — Layers and the AWS architecture
 
+> **Runtime-topology update (2026-09-21).** The diagrams below predate
+> [decision 20](20-account-runtime-and-logical-bots.md). Standard Bots now share
+> one restricted harness per owner/workspace and receive isolated
+> owner/Bot/thread sessions; a dedicated harness/role is an explicit exception.
+> Read every “per-agent harness” label below as historical rationale, not the
+> current provisioning rule.
+
 **Deliverable 1.** One diagram per layer, then the whole thing.
 
 ## The rule that keeps the layers honest

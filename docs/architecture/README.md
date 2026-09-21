@@ -42,6 +42,9 @@ L4  Evidence, approvals, audit history, notifications
 | 15 | [Open decisions](15-open-decisions.md) | — | **Everything awaiting your call** |
 | 16 | [GrokBot UX alignment](16-grokbot-ux-alignment.md) | L2 | Free agent CRUD, open rooms, tiered memory, shared skills |
 | 17 | [Message and memory authorization](17-message-and-memory-authorization.md) | L2 | The authorization contract 16 left open: messaging bounds, memory governance, skill versioning, creation inheritance |
+| 18 | [First Bot and presence](18-first-bot-and-presence.md) | L1/L2 | First-run identity, presence and the conversation entry point |
+| 19 | [Composer, review and the loop](19-composer-review-and-the-loop.md) | L1/L3/L4 | Redirects, per-call tools, collaboration and readable execution |
+| 20 | [Account runtime and logical Bots](20-account-runtime-and-logical-bots.md) | L2/L3 | One restricted harness per account; Bot identity from profile, memory, skills and chats; owner/Bot/thread session isolation |
 
 ## What changed from the earlier build plan
 
@@ -54,7 +57,7 @@ The eleven substantive revisions:
 
 | # | Earlier plan | Revised | Why |
 |---|---|---|---|
-| 1 | One shared harness execution role | **One execution role per agent seat**, S3 prefix-scoped | The single role made every agent a peer of every other agent on the shared drive. Contradicts "shared resources deliberate and visible". |
+| 1 | One shared harness execution role | **One restricted account harness for standard Bots; dedicated roles only for deliberate dedicated compute** | AgentCore isolates compute by runtime session, while AmazAI supplies Bot identity and authority per invocation. A union role is still forbidden: standard sharing is only among Bots on the same restricted role. See [20](20-account-runtime-and-logical-bots.md). |
 | 2 | `CONNECTOR#<provider>` — a global, per-provider row | **Connector authorization + per-agent grant + tool allowlist** | The brief's core connector requirement (Engineering may open PRs; Chief of Staff may only read issues) is unrepresentable in the old model. |
 | 3 | Approval = write a row, stop the run | **A run state machine** with 14 states, resume tokens, deadlines, and expiry-to-deny | "Stop the run" has no defined resume, no cancellation, no recovery after a worker dies mid-tool-call. |
 | 4 | Session storage = the agent's computer | **Durable profile in S3 + isolated per-thread session storage** | Session storage is discarded after 14 days idle and capped at 1 GB. It cannot be the system of record. This is the decisive fact behind the model-D recommendation. |

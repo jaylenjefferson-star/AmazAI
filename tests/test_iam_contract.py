@@ -21,7 +21,10 @@ AGENTCORE = (ROOT / "services" / "amazai" / "agentcore.py").read_text()
 #: What AWS actually evaluates a call as. Add to this the next time a denial names an action
 #: the call is not called; the AccessDeniedException text says which.
 AUTHORISED_AS = {
-    "create_harness": {"CreateHarness", "CreateAgentRuntime", "CreateAgentRuntimeEndpoint"},
+    "create_harness": {
+        "CreateHarness", "CreateAgentRuntime", "CreateMemory",
+        "CreateHarnessEndpoint", "CreateAgentRuntimeEndpoint",
+    },
     "update_harness": {"UpdateHarness", "UpdateAgentRuntime", "UpdateAgentRuntimeEndpoint"},
 }
 

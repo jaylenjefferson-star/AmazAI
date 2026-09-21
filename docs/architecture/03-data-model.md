@@ -1,5 +1,11 @@
 # 03 — Data model
 
+> **Runtime-topology update (2026-09-21).** The Agent example below retains
+> `harnessArn` as a migration/rollback target. New execution identity belongs
+> to the Run: v2 `sessionId` is derived from owner + Bot + thread, and
+> `runtimeHarnessArn` is pinned before first invocation. Standard Bots resolve
+> one account harness; see [20](20-account-runtime-and-logical-bots.md).
+
 One DynamoDB table, `amazai`. On-demand billing, `pk`/`sk`, PITR on,
 `RemovalPolicy.RETAIN`, TTL attribute `ttl`. Two GSIs.
 
@@ -146,7 +152,10 @@ dies is here; see [05](05-run-lifecycle.md).
   "gsi1pk": "RUNS", "gsi1sk": "2026-09-19T14:02:00Z",
   "gsi2pk": "RUNSTATE#AWAITING_APPROVAL", "gsi2sk": "2026-09-19T14:04:31Z",
 
-  "agentId": "01JBQ...", "threadId": "...", "sessionId": "<>=33 chars>",
+  "agentId": "01JBQ...", "threadId": "...",
+  "sessionId": "amazai-v2-<bot>-<thread>-<digest>", "sessionVersion": 2,
+  "runtimeHarnessArn": "arn:...:harness/amazai_shared_...",
+  "runtimeMode": "shared", "runtimePinnedAt": "2026-09-19T14:04:28Z",
   "trigger": { "type": "user", "routineId": null, "idempotencyKey": null },
 
   "state": "AWAITING_APPROVAL",

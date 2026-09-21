@@ -253,6 +253,11 @@ export class AmazaiStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    const sharedRuntime = String(this.node.tryGetContext('sharedRuntime') ?? 'true').toLowerCase();
+    if (!['true', 'false'].includes(sharedRuntime)) {
+      throw new Error(`context sharedRuntime must be true or false, got ${sharedRuntime}`);
+    }
+
     const commonEnv: Record<string, string> = {
       TABLE_NAME: table.tableName,
       DRIVE_BUCKET: driveBucket.bucketName,
@@ -261,6 +266,10 @@ export class AmazaiStack extends cdk.Stack {
       AUTH0_DOMAIN: props.auth0Domain,
       AUTH0_AUDIENCE: props.auth0Audience,
       POWERTOOLS_SERVICE_NAME: 'amazai',
+      // Standard Bots are logical control-plane identities over one restricted
+      // account harness. False is a deliberate rollback for existing Bots
+      // whose dedicated harness ARN is still retained on their row.
+      AMAZAI_SHARED_RUNTIME: sharedRuntime,
 
       COMPOSIO_SECRET_ID: composioSecret.secretName,
     };
@@ -349,14 +358,23 @@ export class AmazaiStack extends cdk.Stack {
           // Keep both names: the former documents the SDK boundary and the
           // latter is the action AWS evaluates for a new Bot harness.
           'bedrock-agentcore:CreateAgentRuntime',
-          // A harness also provisions its runtime endpoint. Without this the
-          // harness record is created but ends CREATE_FAILED, so retries only
-          // see a name collision instead of a usable Bot.
+          // Current Harness authorization also evaluates the managed Memory
+          // resource created underneath it. Without this, the account runtime
+          // can exist as a failed shell and every later retry finds only the
+          // name collision.
+          'bedrock-agentcore:CreateMemory',
+          // A harness also provisions its runtime endpoint. Authorize both the
+          // public harness API and its underlying runtime operation; AWS checks
+          // both layers independently.
+          'bedrock-agentcore:CreateHarnessEndpoint',
           'bedrock-agentcore:CreateAgentRuntimeEndpoint',
           'bedrock-agentcore:InvokeHarness',
           'bedrock-agentcore:InvokeAgentRuntime',
           'bedrock-agentcore:InvokeAgentRuntimeCommand',
           'bedrock-agentcore:GetHarness',
+          // Recovery for a Lambda that died after CreateHarness succeeded but
+          // before the deterministic account-runtime row was updated.
+          'bedrock-agentcore:ListHarnesses',
         ],
         resources: ['*'],
       }));
@@ -578,6 +596,8 @@ export class AmazaiStack extends cdk.Stack {
     out('EvidenceBucket', evidenceBucket.bucketName, 'Evidence bucket');
     out('KmsKeyArn', key.keyArn, 'Customer-managed key');
     out('OwnerEmail', props.ownerEmail, 'Private workspace owner email');
+    out('DynamicAgentRoleArn', dynamicAgentRole.roleArn,
+      'Restricted execution role for the account-level standard Bot harness');
 
     for (const seat of props.seats) {
       out(`ExecRoleArn${pascal(seat.key)}`, executionRoles[seat.key]!.roleArn,

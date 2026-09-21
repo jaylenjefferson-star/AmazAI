@@ -463,6 +463,25 @@ class AgentCore:
             command=command,
         )
 
+    def find_harness(self, name: str) -> str | None:
+        """Return a harness ARN by deterministic provider name, if one exists.
+
+        This is provisioning recovery, not discovery for normal invocation. A
+        Lambda can die after CreateHarness succeeds but before the account
+        runtime row is updated; finding that name on retry prevents one logical
+        account from leaking another AWS runtime.
+        """
+        request: dict = {}
+        while True:
+            page = self._control.list_harnesses(**request)
+            for row in page.get("harnessSummaries", page.get("harnesses", [])):
+                if row.get("harnessName", row.get("name")) == name:
+                    return row.get("harnessArn") or row.get("arn")
+            token = page.get("nextToken") or page.get("NextToken")
+            if not token:
+                return None
+            request["nextToken"] = token
+
     def create_harness(self, *, name: str, execution_role_arn: str | None,
                        tool_names: list[str]) -> str:
         """Create a harness and return its ARN.

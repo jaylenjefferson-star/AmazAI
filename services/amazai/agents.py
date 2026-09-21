@@ -720,7 +720,7 @@ def plan_create(body: dict, actor: Actor, *,
         "entity": "Thread", "threadId": thread_id,
         "gsi1pk": "THREADS", "gsi1sk": now_iso(),
         "kind": "dm", "title": profile["name"], "agentIds": [agent_id],
-        "sessionId": K.session_id(thread_id),
+        "sessionId": K.bot_session_id(actor.user_id, agent_id, thread_id),
         # The greeting is what the thread's row shows until anyone says more,
         # and its timestamp is what makes a brand-new Bot read as unread.
         **threads.touch(text, "assistant"),

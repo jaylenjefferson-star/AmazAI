@@ -256,7 +256,7 @@ def fire(store, routine: dict, *, invoke, trigger_type: str | None = None,
             "gsi1pk": "THREADS", "gsi1sk": now_iso(),
             "kind": "routine", "title": routine.get("name", "Routine"),
             "agentIds": [routine["agentId"]],
-            "sessionId": K.session_id(thread_id),
+            "sessionId": K.bot_session_id(store.owner_id, routine["agentId"], thread_id),
             "lastActivity": now_iso(),
         })
         store.update(K.routine_pk(routine_id), "META", {"threadId": thread_id})

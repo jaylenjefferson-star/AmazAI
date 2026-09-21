@@ -85,7 +85,7 @@ class TestCreate:
             name="amazai_chief", execution_role_arn="arn:aws:iam::1:role/bot", tool_names=[])
         assert arn == "arn:aws:bedrock-agentcore:us-west-2:1:harness/new"
 
-    def test_provisioning_passes_the_restricted_agent_role_to_agentcore(self, monkeypatch):
+    def test_dedicated_rollback_passes_the_restricted_agent_role_to_agentcore(self, monkeypatch):
         calls = []
 
         class Core:
@@ -99,6 +99,7 @@ class TestCreate:
 
         role = "arn:aws:iam::1:role/amazai-agent-dynamic"
         monkeypatch.setenv("AGENT_ROLE_ARN", role)
+        monkeypatch.setenv("AMAZAI_SHARED_RUNTIME", "false")
         monkeypatch.setattr(api.agentcore, "AgentCore", Core)
 
         created = api._provision_harness(StoreStub(), {
@@ -110,6 +111,7 @@ class TestCreate:
         assert calls == [{"name": "amazai_tanzie", "execution_role_arn": role,
                           "tool_names": ["shell", "file_operations"]}]
         assert created["executionRoleArn"] == role
+        assert created["runtimeMode"] == "dedicated"
 
     def test_new_bot_reuses_an_account_resolved_model(self, api_table):
         status, existing = call("POST", "/agents", NEW_AGENT)
