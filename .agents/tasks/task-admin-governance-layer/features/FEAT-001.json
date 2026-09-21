@@ -1,0 +1,25 @@
+{
+  "id": "FEAT-001",
+  "type": "chore",
+  "description": "Establish and confirm the local baseline so later features are validated against a known-green starting point. This project is not greenfield, so this MUST run first. Build the Python 3.11 venv, install infra and web deps, and run all three CI commands, recording the exact pass/fail baseline (including the 3 known pre-existing test_gaps_api.py failures caused by moto/boto3 toolchain drift, which are NOT to be fixed here).",
+  "status": "completed",
+  "steps": [
+    "Build the venv with the real 3.11 interpreter (the pyenv shim is not on PATH): /root/.pyenv/versions/3.11.15/bin/python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt",
+    "Run the enforcement-core + handler suite: .venv/bin/python -m pytest -q . Confirm exactly 730 passed and 3 failed, where the 3 failures are tests/test_gaps_api.py::test_activity_after_the_marker_makes_it_unread_again, ::test_only_actual_files_are_listed_not_sealed_runs, and ::test_files_are_newest_first (all botocore ResourceNotFoundException from a bare Store('owner-a') not bound to the moto table fixture). Do NOT modify those tests.",
+    "Install and synthesize infra: cd infra && npm ci && npx cdk synth > /dev/null (expect exit 0).",
+    "Install and build the console: cd web && npm ci && npm run build && test -f dist/index.html (expect exit 0).",
+    "Record the observed baseline numbers in this feature's findings field."
+  ],
+  "acceptance_criteria": [
+    ".venv/bin/python -m pytest -q reports 730 passed and only the 3 named pre-existing test_gaps_api.py failures (no other failures)",
+    "cd infra && npx cdk synth > /dev/null exits 0",
+    "cd web && npm run build produces web/dist/index.html and exits 0"
+  ],
+  "verification": [
+    ".venv/bin/python -m pytest -q",
+    "cd infra && npx cdk synth > /dev/null",
+    "cd web && npm run build && test -f dist/index.html"
+  ],
+  "blocked_reason": null,
+  "findings": "Baseline confirmed on clean main. venv built with /root/.pyenv/versions/3.11.15/bin/python3.11. pytest: 730 passed, 3 failed in 64s \u2014 the 3 failures are exactly tests/test_gaps_api.py::test_activity_after_the_marker_makes_it_unread_again, ::test_only_actual_files_are_listed_not_sealed_runs, ::test_files_are_newest_first, all botocore ResourceNotFoundException from a bare Store('owner-a') not bound to the moto table fixture under boto3 1.43.98 / moto 5.2.3 (toolchain drift, pre-existing, not to be fixed here). cd infra && npx cdk synth > /dev/null exits 0 (77 feature-flag notices are informational). cd web && npm ci && npm run build exits 0 and produces web/dist/index.html. This is the green baseline: 730 pass / 3 known-fail."
+}
