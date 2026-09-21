@@ -84,7 +84,109 @@ WORKING_STYLES: tuple[str, ...] = (
 #: Longest role chip. Sized for a roster row, not a sentence.
 TITLE_MAX = 24
 
-NAME_RE = re.compile(r"^[\w][\w \-'&,.()/]{1,59}$")
+#: `\Z` and not `$`: `$` also matches just before a trailing newline, so
+#: `"Ops\n"` satisfied this pattern and was stored with the newline in it.
+NAME_RE = re.compile(r"^[\w][\w \-'&,.()/]{1,59}\Z")
+
+#: Punctuation a model, a phone keyboard or a pasted brief produces, mapped to
+#: the ASCII this pattern accepts. Without this, an em dash or a curly
+#: apostrophe -- the default output of almost anything that writes prose -- is
+#: refused, and the caller is told a rule it believes it followed. `O’Brien`
+#: and `Sales — Outbound` are not malformed names; they are ordinary ones
+#: spelled the way text is normally spelled.
+_PUNCT = str.maketrans({
+    "\u2018": "'", "\u2019": "'", "\u201b": "'", "\u2032": "'",
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
+    "\u2014": "-", "\u2015": "-", "\u2212": "-",
+    "\u00a0": " ", "\u2007": " ", "\u2009": " ", "\u202f": " ", "\u200a": " ",
+    "\u201c": "", "\u201d": "", "\u2033": "", '"': "",
+})
+
+#: "Janai Williams - Chief of Staff, Operations" -- a name, a spaced dash, then
+#: a title. Only a *spaced* dash is a candidate: `Jean-Luc` and `Sales/Ops-West`
+#: are single names. A comma is never the split point, because "Smith, Jones &
+#: Co" is a name and "Carter, President" is not, and nothing in the string
+#: tells them apart.
+_NAME_TITLE = re.compile(r"^(?P<name>.+?)\s+-\s+(?P<title>.+)\Z")
+
+
+#: Shorter than this and a lifted fragment is not a label -- "VP" beside four
+#: different people, or the "X" left over from a truncated phrase.
+_LABEL_MIN = 3
+
+
+def _roster_label(phrase: str) -> str:
+    """The part of a phrase that can sit in a roster chip, or nothing.
+
+    The longest comma-separated piece that fits and says something: "VP,
+    Product & Engineering" gives "Product & Engineering" rather than "VP",
+    because taking the first piece would label four different people "VP".
+
+    Nothing, when no piece both fits and is substantial -- "VP, Growth &
+    Customer Experience" has a rank too short to mean anything and a
+    department too long for the chip. A blank label the operator can fill
+    beats a wrong one they have to notice first, and the meaning is in `role`
+    either way. Guessing a department out of a phrase is not something to do
+    silently.
+    """
+    pieces = [p.strip() for p in phrase.split(",")]
+    fitting = [p for p in pieces if _LABEL_MIN <= len(p) <= TITLE_MAX]
+    return max(fitting, key=len) if fitting else ""
+
+
+def normalize_name(raw: str) -> tuple[str, str]:
+    """A roster name, and a title if one was clearly buried in it.
+
+    Punctuation is folded to what `NAME_RE` accepts and whitespace collapsed,
+    so `O’Brien` and `Growth\u00a0& CX` are ordinary names rather than errors.
+
+    A title is lifted only on strong evidence: a spaced dash, plus either a
+    comma in the tail -- which makes the tail a phrase, not the second half of
+    a compound name -- or a string too long to be a name at all. So
+    `"Janai Williams - Chief of Staff, Operations"` splits and
+    `"Sales - Outbound"` does not, because the second is a name somebody may
+    well have meant. The tool schema asks for the three fields separately;
+    this is the safety net for a brief relayed as one line, and it is
+    deliberately narrow, because silently renaming a Bot the operator named is
+    its own kind of wrong.
+    """
+    name = " ".join(str(raw or "").translate(_PUNCT).split())
+    match = _NAME_TITLE.match(name)
+    if not match:
+        return name, ""
+    head, tail = match.group("name").strip(), match.group("title").strip()
+    if len(head) < 2:
+        return name, ""          # "- Ops": nothing worth keeping on the left
+    if "," not in tail and len(name) <= 60:
+        return name, ""          # a compound name that fits: leave it alone
+    return head, _roster_label(tail)
+
+
+def _name_problem(name: str) -> str:
+    """Why a name was refused, in terms the caller can act on.
+
+    The previous message restated the pattern and nothing else. A caller that
+    sent an em dash was handed the rule it believed it had followed, with no
+    indication of which character was wrong, so the only available next move
+    was to send the same string again -- which is exactly what happened, nine
+    times in one turn. Naming the offending character is what makes the next
+    attempt different from the last.
+    """
+    if not name:
+        return "name is required"
+    if len(name) < 2:
+        return f"name {name!r} is too short; it must be at least 2 characters"
+    if len(name) > 60:
+        return (f"name is {len(name)} characters, which is longer than the 60 a roster "
+                "row can show. Put only the person or role name in `name`, the short "
+                "label in `title`, and the sentence describing the job in `role`")
+    bad = sorted({c for c in name if not NAME_RE.match(f"A{c}")})
+    if bad:
+        listed = ", ".join(f"{c!r}" for c in bad)
+        return (f"name {name!r} may not contain {listed}. Letters, digits, spaces and "
+                "- ' & , . ( ) / are allowed")
+    return (f"name {name!r} must start with a letter or digit and be 2-60 characters "
+            "of letters, digits, spaces or - ' & , . ( ) /")
 
 #: `HH:MM`, 24-hour. Stored as written rather than as minutes since midnight
 #: so the value a person typed is the value the console shows back.
@@ -167,9 +269,8 @@ def normalize_agent_id(name: str, *, explicit: str | None = None) -> str:
 
 def validate_profile(body: dict) -> dict:
     """Check the human-authored half of an agent and return it normalized."""
-    name = (body.get("name") or "").strip()
-    _require(bool(NAME_RE.match(name)),
-             "name must be 2-60 characters of letters, digits or - ' & , . ( ) /")
+    name, lifted_title = normalize_name(body.get("name"))
+    _require(bool(NAME_RE.match(name)), _name_problem(name))
 
     role = (body.get("role") or "").strip()
     _require(2 <= len(role) <= 200, "role must be 2-200 characters")
@@ -179,9 +280,16 @@ def validate_profile(body: dict) -> dict:
 
     # The short label the roster shows beside the name ("Email", "Sales").
     # One line and short enough to sit in a chip; `role` is the sentence.
-    title = (body.get("title") or "").strip()
+    #
+    # `lifted_title` is a title the caller packed into the name, already cut to
+    # a length a chip can show. It is used only when no title was given: an
+    # explicit one always wins, because a caller that filled both fields meant
+    # what it put in each.
+    title = " ".join((body.get("title") or "").split()) or lifted_title
     _require(len(title) <= TITLE_MAX and title.isprintable(),
-             f"title must be one line of at most {TITLE_MAX} characters")
+             f"title is {len(title)} characters; it must be at most {TITLE_MAX}, because it "
+             f"is the short label beside the name on a roster row ('Finance', 'Chief of "
+             f"Staff'). A longer description of the job belongs in `role`. Got {title!r}")
 
     # Whether this is the account's first Bot. Read here so a malformed value
     # is refused with the rest of the profile; *whether it is allowed* is
