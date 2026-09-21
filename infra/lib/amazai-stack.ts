@@ -344,6 +344,11 @@ export class AmazaiStack extends cdk.Stack {
         sid: 'AgentCore',
         actions: [
           'bedrock-agentcore:CreateHarness',
+          // The control-plane SDK exposes create_harness, but AgentCore
+          // authorizes the underlying resource creation as CreateAgentRuntime.
+          // Keep both names: the former documents the SDK boundary and the
+          // latter is the action AWS evaluates for a new Bot harness.
+          'bedrock-agentcore:CreateAgentRuntime',
           'bedrock-agentcore:InvokeHarness',
           'bedrock-agentcore:InvokeAgentRuntime',
           'bedrock-agentcore:InvokeAgentRuntimeCommand',
