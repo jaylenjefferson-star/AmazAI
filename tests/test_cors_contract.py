@@ -43,3 +43,9 @@ def test_the_check_can_actually_see_the_idempotency_header():
     # on an empty set and protect nothing.
     assert "idempotency-key" in _sent()
     assert {"authorization", "content-type"} <= _allowed()
+
+
+def test_both_production_console_origins_are_allowed():
+    stack = (ROOT / "infra/lib/amazai-stack.ts").read_text()
+    assert "https://amazai.co" in stack
+    assert "https://main.d2qtxrhp46u9pz.amplifyapp.com" in stack
