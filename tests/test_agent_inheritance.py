@@ -1,11 +1,13 @@
 """Agent creation and inheritance boundaries.
 
 docs/architecture/17-message-and-memory-authorization.md §4: an agent-created
-seat requires the existing human approval decision, inherits nothing from
-its parent by default, and no agent can delete another agent. Nothing new is
-introduced here -- these tests confirm invariants `agents.py`/`orchestrator.
-py`/`api.py` already hold structurally, and would regress loudly if that
-ever changed.
+seat requires the existing human approval decision, and no agent can delete
+another agent. These tests confirm invariants `agents.py`/`orchestrator.py`/
+`api.py` hold structurally, and would regress loudly if that ever changed.
+
+One exception, tested in `test_bots_create_bots.py`: when the operator's own
+message started the run, a Bot may create a Bot at once. Everything below is about
+every *other* way a Bot could try, which still ends in a card a person approves.
 """
 
 import pytest
@@ -27,11 +29,16 @@ class TestRequiresApproval:
             A.plan_create({"name": "Shadow Agent", "role": "x",
                           "modelTier": "balanced"}, actor)
 
-    def test_propose_agent_only_ever_produces_a_pending_approval(self, store):
-        """The orchestrator's `propose_agent` tool never writes an Agent row
-        itself -- it stops at a `pause: True` approval card."""
+    @pytest.mark.parametrize("trigger", [
+        {"type": "routine"},                                   # a schedule fired it
+        {"type": "agent", "fromAgentId": "cloud-operations"},  # a teammate woke it
+    ])
+    def test_a_bot_acting_on_its_own_only_ever_produces_a_pending_approval(self, store, trigger):
+        """When the operator's own message did not start the run, the orchestrator's
+        `propose_agent` tool never writes an Agent row itself -- it stops at a
+        `pause: True` approval card."""
         run = runs.create(store, agent_id="engineering", thread_id="dm-engineering",
-                          goal="spin up a companion")
+                          goal="spin up a companion", trigger=trigger)
         run = runs.advance(store, run, RunState.PLANNING)
         run = runs.advance(store, run, RunState.EXECUTING)
 

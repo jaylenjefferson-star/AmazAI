@@ -55,6 +55,50 @@ def is_approval_resume(event: dict) -> bool:
     return bool(event.get("resume") and event.get("resumeNote"))
 
 
+#: How much of one tool's result the model is handed back. A tool can return a whole
+#: mailbox; the model needs enough to act on, not all of it.
+MAX_RESULT_CHARS = 40_000
+
+
+def _result_text(result: object) -> str:
+    import json
+    try:
+        text = json.dumps(result, default=str)
+    except (TypeError, ValueError):
+        text = str(result)
+    if len(text) > MAX_RESULT_CHARS:
+        text = text[:MAX_RESULT_CHARS] + f" ... [cut: result was {len(text)} characters]"
+    return text
+
+
+def tool_round_messages(text: str, calls: list[dict]) -> list[dict]:
+    """The turns that hand an inline tool's result back to the model, so it can go on.
+
+    An inline function ends the model's stream at the call: the harness returns the
+    request and waits for the answer. Something has to run the tool and send that answer
+    on the same session, or the model's turn simply stops where it asked. Approvals
+    have always done this through `resume_messages`; every other inline tool (a
+    connector read, a Bot being created, a message to a teammate) needs the same,
+    in the same shape, which is why it lives here and not in the loop.
+
+    `text` is what the model said before it called, kept so it is not asked to repeat
+    itself. Each call is `{"toolUseId", "name", "input", "result", "error"}`.
+    """
+    if mode() is Mode.RESUME_NOTE:
+        lines = [f"{c['name']} -> {_result_text(c['result'])}" for c in calls]
+        turns = [{"role": "assistant", "content": [{"text": text}]}] if text.strip() else []
+        return turns + [{"role": "user", "content": [
+            {"text": "Results of the tools you just called:\n" + "\n".join(lines)}]}]
+
+    assistant: list[dict] = [{"text": text}] if text.strip() else []
+    assistant += [{"toolUse": {"toolUseId": c["toolUseId"], "name": c["name"],
+                               "input": c.get("input") or {}}} for c in calls]
+    user = [{"toolResult": {"toolUseId": c["toolUseId"],
+                            "status": "error" if c.get("error") else "success",
+                            "content": [{"text": _result_text(c["result"])}]}} for c in calls]
+    return [{"role": "assistant", "content": assistant}, {"role": "user", "content": user}]
+
+
 def resume_messages(event: dict) -> list[dict]:
     """The turn(s) to append to history when a paused run resumes.
 

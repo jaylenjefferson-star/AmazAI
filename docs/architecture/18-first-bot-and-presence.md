@@ -21,7 +21,7 @@ organization (a second is a 409); archiving it frees the place.
 | Rule | Where |
 |---|---|
 | Set at creation only; `entrypoint` is not in `PATCHABLE` | `agents.plan_create` |
-| An agent cannot create one (or any agent) | `Escalation`, unchanged |
+| An agent cannot create one | `provisioning.child_body` copies an allowlist of fields; `entrypoint` is not among them |
 | An agent's *proposal* to create a child cannot carry it | `orchestrator._agent_creation_proposal` is an allowlist |
 | Role, title and prompt are the server's | `onboarding.apply_defaults`, so no prompt ships in the browser bundle |
 | It grants nothing | same defaults, same grants-from-a-person as any agent |

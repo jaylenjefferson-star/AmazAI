@@ -189,4 +189,10 @@ class TestTheBuildersOnTheirOwn:
     def test_with_no_goal_it_says_nothing_on_anyones_behalf(self):
         msgs = [{"role": "assistant", "content": [{"text": "hi"}]}]
         assert agentcore.end_on_user(msgs, "") is msgs
-        assert agentcore.end_on_user([], "goal") == []
+        assert agentcore.end_on_user([], "") == []
+
+    def test_a_bot_never_spoken_to_is_asked_its_goal(self):
+        # A new Bot's greeting is not sent, so a Bot woken to do a first job has no
+        # history at all: the goal is its whole conversation.
+        assert agentcore.end_on_user([], "do the thing") == [
+            {"role": "user", "content": [{"text": "do the thing"}]}]

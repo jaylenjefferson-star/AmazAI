@@ -21,7 +21,7 @@ import boto3
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors as C,
                     identity, keys as K, memory, models, routines as R,
                     runs, schedules, settings as S, skills, threads)
-from amazai import dispatch, org
+from amazai import dispatch, org, provisioning
 from amazai.policy import Capability
 from amazai.states import PAUSED, RunState, TERMINAL
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
@@ -153,26 +153,8 @@ def _return_url(event, slug: str) -> str | None:
 
 
 def _org_connectors(store: Store) -> dict[str, A.OrgConnector]:
-    """Connectors the organization has installed, keyed by id.
-
-    The ceiling for every per-agent grant. Empty until a connector is
-    installed, which is why a grant request on a fresh org is refused rather
-    than quietly granted — there is nothing yet to grant from.
-    """
-    out: dict[str, A.OrgConnector] = {}
-    for row in store.query_index("gsi1", "gsi1pk", "CONNECTORS", limit=200):
-        if row.get("status") not in (None, "installed", "authorized"):
-            continue
-        try:
-            capability = Capability(row.get("capability", "read"))
-        except ValueError:
-            continue
-        out[row["connectorId"]] = A.OrgConnector(
-            connector_id=row["connectorId"],
-            allowed_tools=frozenset(row.get("allowedTools") or []),
-            capability=capability,
-        )
-    return out
+    """The organization's installed connectors: the ceiling for every per-agent grant."""
+    return provisioning.org_connectors(store)
 
 
 def handler(event, context):  # noqa: ARG001
@@ -934,44 +916,8 @@ def _schedule(store: Store, routine: dict) -> None:
 
 
 def _provision_harness(store: Store, agent: dict) -> dict:
-    """Give the agent its runtime identity and mark it runnable.
-
-    Separated so the whole create path can be exercised without an AWS
-    account: a test swaps this for a stub and still drives the transaction,
-    the rollback and the audit trail.
-    """
-    model_id = (agent.get("model") or {}).get("modelId")
-    if not model_id:
-        # An unresolved model is the intended failure, not a surprise. A
-        # guessed Bedrock identifier fails later, in a way that reads as a
-        # permissions bug (decision D2).
-        raise RuntimeError(
-            f"no modelId resolved for tier "
-            f"{(agent.get('model') or {}).get('tier')!r}; "
-            "run scripts/resolve_models.py against this account first"
-        )
-
-    # User-created Bots use the stack's restricted dynamic role. It has model
-    # and harness-state permissions only: no drive, evidence, connector,
-    # computer, or shell permissions. Passing no role makes AgentCore reject
-    # the request before it creates the harness, which previously made every
-    # new Bot and the first-Bot offer fail.
-    role_arn = os.environ.get("AGENT_ROLE_ARN", "").strip()
-    if not role_arn:
-        raise RuntimeError("no AgentCore execution role is configured for new Bots")
-    client = agentcore.AgentCore()
-    harness_arn = client.create_harness(
-        name=f"amazai_{agent['agentId']}",
-        execution_role_arn=role_arn,
-        tool_names=agent.get("allowedTools") or [],
-    )
-
-    return store.update(K.agent_pk(agent["agentId"]), "META", {
-        "harnessArn": harness_arn,
-        "executionRoleArn": role_arn,
-        "status": "active",
-        "state": "active",
-    })
+    """Give the agent its runtime identity and mark it runnable (`provisioning`)."""
+    return provisioning.provision_harness(store, agent)
 
 
 def _priority_label(agent_message: dict) -> str:
@@ -1328,6 +1274,10 @@ def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict
     )
     if store.try_get(K.agent_pk(plan.agent_id), "META"):
         raise Conflict(f"agent {plan.agent_id!r} already exists")
+
+    # Without this an approved proposal reached provisioning with no model and was
+    # refused: a person's create reuses the account's resolved model, and so does this.
+    provisioning.resolve_model_id(plan.agent, active)
 
     store.transact_put(plan.items)
     try:

@@ -372,6 +372,28 @@ export class AmazaiStack extends cdk.Stack {
       },
     }));
 
+    // A Bot's harness is created bare and its tools are added by an update: before a
+    // Bot's first run the orchestrator brings its harness up to date. Without this the
+    // update is denied, the run carries on without the tools, and a Bot made in the
+    // console can talk but cannot propose, ask, message a teammate or use an app.
+    orchestratorFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'KeepHarnessToolsCurrent',
+      actions: ['bedrock-agentcore:UpdateHarness'],
+      resources: ['*'],
+    }));
+
+    // A Bot the operator asks another Bot to make is created by the orchestrator, so it
+    // needs what the API needs to create one: the restricted dynamic role, and nothing
+    // wider. It already may pass the seat roles.
+    orchestratorFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'PassDynamicAgentExecutionRoleOnly',
+      actions: ['iam:PassRole'],
+      resources: [dynamicAgentRole.roleArn],
+      conditions: {
+        StringEquals: { 'iam:PassedToService': 'bedrock-agentcore.amazonaws.com' },
+      },
+    }));
+
     // Creating a user-selected Bot means the API creates its AgentCore
     // harness. It may pass only the restricted dynamic role above; it cannot
     // hand a new Bot one of the existing seat roles.
@@ -529,6 +551,7 @@ export class AmazaiStack extends cdk.Stack {
     apiFn.addEnvironment('SCHEDULE_GROUP', scheduleGroup.name!);
     apiFn.addEnvironment('SCHEDULER_ROLE_ARN', schedulerRole.roleArn);
     apiFn.addEnvironment('AGENT_ROLE_ARN', dynamicAgentRole.roleArn);
+    orchestratorFn.addEnvironment('AGENT_ROLE_ARN', dynamicAgentRole.roleArn);
     apiFn.addEnvironment('ROUTINE_FN_ARN', routineFn.functionArn);
     apiFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
     wsFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);

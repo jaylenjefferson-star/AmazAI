@@ -96,7 +96,8 @@ Other checks, all clean:
 
 ### The properties the tests defend
 
-- An agent cannot create an agent, and cannot change a privileged field on
+- *(Superseded for a run the operator's own message started: see architecture 19,
+  "Bots that make Bots".)* An agent cannot create an agent, and cannot change a privileged field on
   **any** agent — not only itself. Blocking only self-targeted writes would
   leave an agent able to widen a peer and then hand work to it.
 - A per-agent grant cannot exceed the org install, in either direction: not a

@@ -266,6 +266,9 @@ class TestCardsComeFromToolCalls:
         assert world.last["review"]["decision"] == review.DENIED
 
     def test_a_bot_proposal_is_an_approval_not_a_card(self, world):
+        # On a run the operator did not start. When their own message started it, the same
+        # call creates the Bot at once (see test_bots_create_bots.py).
+        world.run = {**world.run, "trigger": {"type": "routine"}}
         result = world.handle("propose_agent", {
             "name": "Calendar", "role": "Keeps the calendar.", "why": "A separate lane."})
         assert result["pause"] is True

@@ -187,10 +187,12 @@ No new mechanism was needed here — this closes the loop on invariants
 `agents.py` and `api.py` already held, with tests to keep them true:
 
 - **Requires approval**: `agents.plan_create` raises `Escalation` outright
-  if `actor.is_agent`. The only path from a running agent to a new seat is
-  `propose_agent` → a pending `agent.create` approval → a person deciding
-  it in `api._decide` → `_create_approved_agent`, which is bound to the
-  exact proposal the approval recorded.
+  if `actor.is_agent`, with one exception (see [19](19-composer-review-and-the-loop.md#bots-that-make-bots)):
+  a run the operator's own message started may create a Bot at once. Every other
+  path from a running agent to a new seat is `create_agent` → a pending
+  `agent.create` approval → a person deciding it in `api._decide` →
+  `_create_approved_agent`, which is bound to the exact proposal the approval
+  recorded.
 - **No inheritance by default**: `orchestrator._agent_creation_proposal`
   rebuilds the proposal from a fixed, narrow shape — `tools: []`,
   `grants: []`, a fixed low starter budget — regardless of what the model's
