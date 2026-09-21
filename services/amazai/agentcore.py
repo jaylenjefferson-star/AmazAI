@@ -144,6 +144,42 @@ INLINE_TOOLS = {
             "required": ["to", "text"],
         },
     },
+    "create_group_chat": {
+        "description": (
+            "Open a focused, temporary group chat for a concrete task. Use it when work needs "
+            "two or more Bots to assess different gaps or take complementary lanes. Include only "
+            "the Bots needed: you are added automatically, every participant starts immediately "
+            "on `goal`, and each has its own run. This creates internal coordination only; it does "
+            "not grant access or approve an outside action. Do not open a room just to announce "
+            "something or to ask for a casual opinion."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short task-room title"},
+                "agentIds": {"type": "array", "items": {"type": "string"},
+                             "description": "The collaborators to invite; you are included automatically"},
+                "goal": {"type": "string",
+                         "description": "The shared task, outcome and any important constraint"},
+            },
+            "required": ["title", "agentIds", "goal"],
+        },
+    },
+    "find_agents": {
+        "description": (
+            "Look up active Bots by name, title or role before handing work off or opening a "
+            "group chat. It returns the Bot ids you must use in those tools. This is roster "
+            "information only: finding a Bot does not grant access, authority, or permission "
+            "to approve its work. Use a short query; leave it empty only when you need to see "
+            "the first available options."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Name, title or work area to find"},
+            },
+        },
+    },
     "request_connector": {
         "description": (
             "Tell the operator a tool you needed is not connected, so they can "

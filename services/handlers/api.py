@@ -937,8 +937,9 @@ def _post_message(store: Store, thread_id: str, body: dict):
 
     Three things beyond "save it and start a run":
 
-    * **Who wakes.** A room wakes every Bot it `@`-mentions, each on its own run,
-      in parallel (`dispatch.targets_for`); a direct thread wakes its one Bot.
+    * **Who wakes.** A room starts every member in parallel for a task message;
+      `@` mentions are the one way to deliberately address a subset. A direct
+      thread wakes its one Bot.
     * **`/skill`.** A leading `/name` that names a skill *this Bot has* -- active
       and assigned -- rides on the run so the Bot is told to use it. A `/name`
       that names nothing is ordinary text, never an error.

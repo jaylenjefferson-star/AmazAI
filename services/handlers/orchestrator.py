@@ -515,7 +515,13 @@ def _room_note(store: Store, thread: dict, agent: dict, thread_id: str) -> str:
         "greeted, one short line: your name, your role, what you can take on.\n"
         "- This is not a private chat: do not run a first-conversation menu. Keep "
         "replies short unless asked for more. If a teammate has already said what "
-        "you would, add only what is new, or say nothing."
+        "you would, add only what is new, or say nothing.\n"
+        "- When the operator gives this room a task, begin work immediately: assess "
+        "the task from your own specialty, take one concrete low-risk lane, and "
+        "surface a gap or dependency to the relevant teammate with `message_agent` "
+        "when needed. Do not wait for a lead to assign you. For an outside action "
+        "that changes data, spends money, or has another consequence, use the tool "
+        "that routes it for operator approval; do not merely say that approval is needed."
     )
 
 
@@ -581,6 +587,29 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
 
     if name == "update_agent":
         return _update_agent_tool(store, run, agent, ev, push, turn, seq, args)
+
+    if name == "create_group_chat":
+        try:
+            result = _create_group_chat(store, run, agent, args)
+        except ValueError as exc:
+            ev.error(seq, "terminal", str(exc))
+            _step(push, run, turn, "group_chat.create", f"not started: {exc}",
+                  review.Review(review.DENIED, "collab", str(exc)))
+            return {"pause": False, "toolResult": {"error": str(exc)}}
+        ev.action(seq, "group_chat.create", f"opened {result['title']}",
+                  threadId=result["threadId"])
+        _step(push, run, turn, "group_chat.create",
+              f"started {result['title']} with {len(result['agentIds'])} Bots",
+              review.scoped("collab", "internal task room; each Bot keeps its own access and approvals"))
+        return {"pause": False, "toolResult": {
+            "created": True, "threadId": result["threadId"], "agentIds": result["agentIds"],
+            "note": "every participant was started on the shared goal in its own run"}}
+
+    if name == "find_agents":
+        matches = _find_agents(store, args.get("query", ""))
+        _step(push, run, turn, "agent.find", f"found {len(matches)} active Bots",
+              review.scoped("roster", "names and roles only; no access or approval authority travels"))
+        return {"pause": False, "toolResult": {"agents": matches}}
 
     if name == "request_approval":
         action = args.get("action", "unknown")
@@ -1156,6 +1185,79 @@ def _record_handoff(store: Store, run: dict, args: dict) -> dict:
         "status": "proposed",
         "ownerAgentId": run.get("ownerAgentId") or run["agentId"],
     })
+
+
+def _create_group_chat(store: Store, run: dict, agent: dict, args: dict) -> dict:
+    """Open a task room from a Bot turn and start its collaborators.
+
+    A room is internal coordination, not a new authority boundary: every Bot keeps
+    its own grants, limits and approval rules. The initiating Bot is always included
+    so it cannot create an unobserved conversation for other Bots, and every member
+    receives the same concrete goal in its own thread session.
+    """
+    title = (args.get("title") or "").strip()
+    if not 2 <= len(title) <= 80:
+        raise ValueError("a group-chat title must be 2-80 characters")
+    goal = (args.get("goal") or "").strip()
+    if not goal:
+        raise ValueError("create_group_chat requires a concrete goal")
+    invited = args.get("agentIds")
+    if not isinstance(invited, list) or not all(isinstance(a, str) and a.strip() for a in invited):
+        raise ValueError("agentIds must be a list of Bot ids")
+
+    agent_ids = list(dict.fromkeys([agent["agentId"], *(a.strip() for a in invited)]))
+    if len(agent_ids) < 2:
+        raise ValueError("a group chat needs at least one other active Bot")
+    if len(agent_ids) > collab.MAX_ROOM_MEMBERS:
+        raise ValueError(f"a group chat holds at most {collab.MAX_ROOM_MEMBERS} Bots")
+
+    members = []
+    for agent_id in agent_ids:
+        member = store.try_get(K.agent_pk(agent_id), "META")
+        if not member or member.get("status") not in A.RUNNABLE:
+            raise ValueError(f"no such active Bot {agent_id!r}")
+        members.append(member)
+
+    thread_id = new_id("th_")
+    store.put({
+        "pk": K.thread_pk(thread_id), "sk": "META",
+        "entity": "Thread", "threadId": thread_id,
+        "gsi1pk": "THREADS", "gsi1sk": now_iso(),
+        "kind": "room", "title": title, "agentIds": agent_ids,
+        "sessionId": K.session_id(thread_id), "lastActivity": now_iso(),
+        "createdBy": f"agent:{agent['agentId']}", "openedFromRunId": run["runId"],
+        "status": "active",
+    })
+    threads.event(store, thread_id, f"{agent['name']} opened this group chat: {goal}",
+                  icon="check", fromAgentId=agent["agentId"])
+
+    names = [member.get("name", member["agentId"]) for member in members]
+    for member in members:
+        started = runs.create(
+            store, agent_id=member["agentId"], thread_id=thread_id, goal=goal,
+            trigger={"type": "group_chat", "fromAgentId": agent["agentId"],
+                     "woke": names, "collaborationContextId": thread_id},
+        )
+        _invoke_orchestrator_async(started["runId"], store.owner_id)
+
+    return {"threadId": thread_id, "title": title, "agentIds": agent_ids}
+
+
+def _find_agents(store: Store, query: str) -> list[dict]:
+    """The small, read-only roster slice a Bot needs to form a task room."""
+    needle = " ".join((query or "").lower().split())
+    words = needle.split()
+    rows = store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
+    matches = []
+    for row in rows:
+        if row.get("status", row.get("state")) not in A.RUNNABLE:
+            continue
+        haystack = " ".join(str(row.get(k) or "") for k in ("agentId", "name", "title", "role")).lower()
+        if words and not all(word in haystack for word in words):
+            continue
+        matches.append({key: row[key] for key in ("agentId", "name") if key in row} | {
+            "title": row.get("title", ""), "role": row.get("role", "")})
+    return matches[:20]
 
 
 def _message_agent(store: Store, run: dict, agent: dict, args: dict) -> dict:

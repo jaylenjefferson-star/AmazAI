@@ -853,10 +853,11 @@ if (import.meta.env.DEV) {
       list.push({ role: 'user', author: 'you', text, at: iso() });
       if (thread) thread.lastActivity = iso();
 
-      // A room wakes every Bot it @-mentions, each on its own run, in parallel.
+      // A room starts every member on the task in parallel. An @ mention is an
+      // intentional way to narrow a follow-up to particular Bots.
       if (thread?.kind === 'room') {
         const named = thread.agentIds.filter((id) => new RegExp(`(?<![\\w-])@${id}(?![\\w-])`).test(text));
-        const targets = named.length ? named : thread.agentIds.slice(0, 1);
+        const targets = named.length ? named : thread.agentIds;
         if (targets.length > 1) {
           event(threadId, `Woke ${targets.length === 2 ? targets.map(nameOf).join(' and ') : targets.map(nameOf).join(', ')}`);
         }

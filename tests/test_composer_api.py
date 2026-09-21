@@ -50,8 +50,8 @@ class TestMentions:
     def test_each_agent_counts_once_in_membership_order(self):
         assert dispatch.mentioned(["a1", "b1"], "@b1 @a1 @b1") == ["a1", "b1"]
 
-    def test_a_room_with_no_mention_wakes_the_lead(self):
-        assert dispatch.targets_for({"kind": "room", "agentIds": ["a1", "b1"]}, "hello") == ["a1"]
+    def test_a_room_with_no_mention_starts_every_member(self):
+        assert dispatch.targets_for({"kind": "room", "agentIds": ["a1", "b1"]}, "hello") == ["a1", "b1"]
 
     def test_a_direct_thread_always_wakes_its_one_bot(self):
         assert dispatch.targets_for({"kind": "dm", "agentIds": ["a1"]}, "@b1 hi") == ["a1"]
@@ -81,11 +81,11 @@ class TestParallelWakeInAChannel:
         events = [m for m in messages(room) if m.get("kind") == "event"]
         assert [e["text"] for e in events] == ["Woke Eng and Ops"]
 
-    def test_an_unmentioned_message_wakes_only_the_lead(self, api_table):
+    def test_an_unmentioned_task_message_starts_the_whole_room(self, api_table):
         eng, ops = make_agent("Eng"), make_agent("Ops")
         room = make_room(eng, ops)
         body = call("POST", f"/threads/{room}/messages", {"text": "anyone?"})[1]
-        assert [r["agentId"] for r in body["runs"]] == [eng]
+        assert [r["agentId"] for r in body["runs"]] == [eng, ops]
 
     def test_mentioning_one_of_two_prefix_named_bots_wakes_only_that_one(self, api_table):
         eng, engineering = make_agent("Eng"), make_agent("Engineering")

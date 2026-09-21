@@ -47,18 +47,19 @@ def targets_for(thread: dict, text: str) -> list[str]:
     """Which of a thread's agents a message wakes.
 
     A room wakes *every* Bot it `@`-mentions, in parallel -- each on its own run
-    and its own harness. A message to the whole room ("you two", "everyone",
-    "hi team", `@all`) wakes them all. Anything else that names no one goes to the
-    lead (the first member), who is told who else is here and how to bring them in.
-    A direct thread has one Bot and always wakes it; a mention of another Bot there
-    is a request to hand off, not a wake, and is handled as such by the orchestrator.
+    and its own harness. A named mention is deliberately selective; otherwise a
+    room is collaborative by default and wakes every member for the task.
+    That makes a new room's first task a real kickoff rather than a question for
+    its lead to relay. A direct thread has one Bot and always wakes it; a mention
+    of another Bot there is a request to hand off, not a wake, and is handled as
+    such by the orchestrator.
     """
     ids = [a for a in (thread.get("agentIds") or []) if a]
     if thread.get("kind") == "room":
         named = mentioned(ids, text)
         if named:
             return named
-        return ids if addresses_everyone(text) else ids[:1]
+        return ids
     return ids[:1]
 
 

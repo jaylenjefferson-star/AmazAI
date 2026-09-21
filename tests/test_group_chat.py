@@ -43,8 +43,8 @@ class TestWhoAMessageWakes:
         "the all-hands is at three",
         "ask the team lead about it",
     ])
-    def test_anything_else_that_names_no_one_still_goes_to_the_lead_only(self, message):
-        assert targets_for(self.ROOM, message) == ["eng"]
+    def test_any_task_message_with_no_name_starts_the_whole_room(self, message):
+        assert targets_for(self.ROOM, message) == ["eng", "chief"]
 
     def test_naming_someone_wakes_exactly_them_even_if_the_message_also_says_team(self):
         assert targets_for(self.ROOM, "hi team @chief plan my day") == ["chief"]
@@ -125,3 +125,51 @@ class TestWhatAnAgentIsToldInARoom:
 
     def test_a_direct_thread_gets_no_room_note(self, room):
         assert "## This room" not in self._prompt_for(room, room.eng, f"dm-{room.eng}")
+
+    def test_it_is_told_to_take_a_lane_and_route_consequential_work_for_approval(self, room):
+        prompt = self._prompt_for(room, room.eng, room.room_id)
+        assert "begin work immediately" in prompt and "take one concrete low-risk lane" in prompt
+        assert "routes it for operator approval" in prompt
+
+
+class TestABotOpeningATaskRoom:
+    def test_it_can_find_an_active_specialist_before_inviting_them(self, world):
+        ops = _bot("Ops", title="Release", role="Owns deployment checks.")
+        world.store.update(K.agent_pk(world.agent_id), "META", {"status": "active", "state": "active"})
+        world.store.update(K.agent_pk(ops), "META", {"status": "active", "state": "active"})
+
+        found = world.handle("find_agents", {"query": "deployment"})["toolResult"]["agents"]
+
+        assert found == [{"agentId": ops, "name": "Ops", "title": "Release",
+                          "role": "Owns deployment checks."}]
+
+    def test_it_adds_itself_starts_every_member_and_keeps_approval_boundaries(self, world, monkeypatch):
+        chief = world.agent_id
+        ops = _bot("Ops", role="Owns deployment checks.")
+        for agent_id in (chief, ops):
+            world.store.update(K.agent_pk(agent_id), "META", {"status": "active", "state": "active"})
+
+        woken = []
+        monkeypatch.setattr(orch, "_invoke_orchestrator_async", lambda run_id, owner: woken.append(run_id))
+        result = world.handle("create_group_chat", {
+            "title": "Release readiness",
+            "agentIds": [ops],
+            "goal": "Assess the release, take separate lanes, and surface blockers.",
+        })["toolResult"]
+
+        assert result["created"] is True and result["agentIds"] == [chief, ops]
+        room = world.store.get(K.thread_pk(result["threadId"]), "META")
+        assert room["kind"] == "room" and room["createdBy"] == f"agent:{chief}"
+        created_runs = [r for r in world.store.query_index("gsi1", "gsi1pk", "RUNS", limit=20)
+                        if r["threadId"] == result["threadId"]]
+        assert {r["agentId"] for r in created_runs} == {chief, ops}
+        assert len(woken) == 2
+        assert all(r["trigger"]["type"] == "group_chat" for r in created_runs)
+        assert "own access and approvals" in world.last["review"]["reason"]
+
+    def test_it_refuses_a_room_without_another_active_bot(self, world):
+        world.store.update(K.agent_pk(world.agent_id), "META", {"status": "active", "state": "active"})
+        result = world.handle("create_group_chat", {
+            "title": "Solo room", "agentIds": [], "goal": "Do the work.",
+        })["toolResult"]
+        assert "at least one other active Bot" in result["error"]
