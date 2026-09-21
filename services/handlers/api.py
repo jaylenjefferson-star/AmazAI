@@ -920,6 +920,16 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     # The operator's two direct asks: put a bot back through onboarding, and
     # archive a bot's accumulated memory. Both are gated on the RBAC matrix and
     # audited; neither ever deletes an AUDIT#/evidence row (docs/architecture/10).
+    # The literal /entrypoint routes are registered BEFORE the parameterized
+    # /{id} routes so "entrypoint" is never captured as an agent id. They let
+    # the console act on the caller's own entrypoint Bot without knowing its
+    # id -- the server resolves it from the caller's org (never from the body).
+    if path == "/admin/agents/entrypoint/reset-onboarding" and method == "POST":
+        return _admin_reset_onboarding_entrypoint(store, body, event)
+
+    if path == "/admin/agents/entrypoint/archive-memory" and method == "POST":
+        return _admin_archive_memory_entrypoint(store, body, event)
+
     if (p := _match(path, "/admin/agents/{id}/reset-onboarding")) and method == "POST":
         return _admin_reset_onboarding(store, p[0], body, event)
 
@@ -1262,23 +1272,35 @@ def _admin_audit(store: Store, event: dict):
     return _resp(200, {"audit": [_audit_view(r) for r in rows]})
 
 
+def _resolve_entrypoint_agent(store: Store) -> dict:
+    """The caller's own entrypoint Bot ('Chief'), resolved server-side.
+
+    The admin console has no agent listing to key a button on, and the caller's
+    subject is NOT an agent id (agent ids come from agents.normalize_agent_id of
+    the Bot's name, e.g. 'chief'), so a reset button cannot know the id up
+    front. Rather than trust an id from the request, the server derives the
+    entrypoint from the caller's own org exactly the way GET /agents does --
+    the AGENTS gsi1 index, filtered to `entrypoint is True`. There is at most
+    one entrypoint per org (agents.plan_create enforces the single-first-Bot
+    rule), so the match is unambiguous. A NotFound here means the org has no
+    entrypoint Bot yet, which surfaces as a 404 rather than a silent no-op.
+    """
+    rows = store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
+    for row in rows:
+        if row.get("entrypoint") is True:
+            return store.get(K.agent_pk(row["agentId"]), "META")
+    raise NotFound("this organization has no entrypoint Bot to reset")
+
+
 def _admin_reset_onboarding(store: Store, agent_id: str, body: dict, event: dict):
     """Put the entrypoint Bot back through onboarding.
 
-    Gated on CHANGE_ORG_POLICIES rather than the per-agent PATCH authority:
-    the entrypoint 'Chief' is the workspace's front door, so resetting it is an
-    org-policy-level act (the roles that may flip the kill switch --
-    Owner/Admin/Security -- are the ones who should be able to re-run the front
-    door), not an ordinary bot edit any seat holder could make.
-
-    Only the entrypoint Bot has an onboarding brief to return to; a
-    non-entrypoint Bot has no such state, so the request is a 400 rather than a
-    no-op that looks like success. The reset touches exactly two things: the
-    systemPrompt goes back to onboarding.brief() so the next run's is_brief()
-    is true again, and the dm-<agentId> starter thread's conversational Message
-    rows are cleared and re-seeded with a fresh starter greeting. AUDIT#/
-    evidence rows are never touched -- they are append-only and outlive what
-    they describe (docs/architecture/10).
+    `agent_id` is a real agent id from the path (the Bot's slugged name, e.g.
+    'chief'), never the caller's subject. When the console cannot supply an id
+    it hits the /admin/agents/entrypoint/reset-onboarding route, which resolves
+    the caller's own entrypoint Bot server-side and calls
+    `_reset_onboarding_agent` directly -- so this path always addresses a genuine
+    agent, and the two identifier spaces never mix.
     """
     actor = _actor(event)
     # Gate BEFORE any read or write, in the documented order the member-write
@@ -1295,6 +1317,42 @@ def _admin_reset_onboarding(store: Store, agent_id: str, body: dict, event: dict
         # the closest-fit greeting, so only it can be reset back into it.
         raise A.ValidationError(
             "only the entrypoint Bot can be reset to onboarding")
+    return _reset_onboarding_agent(store, agent, body, event)
+
+
+def _admin_reset_onboarding_entrypoint(store: Store, body: dict, event: dict):
+    """Reset the caller's own entrypoint Bot without the caller knowing its id.
+
+    reset-onboarding is inherently about the entrypoint 'Chief' -- the handler
+    already requires `agent['entrypoint'] is True` -- so the admin action does
+    not need the caller to supply the agent id at all. The same gates run FIRST
+    (guard_principal -> assert_not_frozen -> assert_can), then the entrypoint is
+    resolved from the caller's own org via the store (never from the body), and
+    the shared reset logic runs on it. The entrypoint is, by construction, an
+    entrypoint Bot, so the 400 guard cannot fire here.
+    """
+    actor = _actor(event)  # noqa: F841 -- symmetry with _admin_reset_onboarding
+    membership = _membership(store, event)
+    govern.assert_not_frozen(store.try_get(K.org_pk(_admin_org_id(event)), "KILLSWITCH"))
+    D.assert_can(membership, D.Capability.CHANGE_ORG_POLICIES)
+
+    agent = _resolve_entrypoint_agent(store)
+    return _reset_onboarding_agent(store, agent, body, event)
+
+
+def _reset_onboarding_agent(store: Store, agent: dict, body: dict, event: dict):
+    """Run the reset on an already-resolved, already-authorized entrypoint Bot.
+
+    The reset touches exactly two things: the systemPrompt goes back to
+    onboarding.brief() so the next run's is_brief() is true again, and the
+    dm-<agentId> starter thread's conversational Message rows are cleared and
+    re-seeded with a fresh starter greeting. AUDIT#/evidence rows are never
+    touched -- they are append-only and outlive what they describe
+    (docs/architecture/10). Callers MUST run the RBAC/kill-switch/principal
+    gates before reaching here.
+    """
+    actor = _actor(event)
+    agent_id = agent["agentId"]
 
     # (1) systemPrompt back to the onboarding brief. plan_update keeps this a
     # first-class edit (systemPrompt IS in agents.PATCHABLE) so the audit trail
@@ -1350,18 +1408,14 @@ def _admin_reset_onboarding(store: Store, agent_id: str, body: dict, event: dict
 def _admin_archive_memory(store: Store, agent_id: str, body: dict, event: dict):
     """Archive a Bot's accumulated memory -- revoke, never destroy.
 
-    Gated on TERMINATE_COMPUTER: archiving a Bot's memory is a
-    destructive-adjacent governance act (the same offboarding authority that
-    suspends a human or stops a computer -- Owner/Admin/Security), not an edit
-    any seat holder should make.
-
-    Archive == revoke: every currently-published memory the Bot owns (its
-    agent-scope rows, and any shared_user rows it authored) has memory.revoke()
-    applied via store.update, so is_visible() -> False and the fact leaves the
-    prompt on the very next turn. Nothing is hard-deleted, and evidence/AUDIT#
-    rows are never touched (append-only, permanent per docs/architecture/10).
+    `agent_id` is a real agent id from the path (the Bot's slugged name), never
+    the caller's subject. The console resolves the id by fetching GET /agents
+    and letting the operator pick which Bot to archive; when no id can be picked
+    it hits /admin/agents/entrypoint/archive-memory, which resolves the
+    entrypoint 'Chief' server-side. Either way the id is a genuine agent id, so
+    the K.agent_pk lookup here always resolves for a real click.
     """
-    actor = _actor(event)
+    actor = _actor(event)  # noqa: F841 -- symmetry with the entrypoint route
     # Gate FIRST, in the documented order the member-write handlers use:
     # guard_principal (via _membership) -> assert_not_frozen -> assert_can.
     # The kill switch is the outermost gate, so a frozen org is rejected even
@@ -1372,6 +1426,38 @@ def _admin_archive_memory(store: Store, agent_id: str, body: dict, event: dict):
     D.assert_can(membership, D.Capability.TERMINATE_COMPUTER)
 
     agent = store.get(K.agent_pk(agent_id), "META")   # 404 if not this owner's
+    return _archive_memory_agent(store, agent, body, event)
+
+
+def _admin_archive_memory_entrypoint(store: Store, body: dict, event: dict):
+    """Archive the caller's own entrypoint Bot's memory without knowing its id.
+
+    Same gates FIRST (guard_principal -> assert_not_frozen -> assert_can), then
+    the entrypoint 'Chief' is resolved from the caller's own org via the store
+    (never from the body), and the shared revoke logic runs on it. This is the
+    minimal working fallback for the single-tenant console, which labels the
+    action as targeting Chief.
+    """
+    membership = _membership(store, event)
+    govern.assert_not_frozen(store.try_get(K.org_pk(_admin_org_id(event)), "KILLSWITCH"))
+    D.assert_can(membership, D.Capability.TERMINATE_COMPUTER)
+
+    agent = _resolve_entrypoint_agent(store)
+    return _archive_memory_agent(store, agent, body, event)
+
+
+def _archive_memory_agent(store: Store, agent: dict, body: dict, event: dict):
+    """Revoke every published memory an already-resolved, already-authorized Bot
+    owns. Callers MUST run the RBAC/kill-switch/principal gates first.
+
+    Archive == revoke: every currently-published memory the Bot owns (its
+    agent-scope rows, and any shared_user rows it authored) has memory.revoke()
+    applied via store.update, so is_visible() -> False and the fact leaves the
+    prompt on the very next turn. Nothing is hard-deleted, and evidence/AUDIT#
+    rows are never touched (append-only, permanent per docs/architecture/10).
+    """
+    actor = _actor(event)
+    agent_id = agent["agentId"]
 
     # The Bot's own agent-scope memory, plus the shared_user memory it authored
     # (agent scope lives under the agent partition; shared_user under the

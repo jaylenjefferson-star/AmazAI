@@ -710,14 +710,27 @@ export const demoApi = {
       return { ...ADMIN_KILLSWITCH, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
     },
     audit: async () => (await wait(90), { audit: [...ADMIN_AUDIT].reverse() }),
-    resetOnboarding: async (agentId, reason) => {
+    // reset-onboarding sends NO id -- the server resolves the entrypoint. The
+    // stub resolves it the same way (the one Bot with entrypoint: true), so the
+    // demo exercises the id-less contract the live client uses.
+    resetOnboarding: async (reason) => {
       await wait(120);
-      adminAudit('onboarding.reset', { detail: withReason(`reset ${agentId} to onboarding`, reason) });
-      return { agentId, reset: true, clearedMessages: 0,
+      const entrypoint = AGENTS.find((a) => a.entrypoint === true);
+      if (!entrypoint) throw new Error('this organization has no entrypoint Bot to reset');
+      adminAudit('onboarding.reset', {
+        detail: withReason(`reset ${entrypoint.agentId} to onboarding`, reason),
+      });
+      return { agentId: entrypoint.agentId, reset: true, clearedMessages: 0,
                correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
     },
+    // archive-memory takes a REAL agent id. The stub validates it against the
+    // roster (as the live server's K.agent_pk lookup does) rather than ignoring
+    // it, so a regression to sending a user subject fails here with 'no such
+    // agent' instead of silently succeeding.
     archiveMemory: async (agentId, reason) => {
       await wait(120);
+      const agent = AGENTS.find((a) => a.agentId === agentId);
+      if (!agent) throw new Error('no such agent');
       adminAudit('agent.memory_archived', {
         before: { published: 3 }, after: { published: 0 },
         detail: withReason(`archived 3 memory rows for ${agentId}`, reason),

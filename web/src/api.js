@@ -130,7 +130,13 @@ const live = {
     // Put the entrypoint Bot back through onboarding; archive (revoke) a Bot's
     // accumulated memory. Neither ever deletes an audit/evidence row. The
     // operator's reason travels in the body into the audit detail.
-    resetOnboarding: (agentId, reason) => call('POST', `/admin/agents/${encodeURIComponent(agentId)}/reset-onboarding`, { reason }),
+    //
+    // reset-onboarding is always about the entrypoint 'Chief', so the console
+    // does not supply an agent id at all -- the server resolves the caller's
+    // own entrypoint Bot. archive-memory targets a SPECIFIC Bot, so it takes a
+    // real agent id from the agent list (see `agents()` above); there is no
+    // subject-as-agent-id path any more.
+    resetOnboarding: (reason) => call('POST', '/admin/agents/entrypoint/reset-onboarding', { reason }),
     archiveMemory: (agentId, reason) => call('POST', `/admin/agents/${encodeURIComponent(agentId)}/archive-memory`, { reason }),
   },
 };

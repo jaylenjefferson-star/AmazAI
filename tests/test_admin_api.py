@@ -770,6 +770,79 @@ class TestArchiveMemory:
         assert status == 403
 
 
+class TestEntrypointResolutionRoutes:
+    """POST /admin/agents/entrypoint/{reset-onboarding,archive-memory}.
+
+    These are the routes the admin console actually calls: it has no agent
+    listing to key reset-onboarding on, and the caller's SUBJECT is not an
+    agent id (agent ids are the Bot's slugged name, e.g. 'chief'). So the
+    server resolves the caller's own entrypoint Bot from the AGENTS index --
+    never from the request body -- and runs the existing logic on it. These
+    tests drive the routes WITHOUT knowing the agent id, which is the exact
+    identifier contract the UI uses; they would fail if the console-vs-server
+    contract were mismatched (e.g. the UI passing the owner subject as an id)."""
+
+    def test_reset_resolves_the_entrypoint_without_knowing_its_id(self, admin_table):
+        # Seed a real entrypoint Bot whose id is the name-derived 'chief'. The
+        # caller never learns that id; it hits the id-less entrypoint route.
+        agent_id = seed_entrypoint_agent(admin_table, agent_id="chief")
+        assert agent_id == "chief"
+        store = Store(OWNER, table=admin_table)
+        store.update(K.agent_pk(agent_id), "META",
+                     {"systemPrompt": "you are a specialist now"})
+        assert onboarding.is_brief(
+            store.get(K.agent_pk(agent_id), "META")["systemPrompt"]) is False
+
+        status, body = call("POST", "/admin/agents/entrypoint/reset-onboarding")
+        assert status == 200
+        # The reset landed on the entrypoint Bot, resolved server-side.
+        assert body["reset"] is True and body["agentId"] == "chief"
+        after = store.get(K.agent_pk(agent_id), "META")
+        assert onboarding.is_brief(after["systemPrompt"]) is True
+        assert audit_rows(admin_table)[0]["action"] == "onboarding.reset"
+
+    def test_reset_entrypoint_route_carries_the_reason(self, admin_table):
+        seed_entrypoint_agent(admin_table, agent_id="chief")
+        status, _ = call("POST", "/admin/agents/entrypoint/reset-onboarding",
+                         {"reason": "console reset"})
+        assert status == 200
+        row = audit_rows(admin_table)[0]
+        assert row["action"] == "onboarding.reset"
+        assert "console reset" in row["detail"]
+
+    def test_reset_entrypoint_404s_when_the_org_has_no_entrypoint(self, admin_table):
+        # A non-entrypoint Bot exists, but no entrypoint: the resolver finds
+        # nothing and the route 404s rather than silently doing nothing.
+        seed_entrypoint_agent(admin_table, agent_id="worker", entrypoint=False)
+        status, body = call("POST", "/admin/agents/entrypoint/reset-onboarding")
+        assert status == 404
+        assert "entrypoint" in body["detail"]
+
+    def test_archive_entrypoint_resolves_and_revokes(self, admin_table):
+        agent_id = seed_entrypoint_agent(admin_table, agent_id="chief")
+        mem = seed_agent_memory(admin_table, agent_id)
+        store = Store(OWNER, table=admin_table)
+        assert memory.is_visible(store.get(K.agent_pk(agent_id), mem["sk"])) is True
+
+        status, body = call("POST", "/admin/agents/entrypoint/archive-memory")
+        assert status == 200 and body["revoked"] == 1 and body["agentId"] == "chief"
+        assert memory.is_visible(store.get(K.agent_pk(agent_id), mem["sk"])) is False
+
+    def test_entrypoint_reset_still_gates_on_rbac(self, admin_table):
+        seed_entrypoint_agent(admin_table, agent_id="chief")
+        seed_member(admin_table, OWNER, D.Role.MEMBER)
+        status, _ = call("POST", "/admin/agents/entrypoint/reset-onboarding")
+        assert status == 403
+        assert [r["action"] for r in audit_rows(admin_table)] == []
+
+    def test_entrypoint_route_is_not_captured_as_an_agent_id(self, admin_table):
+        # Regression guard: the literal /entrypoint route must be registered
+        # before the parameterized /{id} route, so "entrypoint" is never looked
+        # up as an agent id (which would 404 on K.agent_pk('entrypoint')).
+        seed_entrypoint_agent(admin_table, agent_id="chief")
+        assert call("POST", "/admin/agents/entrypoint/reset-onboarding")[0] == 200
+
+
 class TestOperatorReasonReachesTheAuditDetail:
     """The confirm dialog collects a free-text reason precisely so the
     append-only trail records WHY, not just what. The reason travels in the

@@ -19,6 +19,7 @@ const ROLES = ['owner', 'admin', 'security', 'billing', 'member', 'auditor'];
  */
 export default function AdminDirectory() {
   const [members, setMembers] = useState(null);
+  const [agents, setAgents] = useState([]);   // the Bots archive-memory can target
   const [error, setError] = useState('');
   const [pending, setPending] = useState(null);   // the action awaiting confirmation
   const [busy, setBusy] = useState(false);
@@ -27,8 +28,12 @@ export default function AdminDirectory() {
   async function load() {
     setError('');
     try {
-      const res = await api.admin.directory();
-      setMembers(res?.members || []);
+      // The Bots are loaded alongside the members so archive-memory can target
+      // a REAL agent id (a Bot's slugged name, e.g. 'chief'), not the operator's
+      // user subject. The agent list is the only place that id exists.
+      const [dir, roster] = await Promise.all([api.admin.directory(), api.agents()]);
+      setMembers(dir?.members || []);
+      setAgents(roster?.agents || []);
     } catch (e) {
       setError('Could not load the directory.');
     }
@@ -67,27 +72,31 @@ export default function AdminDirectory() {
       run: (reason) => api.admin.changeRole(m.subject, { role, reason }),
     };
   }
-  function resetOnboardingAction(m) {
+  function resetOnboardingAction() {
+    const target = entrypoint?.name || 'Chief';
     return {
-      title: `Reset onboarding for ${m.subject}`,
+      title: `Reset onboarding for ${target}`,
       description: 'Puts the entrypoint Bot back through onboarding: its starter thread is '
         + 'cleared and reseeded. Memory and audit history are untouched.',
-      confirmToken: m.subject,
+      confirmToken: 'reset',
       confirmLabel: 'Reset onboarding',
-      // The agent to reset is keyed on the member's subject in this
-      // single-tenant seam (org_id == user_id); the server resolves it to the
-      // owner's entrypoint Bot and 400s anything that is not the entrypoint.
-      run: (reason) => api.admin.resetOnboarding(m.subject, reason),
+      // reset-onboarding is always about the entrypoint Bot, so the console
+      // sends NO id: the server resolves the caller's own entrypoint Bot. There
+      // is no user-subject-as-agent-id any more.
+      run: (reason) => api.admin.resetOnboarding(reason),
     };
   }
-  function archiveMemoryAction(m) {
+  function archiveMemoryAction(agent) {
     return {
-      title: `Archive memory for ${m.subject}`,
+      title: `Archive memory for ${agent.name}`,
       description: 'Revokes (does not delete) this Bot\u2019s accumulated memory, so it stops '
         + 'appearing in future prompts. Evidence and audit rows are never touched.',
-      confirmToken: m.subject,
+      confirmToken: agent.name,
       confirmLabel: 'Archive memory',
-      run: (reason) => api.admin.archiveMemory(m.subject, reason),
+      // archive-memory targets a SPECIFIC Bot, so it sends that Bot's real
+      // agent id (its slugged name, e.g. 'chief') from the roster -- never a
+      // user subject.
+      run: (reason) => api.admin.archiveMemory(agent.agentId, reason),
     };
   }
 
@@ -116,6 +125,10 @@ export default function AdminDirectory() {
     );
   }
   if (members === null) return <div className="page"><p className="hint-text">Loading directory…</p></div>;
+
+  // The entrypoint 'Chief', if the org has one. reset-onboarding acts on it,
+  // and it is the default archive-memory target.
+  const entrypoint = agents.find((a) => a.entrypoint === true) || null;
 
   return (
     <div className="page">
@@ -151,19 +164,38 @@ export default function AdminDirectory() {
                   {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
               </label>
+            </div>
+          </div>
+        ))}
+      </section>
 
-              {/* Single-tenant seam: only the Owner's row maps to a real
-                  agent (the entrypoint Bot and the owner-scoped memory the
-                  server can act on). Surfacing reset/archive on every row --
-                  including members and Bots that map to no agent -- would just
-                  400/404. Scope them to the Owner until the console has a
-                  real agent listing to key on (a multi-tenant follow-up). */}
-              {m.role === 'owner' && (
-                <>
-                  <button type="button" className="ghost" onClick={() => setPending(resetOnboardingAction(m))}>Reset onboarding</button>
-                  <button type="button" className="danger" onClick={() => setPending(archiveMemoryAction(m))}>Archive memory</button>
-                </>
-              )}
+      {/* The Bots the operator governs. reset-onboarding acts on the entrypoint
+          'Chief' (the server resolves it, so no id is sent); archive-memory
+          targets a SPECIFIC Bot, so each row carries that Bot's real agent id.
+          Keying these on the roster -- not on a member's user subject -- is
+          what makes a real console click resolve instead of 404. */}
+      <section className="card-list">
+        <header className="page-head"><div><h2>Bots</h2></div></header>
+        {agents.length === 0 && <p className="hint-text">No Bots to govern yet.</p>}
+        {entrypoint && (
+          <div className="admin-row" key={`reset-${entrypoint.agentId}`}>
+            <div className="admin-row-head"><strong>{entrypoint.name}</strong>
+              <span className="state-chip cc-tone-ok"><i className="cc-dot" aria-hidden="true" />entrypoint</span>
+            </div>
+            <div className="admin-row-actions">
+              <button type="button" className="ghost"
+                onClick={() => setPending(resetOnboardingAction())}>Reset onboarding</button>
+            </div>
+          </div>
+        )}
+        {agents.map((a) => (
+          <div key={`archive-${a.agentId}`} className="admin-row">
+            <div className="admin-row-head"><strong>{a.name}</strong>
+              {a.entrypoint && <span className="state-chip cc-tone-ok"><i className="cc-dot" aria-hidden="true" />entrypoint</span>}
+            </div>
+            <div className="admin-row-actions">
+              <button type="button" className="danger"
+                onClick={() => setPending(archiveMemoryAction(a))}>Archive memory</button>
             </div>
           </div>
         ))}
