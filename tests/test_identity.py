@@ -151,6 +151,35 @@ class TestUserRecord:
         assert row["pk"] == K.user_pk("auth0|owner-1")
 
 
+class TestMembershipSeam:
+    def test_no_member_rows_means_an_implicit_active_owner(self, store, signing):
+        """Single-owner behaviour: with no MEMBER# rows written, the sole
+        owner governs everything without a seeded row."""
+        from amazai import directory as D
+
+        p = I.verify(token(signing))
+        m = I.load_membership(store, p)
+        assert m.subject == p.user_id
+        assert m.role is D.Role.OWNER
+        assert m.state is D.MemberState.ACTIVE
+        # An implicit owner holds every capability.
+        assert D.can(m, D.Capability.CHANGE_ORG_POLICIES)
+
+    def test_a_stored_membership_wins_over_the_implicit_owner(self, store, signing):
+        """Once a real row exists it is authoritative -- a stored member is not
+        silently upgraded to Owner."""
+        from amazai import directory as D
+
+        p = I.verify(token(signing))
+        # store is Store("owner-a"); the principal's org_id is its own subject,
+        # so write the row under that org for the lookup to find it.
+        store.owner_id = p.org_id
+        store.put(D.member_row(p.org_id, p.user_id, D.Role.AUDITOR))
+        m = I.load_membership(store, p)
+        assert m.role is D.Role.AUDITOR
+        assert not D.can(m, D.Capability.CHANGE_ORG_POLICIES)
+
+
 class TestOwnerAllowlist:
     def test_no_allowlist_means_open(self, signing, monkeypatch):
         monkeypatch.delenv("OWNER_SUBJECTS", raising=False)

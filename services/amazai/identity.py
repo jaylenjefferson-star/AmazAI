@@ -209,6 +209,43 @@ def ensure_user(store: Store, principal: Principal) -> dict:
     })
 
 
+# --- the membership seam ----------------------------------------------------
+#
+# The multi-user seam from docs/architecture/03-data-model.md § "The
+# multi-user seam": an org gains MEMBER#<sub> rows carrying a role. Until any
+# are written there is exactly one human -- the owner -- and this helper keeps
+# that default working by synthesising an implicit ACTIVE Owner membership
+# when the roster is empty. verify() and assert_owner() are untouched; the
+# token-derived subject rule stays inviolate.
+
+def load_membership(store: Store, principal: Principal):
+    """The caller's standing in their org.
+
+    When no MEMBER# rows exist for the subject, return an implicit ACTIVE
+    OWNER membership -- preserving today's "one workspace per owner"
+    behaviour, where the sole owner governs everything without a row having to
+    be seeded. Once a real membership row is written, that stored row wins.
+
+    Imported lazily so identity.py keeps no import-time dependency on the
+    governance layer (directory.py already imports from agents.py, which does
+    not import identity).
+    """
+    from amazai import directory as D
+
+    org_id = principal.org_id
+    row = store.try_get(K.org_pk(org_id), K.member_sk(principal.user_id))
+    if row is not None:
+        return D.membership_of(row)
+
+    return D.Membership(
+        subject=principal.user_id,
+        role=D.Role.OWNER,
+        scope=D.Scope.ORG,
+        scope_id=org_id,
+        state=D.MemberState.ACTIVE,
+    )
+
+
 # --- the owner allowlist ----------------------------------------------------
 
 def owner_subjects() -> tuple[str, ...]:

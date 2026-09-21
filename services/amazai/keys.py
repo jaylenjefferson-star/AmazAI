@@ -32,6 +32,29 @@ def agent_pk(agent_id: str) -> str:
     return f"AGENT#{agent_id}"
 
 
+def org_pk(org_id: str) -> str:
+    """The organization partition. Members, the kill switch and the admin
+    audit trail all live under this one pk so a governance read is a single
+    range query. Today `orgId` equals the owner's subject (see the multi-user
+    seam in docs/architecture/03-data-model.md); modelling it as its own key
+    now makes teams a feature later rather than a migration."""
+    return f"ORG#{org_id}"
+
+
+def member_sk(subject: str) -> str:
+    """One membership row per human, keyed on the Auth0 subject for the same
+    reason as user_pk: a subject cannot be re-registered by someone else."""
+    return f"MEMBER#{subject}"
+
+
+def admin_audit_sk(iso: str, suffix: str) -> str:
+    """Append-only admin audit under the org partition. Same shape as
+    agents.audit_event's AUDIT# rows -- ISO second then an ordered suffix, so
+    entries written in the same second still sort chronologically. Reuse
+    store.ordered_suffix() for the suffix."""
+    return f"ADMINAUDIT#{iso}#{suffix}"
+
+
 def memory_sk(mem_id: str) -> str:
     return f"MEM#{mem_id}"
 
