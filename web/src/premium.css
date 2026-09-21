@@ -146,7 +146,7 @@
 .sx-text small { font-size: 13.5px; color: var(--dim); line-height: 1.35; }
 .sx-row.is-danger .sx-text strong, .sx-row.is-danger .sx-icon { color: var(--danger); }
 
-.sx-body input, .sx-body textarea { width: 100%; }
+.sx-body input:not(.inline-input), .sx-body textarea { width: 100%; }
 @keyframes sx-fade { from { opacity: 0; } }
 @keyframes sx-rise { 0% { transform: translateY(46px) scale(.985); opacity: 0; } 55% { opacity: 1; } 100% { transform: none; opacity: 1; } }
 @media (min-width: 900px) {
@@ -425,10 +425,7 @@
 .na-app { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border-radius: 16px; background: var(--raised-2); border: 1px solid transparent; text-align: left; }
 .na-app.on { border-color: color-mix(in srgb, var(--pick) 55%, transparent); }
 .na-app:not(.on) { opacity: .6; }
-.na-budget { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.na-budget label { display: grid; gap: 6px; }
-.na-budget em { font-style: normal; font-size: 13px; color: var(--dim); }
-.na-budget input { background: var(--raised-2); border: 0; border-radius: 14px; padding: 12px 14px; font-size: 16px; width: 100%; }
+.na-assure { margin: 4px 22px 0; text-align: center; color: var(--dim); font-size: 13.5px; line-height: 1.4; }
 
 .na-foot { position: absolute; z-index: 3; left: 0; right: 0; bottom: 0; display: grid; justify-items: center; gap: 6px; padding: 26px 16px calc(var(--safe-bottom) + 14px); background: linear-gradient(transparent, var(--canvas) 45%); }
 .na-foot small { color: var(--dim); font-size: 13px; }
@@ -552,3 +549,98 @@ button.tl-label:disabled { cursor: default; }
 .chat .timeline { scroll-behavior: auto; overflow-anchor: auto; }
 /* the state dot sits on the tile's rim, not on a face */
 .rs-row[data-kind="room"] .rs-live, .rs-row[data-kind="room"][data-state="approval"] .rs-mark::after { right: -3px; bottom: -3px; }
+
+/* ------------------------------------------------------------ org chart */
+
+/* One tree, two drawings. Phone: an indented list with a rail down the side, because a
+   wide chart is the wrong thing to pinch around on a small screen. From 720px: the chart,
+   each Bot centred over its team and joined by elbows. The lines are borders on the list
+   items themselves, so there is nothing to keep in sync with the layout. */
+.oc { --oc-line: color-mix(in srgb, var(--text) 24%, transparent); }
+.oc-scroll { overflow-x: auto; padding: 4px 16px 8px; -webkit-overflow-scrolling: touch; }
+.oc-tree, .oc-branch { list-style: none; margin: 0; padding: 0; }
+.oc-item { position: relative; }
+
+.oc-node { display: flex; align-items: center; gap: 8px; }
+.oc-card {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; text-align: left;
+  padding: 10px 14px 10px 10px; border-radius: 20px;
+  background: var(--raised); border: 1px solid var(--hairline); color: var(--text);
+  transition: background .15s, border-color .15s, transform .15s;
+}
+button.oc-card { cursor: pointer; }
+button.oc-card:hover { background: var(--raised-2); border-color: var(--line); }
+button.oc-card:active { transform: scale(.985); }
+.oc-card--you { background: transparent; border-style: dashed; border-color: var(--line); }
+.oc-node.is-chief .oc-card { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent); }
+.oc-avatar { position: relative; flex: none; display: grid; place-items: center; width: 40px; height: 40px; }
+.oc-dot { position: absolute; right: -2px; bottom: -1px; width: 11px; height: 11px; border-radius: 50%; background: var(--faint); border: 2px solid var(--raised); }
+.oc-dot.tone-accent { background: var(--accent); animation: rs-pulse 1.8s ease-in-out infinite; }
+.oc-dot.tone-warn { background: var(--warn); }
+.oc-dot.tone-ok { background: var(--ok); }
+.oc-dot.tone-danger { background: var(--danger); }
+.oc-text { display: grid; gap: 1px; min-width: 0; }
+.oc-text strong { font-size: 16px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oc-text small { font-size: 13px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.oc-fold {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px 0 8px;
+  border-radius: 999px; background: var(--raised); border: 1px solid var(--hairline); color: var(--dim); font-size: 12.5px;
+}
+.oc-fold svg { transition: transform .18s; transform: rotate(90deg); }
+.oc-fold.is-folded svg { transform: none; }
+.oc-fold:hover { color: var(--text); border-color: var(--line); }
+.oc-foot { margin: 16px 16px 40px; max-width: 46ch; color: var(--dim); font-size: 13.5px; line-height: 1.45; }
+
+/* Phone: an indented list. Each Bot draws its own piece of the rail and its own tick, so the rail
+   stops at the last Bot in a team instead of trailing past it. */
+@media (max-width: 719px) {
+  .oc-branch { margin: 0 0 0 26px; padding: 8px 0 0 18px; display: grid; gap: 8px; }
+  .oc-branch > .oc-item::before { content: ''; position: absolute; left: -18px; top: 30px; width: 18px; border-top: 1px solid var(--oc-line); }
+  .oc-branch > .oc-item::after { content: ''; position: absolute; left: -18px; top: -8px; bottom: 0; border-left: 1px solid var(--oc-line); }
+  .oc-branch > .oc-item:last-child::after { bottom: auto; height: 38px; }
+  .oc-tree > .oc-root > .oc-branch { margin-left: 30px; }
+}
+
+@keyframes oc-rise { from { opacity: 0; transform: translateY(6px); } }
+.oc-item > .oc-node { animation: oc-rise .32s both; animation-delay: calc(var(--i, 0) * 60ms); }
+@media (prefers-reduced-motion: reduce) { .oc-item > .oc-node { animation: none; } .oc-card, .oc-fold svg { transition: none; } }
+
+/* Desktop: the chart. */
+@media (min-width: 720px) {
+  .oc-scroll { padding: 8px 24px 16px; }
+  .oc-tree { width: max-content; min-width: 100%; display: flex; justify-content: center; }
+  .oc-branch {
+    margin: 0; padding: 26px 0 0; border: 0; display: flex; justify-content: center; gap: 0; position: relative;
+  }
+  .oc-item { display: flex; flex-direction: column; align-items: center; padding: 0 8px; }
+  .oc-branch > .oc-item { padding-top: 26px; }
+  /* the elbow: a rule to each sibling's centre, and a stem up from it */
+  .oc-branch > .oc-item::before, .oc-branch > .oc-item::after {
+    content: ''; position: absolute; top: 0; width: 50%; height: 26px; border-top: 1px solid var(--oc-line); left: auto; right: 50%;
+  }
+  .oc-branch > .oc-item::after { right: auto; left: 50%; border-left: 1px solid var(--oc-line); }
+  .oc-branch > .oc-item:first-child::before, .oc-branch > .oc-item:last-child::after { border-top-color: transparent; }
+  .oc-branch > .oc-item:last-child::before { border-right: 1px solid var(--oc-line); border-radius: 0 12px 0 0; }
+  .oc-branch > .oc-item:first-child::after { border-radius: 12px 0 0 0; }
+  .oc-branch > .oc-item:only-child::before { display: none; }
+  .oc-branch > .oc-item:only-child::after { border-top: 0; border-radius: 0; }
+  /* the stem down from a Bot to its team */
+  .oc-branch::before { content: ''; position: absolute; top: 0; left: 50%; height: 26px; border-left: 1px solid var(--oc-line); }
+  .oc-tree > .oc-root > .oc-branch { margin: 0; }
+  .oc-node { flex-direction: column; gap: 6px; }
+  /* Wide enough for a long name, never so wide the chart sprawls. */
+  .oc-card { width: max-content; min-width: 190px; max-width: 250px; flex: none; }
+  .oc-fold { align-self: center; }
+  /* The chart takes the width the window has; the words above and below stay a readable column. */
+  .pgf .page.oc { max-width: none; }
+  .oc .page-head, .oc-foot { max-width: 720px; margin-left: auto; margin-right: auto; }
+  .oc-foot { text-align: center; padding: 0 16px; }
+}
+
+/* The reports-to row on a contact card, and the note under the picker. */
+.cc-reports { width: 100%; display: flex; align-items: center; gap: 12px; text-align: left; padding: 10px 12px; border-radius: 16px; background: var(--raised-2); border: 0; color: var(--text); }
+.cc-reports:hover { background: var(--hover); }
+.cc-reports > svg { margin-left: auto; color: var(--faint); flex: none; }
+.sx-note { margin: 4px 6px 8px; color: var(--dim); font-size: 13.5px; line-height: 1.45; }
+.sx-check { margin-left: auto; color: var(--accent); display: grid; place-items: center; }

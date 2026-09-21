@@ -2,12 +2,15 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import Companion, { STATES } from '../characters/Companion';
-import { presentAgent } from '../hooks/useAgents';
+import { presentAgent, useAgents } from '../hooks/useAgents';
 import { friendly } from '../lib/errors';
+import { BUILT_IN } from '../lib/tools';
 import { usePresence } from '../presence';
 import Icon from './Icon';
 import Problem from './Problem';
+import ReportsToSheet from './ReportsToSheet';
 import Sheet from './Sheet';
+import UserAvatar from './UserAvatar';
 
 const Contacts = createContext({ open: () => {} });
 
@@ -49,6 +52,8 @@ function ContactCard({ agentId, onClose }) {
   const [error, setError] = useState(null);
   const [task, setTask] = useState(null);      // null = closed, string = drafting
   const [attempt, setAttempt] = useState(0);
+  const { agents: roster } = useAgents();
+  const [moving, setMoving] = useState(false);   // the "reports to" picker
 
   useEffect(() => {
     setError(null);
@@ -72,8 +77,10 @@ function ContactCard({ agentId, onClose }) {
   const info = STATES[state] || STATES.idle;
   const doing = live?.action || (info.label === 'Idle' ? 'Available' : info.label);
   const apps = (agent.grants || []).filter((g) => String(g.connectorId).startsWith('composio:'));
+  const boss = roster.find((a) => a.agentId === agent.managerId);
 
   return (
+    <>
     <Sheet title="" label={`${agent.name}, contact`} onClose={onClose}>
       <div className="cc">
         <Companion archetype={agent.archetype} color={agent.color} state={state} size={92} name={agent.name} />
@@ -96,15 +103,34 @@ function ContactCard({ agentId, onClose }) {
         )}
 
         {agent.description && <section className="cc-block"><h3>About</h3><p>{agent.description}</p></section>}
+        {(!agent.managerId || boss) && (
+          <section className="cc-block">
+            <h3>Reports to</h3>
+            <button type="button" className="cc-reports" onClick={() => setMoving(true)}
+                    aria-label={`Reports to ${boss ? boss.name : 'you'}. Change`}>
+              {boss ? <Companion archetype={boss.archetype} color={boss.color} state="idle" size={34} decorative /> : <UserAvatar size={34} />}
+              <span className="sx-text">
+                <strong>{boss ? boss.name : 'You'}</strong>
+                <small>{boss ? (boss.title || boss.role || 'Teammate') : 'Top of the chart'}</small>
+              </span>
+              <Icon name="forward" size={16} />
+            </button>
+          </section>
+        )}
         <section className="cc-block">
           <h3>Can use</h3>
           <div className="pf-chips">
             {apps.map((g) => <span key={g.connectorId}>{g.connectorId.replace('composio:', '')}{g.capability === 'read' ? ' · read' : ''}</span>)}
-            {(agent.allowedTools || []).map((t) => <span key={t}>{{ shell: 'Terminal', file_operations: 'Files', browser: 'Browser', code_interpreter: 'Code' }[t] || t}</span>)}
+            {(agent.allowedTools || []).map((t) => <span key={t}>{BUILT_IN[t] || t}</span>)}
             {!apps.length && !(agent.allowedTools || []).length && <span>Nothing yet</span>}
           </div>
         </section>
       </div>
     </Sheet>
+    {moving && (
+      <ReportsToSheet agent={agent} agents={roster} onClose={() => setMoving(false)}
+                      onChanged={() => setAttempt((n) => n + 1)} />
+    )}
+    </>
   );
 }

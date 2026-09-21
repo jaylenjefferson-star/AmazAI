@@ -381,7 +381,7 @@ def validate_grants(requested: list[dict],
 #: an agent actor.
 PRIVILEGED_FIELDS: frozenset[str] = frozenset({
     "budget", "allowedTools", "preapproved", "grants", "status",
-    "toolCapabilities", "parentAgentId",
+    "toolCapabilities", "parentAgentId", "reportsTo",
 })
 
 
@@ -418,6 +418,7 @@ def check_quota(active_count: int, *, max_agents: int = DEFAULT_MAX_AGENTS) -> N
 AUDITED_ACTIONS = (
     "agent.created", "agent.updated", "agent.grants_changed",
     "agent.budget_changed", "agent.deactivated", "agent.provision_failed",
+    "agent.reporting_changed",
 )
 
 
@@ -503,6 +504,17 @@ def plan_create(body: dict, actor: Actor, *,
         _require(bool(AGENT_ID_RE.match(parent)), "parentAgentId is malformed")
         _require(parent != agent_id, "an agent cannot be its own parent")
 
+    # Who this Bot works under, if the person chose. Left off when they did not:
+    # absent means the default (Chief), which is what makes it need no migration.
+    # Whether that Bot exists is the caller's check (`org.validate`); the shape
+    # and the self-reference are checked here so a bad value dies with the rest.
+    reports_to = body.get("reportsTo") or None
+    if reports_to is not None:
+        _require(isinstance(reports_to, str)
+                 and (reports_to == "owner" or bool(AGENT_ID_RE.match(reports_to))),
+                 'reportsTo must be a Bot id, or "owner"')
+        _require(reports_to != agent_id, "a Bot cannot report to itself")
+
     # Built-ins are on by default in create_harness and must not be declared
     # (BUILD_PLAN gotcha 7); they are recorded so the router can reason about
     # them, not so they can be requested.
@@ -518,6 +530,7 @@ def plan_create(body: dict, actor: Actor, *,
         "orgId": actor.org_id,
         "createdBy": actor.user_id,
         "parentAgentId": parent,
+        **({"reportsTo": reports_to} if reports_to else {}),
 
         # profile — what Create-a-Bot shows
         "name": profile["name"],
@@ -624,7 +637,7 @@ def plan_create(body: dict, actor: Actor, *,
 PATCHABLE: frozenset[str] = frozenset({
     "name", "role", "title", "description", "systemPrompt", "workingStyle",
     "avatar", "budget", "allowedTools", "preapproved", "status", "modelTier",
-    "parentAgentId", "toolCapabilities", "timezone", "workingHours",
+    "parentAgentId", "toolCapabilities", "timezone", "workingHours", "reportsTo",
 })
 
 
@@ -686,6 +699,16 @@ def plan_update(existing: dict, body: dict, actor: Actor) -> tuple[dict, list[di
         if key in body:
             changes[key] = body[key]
 
+    # Reporting line. The shape and self-reference are checked here; that the
+    # target exists and that it would not make a loop needs the rest of the
+    # organization, which is the caller's (`org.validate`).
+    if "reportsTo" in body:
+        target = body["reportsTo"]
+        _require(isinstance(target, str) and bool(target),
+                 'reportsTo must be a Bot id, or "owner"')
+        _require(target != existing["agentId"], "a Bot cannot report to itself")
+        changes["reportsTo"] = target
+
     if "parentAgentId" in changes and changes["parentAgentId"] == existing["agentId"]:
         raise ValidationError("an agent cannot be its own parent")
 
@@ -709,6 +732,12 @@ def plan_update(existing: dict, body: dict, actor: Actor) -> tuple[dict, list[di
             before={"status": existing.get("status")},
             after={"status": changes["status"]},
             detail=f"status -> {changes['status']}"))
+
+    if "reportsTo" in changes:
+        events.append(audit_event(
+            existing["agentId"], "agent.reporting_changed", actor,
+            before={"reportsTo": existing.get("reportsTo")},
+            after={"reportsTo": changes["reportsTo"]}))
 
     cosmetic = set(changes) - PRIVILEGED_FIELDS - {"accent", "gsi1sk", "model", "state"}
     if cosmetic:

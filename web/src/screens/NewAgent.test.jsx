@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api', () => ({
   api: {
-    agentOptions: vi.fn(), connectors: vi.fn(), createAgent: vi.fn(), connectorApps: vi.fn(),
+    agentOptions: vi.fn(), connectors: vi.fn(), createAgent: vi.fn(), connectorApps: vi.fn(), agents: vi.fn(),
     connectToken: vi.fn(), installConnector: vi.fn(), revokeConnector: vi.fn(),
   },
 }));
@@ -23,6 +23,8 @@ const OPTIONS = {
 };
 const GMAIL = { connectorId: 'composio:gmail', app: 'gmail', name: 'Gmail' };
 const SLACK = { connectorId: 'composio:slack', app: 'slack', name: 'Slack' };
+const CHIEF = { agentId: 'chief', name: 'Chief', entrypoint: true, managerId: null };
+const ENG = { agentId: 'engineering', name: 'Engineering', managerId: 'chief' };
 
 const renderIt = () => render(<MemoryRouter initialEntries={['/agents/new']}><NewAgent /></MemoryRouter>);
 
@@ -36,6 +38,7 @@ describe('NewAgent', () => {
     vi.clearAllMocks();
     api.agentOptions.mockResolvedValue(OPTIONS);
     api.connectors.mockResolvedValue({ connectors: [GMAIL, SLACK] });
+    api.agents.mockResolvedValue({ agents: [CHIEF, ENG] });
     api.createAgent.mockResolvedValue({ agentId: 'tanzie' });
   });
 
@@ -78,6 +81,57 @@ describe('NewAgent', () => {
     await waitFor(() => expect(api.createAgent).toHaveBeenCalled());
     expect(api.createAgent.mock.calls[0][0].grants).toEqual([
       { connectorId: 'composio:gmail', capability: 'admin', allowedTools: ['*'] }]);
+  });
+
+  it('does not ask about money, and sends no budget: the server keeps its own limit', async () => {
+    renderIt();
+    await fill('Tanzie', 'Head of Ops');
+    expect(screen.queryByText('Autonomy')).toBeNull();
+    expect(screen.queryByText(/spending limit/i)).toBeNull();
+    expect(screen.queryByText(/per month/i)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Create Tanzie' }));
+    await waitFor(() => expect(api.createAgent).toHaveBeenCalled());
+    expect('budget' in api.createAgent.mock.calls[0][0]).toBe(false);
+  });
+
+  it('still says, in one line, that it asks before doing anything consequential', async () => {
+    renderIt();
+    expect(await screen.findByText(/asks before it sends, posts, changes or deletes anything/i)).toBeTruthy();
+  });
+
+  it('starts a new Bot under Chief and says nothing about it unless that is changed', async () => {
+    renderIt();
+    await fill('Tanzie', 'Head of Ops');
+    const select = await screen.findByLabelText('Reports to');
+    expect(select.value).toBe('');
+    expect(screen.getByRole('option', { name: 'Chief (default)' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Create Tanzie' }));
+    await waitFor(() => expect(api.createAgent).toHaveBeenCalled());
+    expect('reportsTo' in api.createAgent.mock.calls[0][0]).toBe(false);
+  });
+
+  it('starts a Bot under someone else, or under you, when asked', async () => {
+    renderIt();
+    await fill('Tanzie', 'Head of Ops');
+    fireEvent.change(await screen.findByLabelText('Reports to'), { target: { value: 'engineering' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Tanzie' }));
+    await waitFor(() => expect(api.createAgent).toHaveBeenCalledTimes(1));
+    expect(api.createAgent.mock.calls[0][0].reportsTo).toBe('engineering');
+  });
+
+  it('offers "You" as a top-level line, and never Chief twice', async () => {
+    renderIt();
+    await fill('Tanzie', 'Head of Ops');
+    await screen.findByLabelText('Reports to');
+    const labels = screen.getAllByRole('option').map((o) => o.textContent);
+    expect(labels).toEqual(['Chief (default)', 'Engineering', 'You']);
+  });
+
+  it('asks nothing about it before there is anyone to report to', async () => {
+    api.agents.mockResolvedValue({ agents: [] });
+    renderIt();
+    await fill('Tanzie', 'Head of Ops');
+    expect(screen.queryByLabelText('Reports to')).toBeNull();
   });
 
   it('says what happened in plain words, and keeps everything typed, when creation fails', async () => {

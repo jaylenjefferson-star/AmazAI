@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { stepLabel } from '../lib/tools';
 import Icon from './Icon';
 
 function span(seconds) {
@@ -50,8 +51,10 @@ export function Verdict({ review }) {
  *
  * Each step carries Auto Review's verdict and the rule behind it, and the header
  * says up front if anything was asked or denied: the steps that needed a person
- * are the ones worth seeing without opening it. Nothing here is reworded --
- * a paraphrase of what an agent did is not evidence of it.
+ * are the ones worth seeing without opening it. A step's tool gets a plain-word
+ * label (`shell` reads "Terminal") with the exact identifier on hover, and its
+ * summary -- what was actually run or done -- is shown untouched: a paraphrase of
+ * what an agent did is not evidence of it.
  */
 export default function StepsGroup({ steps }) {
   const running = !steps.endedAt;
@@ -91,7 +94,7 @@ export default function StepsGroup({ steps }) {
           {steps.items.map((step, i) => (
             <li key={i} className={running && i === count - 1 ? 'is-current' : ''}>
               <span className="step-line">
-                <code>{step.name}</code>
+                <span className="step-name" title={step.name}>{stepLabel(step.name)}</span>
                 <Verdict review={step.review} />
               </span>
               <span>{step.summary}</span>

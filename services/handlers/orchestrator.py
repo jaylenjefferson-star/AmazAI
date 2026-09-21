@@ -23,7 +23,7 @@ import boto3
 from dataclasses import dataclass, field
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
-                    continuation, cost, keys as K, memory, onboarding, policy, redact, review,
+                    continuation, cost, keys as K, memory, onboarding, org, policy, redact, review,
                     router, routines, runs, skills, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
@@ -203,6 +203,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     system_prompt += _request_notes(run, agent, thread)
     system_prompt += _room_note(store, thread, agent, run["threadId"])
     system_prompt += _connected_apps_note(store, run["agentId"])
+    system_prompt += _reporting_note(store, agent)
 
 
     run = runs.advance(store, run, RunState.PLANNING) if run["state"] == RunState.QUEUED.value else run
@@ -446,6 +447,32 @@ def _connected_apps_note(store: Store, agent_id: str) -> str:
             "you can do in them, then connector_call to do it. Reading runs at once; "
             "anything that creates, changes or removes data waits for the operator's "
             "approval. For an app not listed, use request_connector.")
+
+
+def _reporting_note(store: Store, agent: dict) -> str:
+    """Who this Bot works under and who works under it.
+
+    Context, not authority, and it says so: a Bot that believed seniority let it
+    approve a teammate's action would be wrong, and nothing here would make it
+    right. The line only tells a Bot where to escalate and whom to keep informed.
+    """
+    rows = store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
+    manager = org.resolve(rows)
+    if agent["agentId"] not in manager:
+        return ""
+    names = {r["agentId"]: r.get("name", r["agentId"]) for r in rows}
+    boss = manager[agent["agentId"]]
+    team = [names[a] for a in org.reports_of(agent["agentId"], manager)]
+
+    lines = ["\n\n## Who you report to",
+             f"You report to {names[boss]}." if boss
+             else "You report directly to the operator."]
+    if team:
+        lines.append(f"Reporting to you: {', '.join(team)}.")
+    lines.append("This is how the team is organised, so you know who to bring a blocker to "
+                 "and who to keep informed. It changes nothing about what anyone may do: "
+                 "approvals come from the operator, and no Bot approves another Bot's actions.")
+    return "\n".join(lines)
 
 
 def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,

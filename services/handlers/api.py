@@ -21,7 +21,7 @@ import boto3
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors as C,
                     identity, keys as K, memory, models, routines as R,
                     runs, schedules, settings as S, skills, threads)
-from amazai import dispatch
+from amazai import dispatch, org
 from amazai.policy import Capability
 from amazai.states import PAUSED, RunState, TERMINAL
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
@@ -234,6 +234,10 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     # --- agents ------------------------------------------------------------
     if path == "/agents" and method == "GET":
         rows = store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
+        # Each row gains `managerId`: who it reports to (None: you). Worked out from
+        # the whole org before the list is filtered, so a Bot's line is the same
+        # whichever slice of the roster asked.
+        rows = org.annotate(rows)
         # Archived agents are excluded by default. They still exist, and their
         # evidence still resolves; they are simply not part of the org you are
         # operating today.
@@ -280,6 +284,8 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     if (p := _match(path, "/agents/{id}")) and method == "GET":
         agent = store.get(K.agent_pk(p[0]), "META")
+        agent["managerId"] = org.resolve(
+            store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)).get(p[0])
         agent["memory"] = store.query(K.agent_pk(p[0]), sk_prefix="MEM#")
         agent["grants"] = store.query(K.agent_pk(p[0]), sk_prefix="GRANT#")
         agent["audit"] = store.query(K.agent_pk(p[0]), sk_prefix="AUDIT#",
@@ -292,6 +298,12 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     if (p := _match(path, "/agents/{id}")) and method == "PATCH":
         existing = store.get(K.agent_pk(p[0]), "META")
+        if "reportsTo" in body:
+            # Against the whole org: the target must be an active Bot (or "owner")
+            # and the move must not put a Bot under its own team.
+            body = {**body, "reportsTo": org.validate(
+                p[0], body["reportsTo"],
+                store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200))}
         changes, events = A.plan_update(existing, body, _actor(event))
         updated = store.update(K.agent_pk(p[0]), "META", changes)
         for ev in events:
@@ -858,6 +870,12 @@ def _create_agent(store: Store, body: dict, event: dict):
     # written, and a Bot that another Bot proposes never comes through here.
     if "grants" not in body:
         body = {**body, "grants": C.default_grants(store)}
+
+    # Started under someone other than Chief? Then that Bot has to exist. Left out,
+    # it reports to Chief, which needs nothing stored.
+    if body.get("reportsTo"):
+        body = {**body, "reportsTo": org.validate(
+            "", body["reportsTo"], store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200))}
 
     plan = A.plan_create(
         body, actor,

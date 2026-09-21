@@ -7,12 +7,9 @@ import { friendly } from '../lib/errors';
 import { Activity, Memory, Skills, Usage } from './RightPanel';
 import Icon from './Icon';
 import Problem from './Problem';
+import { BUILT_IN } from '../lib/tools';
 import Sheet from './Sheet';
 import ToolsSheet from './ToolsSheet';
-
-const BUILT_IN = {
-  shell: 'Terminal', file_operations: 'Files', browser: 'Browser', code_interpreter: 'Code',
-};
 
 const TIER_COPY = {
   fast: ['Fast', 'Quick answers, light work.'],

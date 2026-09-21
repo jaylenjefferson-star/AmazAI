@@ -109,3 +109,31 @@ first-conversation brief ("your opening message asked..."). In a room it is left
 What is still true, and not fixed here: agents in the same wake run in parallel and cannot
 see each other's replies to that message. A teammate brought in with `message_agent` runs
 afterwards and does see them.
+
+## Reporting lines (the org chart)
+
+Every Bot reports into Chief unless it was started, or later moved, under someone else.
+The rule lives in one place, `services/amazai/org.py`, and the console only draws its answer.
+
+**Stored only when a person chose it.** `reportsTo` is a Bot id, or `"owner"` for "straight
+to me". Absent means the default, which is Chief, so a Bot made later and every Bot that
+existed before the field need no migration. `GET /agents` and `GET /agents/{id}` add
+`managerId` (a Bot id, or null for "reports to you") computed from the whole org.
+
+**It always resolves.** A manager who is archived moves their team up to Chief; if Chief is
+gone, to the owner. A self-reference is ignored. `org.validate` refuses a move that would
+put a Bot under its own team, or under a Bot that is not active, with the reason; a loop
+that two racing edits managed to store anyway is cut at read time so the chart still has a top.
+
+**It is organisation, not authority.** A line grants nothing and removes nothing: grants and
+`policy.evaluate` decide what a Bot may do, the owner approves, and no Bot approves another's
+action however senior. Only a person can change a line (`reportsTo` is a privileged field an
+agent actor may not touch) and each change is audited as `agent.reporting_changed`. It is
+also not `parentAgentId`, which records who *proposed* a Bot: history, not structure.
+
+**What a Bot is told** (`orchestrator._reporting_note`, guidance not enforcement): who it
+reports to and who reports to it, and that this changes nothing about what anyone may do.
+
+**Console.** `/org` draws it (a chart from 720px, an indented list below, because a wide
+chart is the wrong thing to pinch around on a phone); a contact card's "Reports to" row and
+New Bot's "Reports to" field change it; the picker never offers a Bot's own team.
