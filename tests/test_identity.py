@@ -179,6 +179,37 @@ class TestMembershipSeam:
         assert m.role is D.Role.AUDITOR
         assert not D.can(m, D.Capability.CHANGE_ORG_POLICIES)
 
+    def test_an_invitee_resolves_to_their_own_org_not_the_inviters(self, two_stores):
+        """The single-tenant seam, made explicit (review issue 1).
+
+        An invite writes MEMBER#<invitee> under the INVITER's org partition,
+        owned by the inviter. When the invited human authenticates with their
+        own token, their Store keys on their OWN org and does NOT read the seat
+        written under the inviter -- so `load_membership` resolves them to an
+        implicit Owner of their own empty org, never to the role the inviter
+        assigned in the inviter's org. The limitation is enforced by the data
+        boundary rather than silently broken; a real second human cannot yet be
+        seated cross-org (that is the next slice).
+        """
+        from amazai import directory as D
+
+        inviter, invitee = two_stores  # Store("owner-a"), Store("owner-b")
+        # The inviter seats the invitee in the INVITER's org.
+        inviter.put(D.invite_member("owner-a", "owner-b", D.Role.ADMIN,
+                                    invited_by="owner-a"))
+
+        # The invitee authenticates as themselves; org_id == their own subject.
+        invitee_principal = I.Principal(user_id="owner-b")
+        m = I.load_membership(invitee, invitee_principal)
+
+        # They do NOT pick up the ADMIN seat written under owner-a's org.
+        assert m.scope_id == "owner-b"
+        assert m.role is D.Role.OWNER
+        assert m.state is D.MemberState.ACTIVE
+        # And the inviter's own Store still sees the seat it wrote.
+        seat = inviter.try_get(K.org_pk("owner-a"), K.member_sk("owner-b"))
+        assert seat is not None and seat["role"] == D.Role.ADMIN.value
+
 
 class TestOwnerAllowlist:
     def test_no_allowlist_means_open(self, signing, monkeypatch):

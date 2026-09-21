@@ -103,12 +103,46 @@ def _principal(event) -> identity.Principal:
     must not turn its context map into a second, weaker identity source. The
     raw bearer token is verified by ``identity`` and cached only for this
     in-memory Lambda invocation.
+
+    This function establishes WHO the caller is (token signature/iss/aud/exp);
+    it deliberately does NOT decide whether they may act. The owner allowlist
+    (`identity.assert_owner`) is a coarse "is this a workspace owner" gate that
+    is applied per-route in `handler()` -- see `_authorize`. Keeping the two
+    apart is what lets the finer-grained RBAC matrix govern `/admin/*` for a
+    non-owner Admin/Security/Billing/Auditor seat instead of the allowlist
+    rejecting them at 401 before RBAC ever runs.
     """
     principal = event.get("_amazai_principal")
     if principal is None:
         principal = identity.principal_from_event(event)
-        identity.assert_owner(principal)
         event["_amazai_principal"] = principal
+    return principal
+
+
+#: Routes that authorize via the RBAC capability matrix (directory.assert_can)
+#: rather than the owner allowlist. An invited Admin/Security/Billing/Auditor
+#: is by definition NOT an allowlisted owner, so gating these on the allowlist
+#: would reject every non-owner seat at 401 before RBAC could make its finer
+#: decision -- the two gates would encode conflicting models of who may act.
+#: The token is still fully verified for these routes; only the coarse
+#: owner-allowlist check is deferred to the per-capability gate inside each
+#: /admin/* handler.
+_RBAC_ROUTE_PREFIX = "/admin/"
+
+
+def _authorize(event, path: str) -> identity.Principal:
+    """Establish the caller and apply the coarse owner gate where it governs.
+
+    Every route verifies the token via `_principal`. For non-`/admin/*` routes
+    the owner allowlist is the authorization model (a private single-owner
+    workspace), so `assert_owner` runs here. For `/admin/*` routes the RBAC
+    matrix is the model, so the allowlist is skipped and each admin handler
+    gates on the specific capability instead. Neither path weakens token
+    verification or the Store's ownerId isolation.
+    """
+    principal = _principal(event)
+    if not (path == "/admin" or path.startswith(_RBAC_ROUTE_PREFIX)):
+        identity.assert_owner(principal)
     return principal
 
 
@@ -188,7 +222,7 @@ def handler(event, context):  # noqa: ARG001
         return _resp(400, {"error": "invalid JSON body"})
 
     try:
-        principal = _principal(event)
+        principal = _authorize(event, path)
         store = Store(principal.user_id)
         identity.ensure_user(store, principal)
         return _route(store, method, path, body, event)
@@ -850,12 +884,81 @@ def _membership(store: Store, event: dict) -> "D.Membership":
     return membership
 
 
+def _admin_org_id(event: dict) -> str:
+    """The one org id every admin route keys on, read AND write.
+
+    Derived from the verified principal (== the caller's subject today, the
+    one-workspace-per-owner seam). Both the read paths (killswitch status,
+    audit, roster) and the write paths use THIS, not `store.owner_id`, so the
+    two do not encode two different notions of "the org" that would diverge
+    the moment org_id != user_id. `store.owner_id` still enforces ownerId
+    isolation on the rows underneath; this only decides which org partition
+    the admin surface addresses.
+    """
+    return _principal(event).org_id
+
+
 def _correlation_id(event: dict) -> str | None:
     """The client's X-Correlation-Id if it supplied one, else None so
     admin_audit_event generates one. Either way the id is echoed back on a
     state change so a UI can link the admin action to the run evidence it
     causes (docs/architecture/10)."""
     return _header(event, "x-correlation-id") or None
+
+
+def _parse_role(value, *, default: "D.Role | None" = None) -> "D.Role":
+    """A `directory.Role` from client input, or a 400 with a clear message.
+
+    Left to `D.Role(value)` a bad string raises a bare ValueError that falls
+    through to the generic 500 handler -- a malformed request is the caller's
+    error, not the server's, so it must surface as A.ValidationError -> 400.
+    """
+    if value is None and default is not None:
+        return default
+    if not isinstance(value, str) or not value.strip():
+        raise A.ValidationError("a 'role' is required")
+    try:
+        return D.Role(value.strip())
+    except ValueError:
+        allowed = ", ".join(r.value for r in D.Role)
+        raise A.ValidationError(f"unknown role {value!r}; expected one of {allowed}")
+
+
+def _member_view(row: dict) -> dict:
+    """A member-facing projection of a stored MEMBER# row.
+
+    The stored row carries internal machinery -- ownerId, pk/sk, gsi1pk/gsi1sk,
+    createdAt/updatedAt -- that is nobody's business outside the store and
+    leaks the single-table layout to the client. Project only the fields a
+    directory UI needs, so widening the row later does not silently start
+    shipping new internals over the wire.
+    """
+    return {
+        "subject": row.get("subject"),
+        "role": row.get("role"),
+        "scope": row.get("scope"),
+        "scopeId": row.get("scopeId"),
+        "state": row.get("state"),
+        "invitedBy": row.get("invitedBy"),
+        "invitedAt": row.get("invitedAt"),
+    }
+
+
+def _audit_view(row: dict) -> dict:
+    """A client projection of a stored admin-audit row. Same reason as
+    _member_view: the envelope the audit reader needs is the action, actor,
+    timing, correlation id and before/after -- not pk/sk/ownerId/gsi keys."""
+    return {
+        "action": row.get("action"),
+        "at": row.get("at"),
+        "actorUserId": row.get("actorUserId"),
+        "actorAgentId": row.get("actorAgentId"),
+        "correlationId": row.get("correlationId"),
+        "before": row.get("before"),
+        "after": row.get("after"),
+        "detail": row.get("detail"),
+        "v": row.get("v"),
+    }
 
 
 def _roster(store: Store, org_id: str) -> list["D.Membership"]:
@@ -869,19 +972,41 @@ def _admin_list_members(store: Store, event: dict):
     """The full roster. Gated on READ_AUDIT_LOG rather than a member-only
     capability: seeing who else is in the org and their roles is a governance
     read (Owner/Admin/Security/Auditor), and a plain Member must not enumerate
-    the directory."""
+    the directory. Rows are projected through _member_view so internal store
+    fields never reach the client."""
     D.assert_can(_membership(store, event), D.Capability.READ_AUDIT_LOG)
-    return _resp(200, {"members": store.query(K.org_pk(store.owner_id),
-                                              sk_prefix="MEMBER#", limit=500)})
+    org_id = _admin_org_id(event)
+    rows = store.query(K.org_pk(org_id), sk_prefix="MEMBER#", limit=500)
+    return _resp(200, {"members": [_member_view(r) for r in rows]})
 
 
 def _admin_invite(store: Store, body: dict, event: dict):
-    """Invite a human. Requires INVITE_USERS (Owner/Admin per the matrix)."""
+    """Invite a human. Requires INVITE_USERS (Owner/Admin per the matrix).
+
+    Input is validated before anything is written: an unknown role is a 400
+    (not a bare ValueError -> 500), inviting yourself is refused (you are
+    already seated as the actor), and re-inviting an already-seated subject is
+    a clear 409 rather than an opaque transaction-cancelled Conflict.
+    """
     actor = _actor(event)
     D.assert_can(_membership(store, event), D.Capability.INVITE_USERS)
     subject = (body.get("subject") or body.get("email") or "").strip()
-    role = D.Role(body.get("role") or D.Role.MEMBER.value)
-    org_id = actor.org_id
+    if not subject:
+        raise A.ValidationError("an invite needs a 'subject' or 'email'")
+    role = _parse_role(body.get("role"), default=D.Role.MEMBER)
+    org_id = _admin_org_id(event)
+
+    # Self-invite is meaningless: the actor already holds a seat (they had to,
+    # to reach this route). Refuse it as a bad request rather than writing a
+    # second row that would collide with or shadow their own membership.
+    if subject == actor.user_id:
+        raise A.ValidationError("you cannot invite yourself")
+
+    # An already-seated subject is a duplicate, surfaced as a clear 409 instead
+    # of the create-only transaction's opaque "transaction cancelled".
+    if store.try_get(K.org_pk(org_id), K.member_sk(subject)) is not None:
+        raise Conflict(f"{subject} already has a seat in this org")
+
     row = D.invite_member(org_id, subject, role, invited_by=actor.user_id)
     corr = _correlation_id(event)
     audit = govern.admin_audit_event(org_id, "member.invited", actor,
@@ -891,7 +1016,8 @@ def _admin_invite(store: Store, body: dict, event: dict):
     # Atomic: the member row and its audit row land together or neither does,
     # the same shape as agent create.
     store.transact_put([row, audit])
-    return _resp(201, {"member": row, "correlationId": audit["correlationId"]})
+    return _resp(201, {"member": _member_view(row),
+                       "correlationId": audit["correlationId"]})
 
 
 def _admin_suspend(store: Store, subject: str, event: dict):
@@ -902,19 +1028,17 @@ def _admin_suspend(store: Store, subject: str, event: dict):
     audit trail survives it."""
     actor = _actor(event)
     D.assert_can(_membership(store, event), D.Capability.TERMINATE_COMPUTER)
-    org_id = actor.org_id
+    org_id = _admin_org_id(event)
     row = store.get(K.org_pk(org_id), K.member_sk(subject))   # 404 if unknown
     target = D.membership_of(row)
     patch = D.suspend_patch(target, _roster(store, org_id))   # last-Owner floor
-    updated = store.update(K.org_pk(org_id), K.member_sk(subject), patch)
-    corr = _correlation_id(event)
-    audit = govern.admin_audit_event(org_id, "member.suspended", actor,
-                                     correlation_id=corr,
-                                     before={"state": target.state.value},
-                                     after={"state": patch["state"]},
-                                     detail=f"suspended {subject}")
-    store.put(audit)
-    return _resp(200, {"member": updated, "correlationId": audit["correlationId"]})
+    updated = _apply_member_change(
+        store, org_id, subject, patch, actor, event,
+        action="member.suspended",
+        before={"state": target.state.value},
+        after={"state": patch["state"]},
+        detail=f"suspended {subject}")
+    return _resp(200, updated)
 
 
 def _admin_reactivate(store: Store, subject: str, event: dict):
@@ -924,41 +1048,62 @@ def _admin_reactivate(store: Store, subject: str, event: dict):
     one."""
     actor = _actor(event)
     D.assert_can(_membership(store, event), D.Capability.INVITE_USERS)
-    org_id = actor.org_id
+    org_id = _admin_org_id(event)
     row = store.get(K.org_pk(org_id), K.member_sk(subject))   # 404 if unknown
     target = D.membership_of(row)
     patch = D.reactivate_patch(target)
-    updated = store.update(K.org_pk(org_id), K.member_sk(subject), patch)
-    corr = _correlation_id(event)
-    audit = govern.admin_audit_event(org_id, "member.reactivated", actor,
-                                     correlation_id=corr,
-                                     before={"state": target.state.value},
-                                     after={"state": patch["state"]},
-                                     detail=f"reactivated {subject}")
-    store.put(audit)
-    return _resp(200, {"member": updated, "correlationId": audit["correlationId"]})
+    updated = _apply_member_change(
+        store, org_id, subject, patch, actor, event,
+        action="member.reactivated",
+        before={"state": target.state.value},
+        after={"state": patch["state"]},
+        detail=f"reactivated {subject}")
+    return _resp(200, updated)
 
 
 def _admin_change_role(store: Store, subject: str, body: dict, event: dict):
     """Change a seat's role. Requires INVITE_USERS (Owner/Admin): assigning a
-    role is the same seating authority as inviting. The last-Owner floor
+    role is the same seating authority as inviting. A missing or unknown role
+    is a 400, not a hard KeyError/ValueError -> 500. The last-Owner floor
     refuses to demote the final Owner."""
     actor = _actor(event)
     D.assert_can(_membership(store, event), D.Capability.INVITE_USERS)
-    new_role = D.Role(body["role"])
-    org_id = actor.org_id
+    new_role = _parse_role(body.get("role"))
+    org_id = _admin_org_id(event)
     row = store.get(K.org_pk(org_id), K.member_sk(subject))   # 404 if unknown
     target = D.membership_of(row)
     patch = D.change_role_patch(target, new_role, _roster(store, org_id))
-    updated = store.update(K.org_pk(org_id), K.member_sk(subject), patch)
+    updated = _apply_member_change(
+        store, org_id, subject, patch, actor, event,
+        action="member.role_changed",
+        before={"role": target.role.value},
+        after={"role": patch["role"]},
+        detail=f"role of {subject} -> {new_role.value}")
+    return _resp(200, updated)
+
+
+def _apply_member_change(store: Store, org_id: str, subject: str, patch: dict,
+                         actor: A.Actor, event: dict, *, action: str,
+                         before: dict, after: dict, detail: str) -> dict:
+    """Persist a member state change and its audit row, audit-FIRST.
+
+    The invariant is "the audit is what must never be lost." DynamoDB cannot
+    mix a conditional Update of an existing MEMBER# row with a create-only Put
+    of the audit row in one transaction the way agent-create's all-Puts
+    transaction does, so full atomicity is not available through the current
+    Store API here. Given that, the audit row is written BEFORE the state
+    change: a crash between the two over-records (an audit row whose state
+    change did not land) rather than under-records (a state change with no
+    trail). Over-recording is the safe direction for an append-only trail --
+    the alternative loses the one thing the system promises to keep.
+    """
     corr = _correlation_id(event)
-    audit = govern.admin_audit_event(org_id, "member.role_changed", actor,
+    audit = govern.admin_audit_event(org_id, action, actor,
                                      correlation_id=corr,
-                                     before={"role": target.role.value},
-                                     after={"role": patch["role"]},
-                                     detail=f"role of {subject} -> {new_role.value}")
+                                     before=before, after=after, detail=detail)
     store.put(audit)
-    return _resp(200, {"member": updated, "correlationId": audit["correlationId"]})
+    updated = store.update(K.org_pk(org_id), K.member_sk(subject), patch)
+    return {"member": _member_view(updated), "correlationId": audit["correlationId"]}
 
 
 def _admin_killswitch_status(store: Store, event: dict):
@@ -966,8 +1111,12 @@ def _admin_killswitch_status(store: Store, event: dict):
     read: whether the org is frozen is an org-policy fact, and the roles that
     may flip it (Owner/Admin/Security) are the ones that should see it."""
     D.assert_can(_membership(store, event), D.Capability.CHANGE_ORG_POLICIES)
-    row = store.try_get(K.org_pk(store.owner_id), "KILLSWITCH")
-    return _resp(200, {"frozen": govern.is_frozen(row), "killswitch": row})
+    org_id = _admin_org_id(event)
+    row = store.try_get(K.org_pk(org_id), "KILLSWITCH")
+    return _resp(200, {"frozen": govern.is_frozen(row),
+                       "reason": (row or {}).get("reason", ""),
+                       "setBy": (row or {}).get("setBy"),
+                       "setAt": (row or {}).get("setAt")})
 
 
 def _admin_killswitch_set(store: Store, body: dict, event: dict):
@@ -977,7 +1126,7 @@ def _admin_killswitch_set(store: Store, body: dict, event: dict):
     actor = _actor(event)
     D.assert_can(_membership(store, event), D.Capability.CHANGE_ORG_POLICIES)
     frozen = bool(body.get("frozen"))
-    org_id = actor.org_id
+    org_id = _admin_org_id(event)
     before = store.try_get(K.org_pk(org_id), "KILLSWITCH")
     row = govern.killswitch_row(org_id, frozen=frozen, actor=actor,
                                 reason=(body.get("reason") or ""))
@@ -989,22 +1138,25 @@ def _admin_killswitch_set(store: Store, body: dict, event: dict):
         detail=(body.get("reason") or ""))
     # The kill switch is a single overwriteable row (a re-freeze replaces it),
     # so it is a put rather than a transact_put's create-only write. The audit
-    # row is append-only and written right after; the audit trail is what must
-    # never be lost, and it survives whether or not the flip changed anything.
-    written = store.put(row)
+    # row is written FIRST for the same reason as _apply_member_change: the
+    # trail is the thing that must never be lost, so a crash over-records
+    # rather than losing the record of a freeze.
     store.put(audit)
-    return _resp(200, {"frozen": frozen, "killswitch": written,
+    written = store.put(row)
+    return _resp(200, {"frozen": frozen, "reason": written.get("reason", ""),
                        "correlationId": audit["correlationId"]})
 
 
 def _admin_audit(store: Store, event: dict):
     """Read-only, newest-first admin history. Requires READ_AUDIT_LOG so the
     read-only Auditor can see it (Owner/Admin/Security/Auditor) and a plain
-    Member cannot."""
+    Member cannot. Rows are projected through _audit_view so store internals
+    (pk/sk/ownerId/gsi keys) never reach the client."""
     D.assert_can(_membership(store, event), D.Capability.READ_AUDIT_LOG)
-    rows = store.query(K.org_pk(store.owner_id), sk_prefix="ADMINAUDIT#",
+    org_id = _admin_org_id(event)
+    rows = store.query(K.org_pk(org_id), sk_prefix="ADMINAUDIT#",
                        ascending=False, limit=500)
-    return _resp(200, {"audit": rows})
+    return _resp(200, {"audit": [_audit_view(r) for r in rows]})
 
 
 def _write_memory(store: Store, pk: str, body: dict, *, scope: str, actor: A.Actor) -> dict:

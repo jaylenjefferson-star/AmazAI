@@ -320,3 +320,190 @@ class TestFreezingFailsBotActionsClosed:
         out = orch._drive(w.store, w.store.get(w.run["pk"], "META"),
                           {"runId": w.run["runId"]})
         assert out["state"] == RunState.COMPLETED.value
+
+
+# --- review-response coverage (FEAT-003 v2) --------------------------------
+
+
+class TestRbacSeatReachesAdminUnderAllowlist:
+    """Review issue 2: with the owner allowlist configured, a non-owner
+    Admin/Security/Auditor seat must still reach /admin/* via the RBAC matrix
+    rather than being rejected at 401 by the allowlist before RBAC runs."""
+
+    def test_a_non_owner_admin_seat_reaches_admin_under_a_configured_allowlist(
+            self, admin_table, monkeypatch):
+        # Lock the deployment down to a single allowlisted owner that is NOT
+        # this caller. Before the fix, _principal -> assert_owner rejected the
+        # Admin at 401 here regardless of role.
+        monkeypatch.setenv("OWNER_SUBJECTS", "someone-else-entirely")
+        seed_member(admin_table, "adm", D.Role.ADMIN)
+
+        status, body = call("POST", "/admin/directory/invites",
+                            {"subject": "newbie", "role": "member"}, sub="adm")
+        assert status == 201
+        assert body["member"]["subject"] == "newbie"
+
+    def test_a_plain_member_is_still_denied_under_the_allowlist_by_rbac(
+            self, admin_table, monkeypatch):
+        # The allowlist bypass must not become a free pass: a non-owner with no
+        # capability is still refused, now by RBAC (403) rather than the
+        # allowlist (401).
+        monkeypatch.setenv("OWNER_SUBJECTS", "someone-else-entirely")
+        seed_member(admin_table, "plain", D.Role.MEMBER)
+        status, _ = call("POST", "/admin/directory/invites",
+                         {"subject": "x", "role": "member"}, sub="plain")
+        assert status == 403
+
+    def test_the_allowlist_still_guards_non_admin_routes(self, admin_table, monkeypatch):
+        # The reconciliation is scoped to /admin/*: a non-owner hitting an
+        # ordinary route under a configured allowlist is still rejected at 401.
+        monkeypatch.setenv("OWNER_SUBJECTS", "someone-else-entirely")
+        status, _ = call("GET", "/agents", sub="not-the-owner")
+        assert status == 401
+
+
+class TestInvitedSeatIsSingleTenantHonest:
+    """Review issue 1: the seam is single-tenant. An invite writes the seat
+    under the inviter's org; a genuine second human authenticating with their
+    own token keys on their OWN (empty) org and does NOT read the inviter's
+    org. The limitation is explicitly enforced by the data boundary, not
+    silently broken. This test authenticates AS the invited subject."""
+
+    def test_an_invited_human_does_not_read_the_inviters_org(self, admin_table):
+        # The owner invites a real second human.
+        status, _ = call("POST", "/admin/directory/invites",
+                         {"subject": "second-human", "role": "admin"})
+        assert status == 201
+
+        # That invited human authenticates with their OWN token. Their Store is
+        # Store("second-human") and their org is ORG#second-human -- a
+        # different, empty partition -- so they cannot read the inviter's
+        # roster. They resolve to the implicit Owner of their own empty org and
+        # see only themselves (no rows -> empty list), NOT the inviter's org.
+        status, body = call("GET", "/admin/directory", sub="second-human")
+        assert status == 200
+        subjects = [m["subject"] for m in body["members"]]
+        assert "second-human" not in subjects  # their own org has no rows yet
+        assert subjects == []  # and it is certainly not the inviter's roster
+
+    def test_membership_lookup_is_scoped_to_the_callers_own_org(self, admin_table):
+        # Directly at the identity layer: the invited human resolves to Owner
+        # of their OWN org, never to the seat written under the inviter.
+        call("POST", "/admin/directory/invites",
+             {"subject": "second-human", "role": "auditor"})
+        store = Store("second-human", table=admin_table)
+        m = identity.load_membership(store, identity.Principal(user_id="second-human"))
+        assert m.scope_id == "second-human"      # their own org, not the inviter's
+        assert m.role is D.Role.OWNER            # implicit owner of an empty org
+        assert m.state is D.MemberState.ACTIVE
+
+
+class TestDirectoryDoesNotLeakInternalFields:
+    """Review issue 3: the list (and audit) responses must project a
+    member-facing view, never the raw stored row with ownerId/pk/sk/gsi keys."""
+
+    def test_list_members_projects_a_view(self, admin_table):
+        seed_member(admin_table, OWNER, D.Role.OWNER)
+        seed_member(admin_table, "bob", D.Role.MEMBER, org=OWNER)
+        status, body = call("GET", "/admin/directory")
+        assert status == 200
+        for m in body["members"]:
+            assert set(m) == {"subject", "role", "scope", "scopeId", "state",
+                              "invitedBy", "invitedAt"}
+            for leaked in ("ownerId", "pk", "sk", "gsi1pk", "gsi1sk",
+                           "createdAt", "updatedAt", "entity"):
+                assert leaked not in m
+
+    def test_audit_projects_a_view(self, admin_table):
+        call("POST", "/admin/directory/invites", {"subject": "n", "role": "member"})
+        status, body = call("GET", "/admin/audit")
+        assert status == 200
+        row = body["audit"][0]
+        assert set(row) == {"action", "at", "actorUserId", "actorAgentId",
+                            "correlationId", "before", "after", "detail", "v"}
+        for leaked in ("ownerId", "pk", "sk", "gsi1pk", "gsi1sk", "orgId"):
+            assert leaked not in row
+
+
+class TestInviteValidation:
+    """Review issue 5: bad input is a 4xx with a clear message, never a 500."""
+
+    def test_an_unknown_role_is_a_400(self, admin_table):
+        status, body = call("POST", "/admin/directory/invites",
+                            {"subject": "x", "role": "superuser"})
+        assert status == 400
+        assert "superuser" in body["detail"]
+        assert audit_rows(admin_table) == []  # nothing written on a bad request
+
+    def test_a_self_invite_is_a_400(self, admin_table):
+        status, body = call("POST", "/admin/directory/invites",
+                            {"subject": OWNER, "role": "member"})
+        assert status == 400
+        assert "yourself" in body["detail"]
+
+    def test_a_missing_subject_is_a_400(self, admin_table):
+        status, _ = call("POST", "/admin/directory/invites", {"role": "member"})
+        assert status == 400
+
+    def test_a_duplicate_invite_is_a_clear_409(self, admin_table):
+        assert call("POST", "/admin/directory/invites",
+                    {"subject": "dup", "role": "member"})[0] == 201
+        status, body = call("POST", "/admin/directory/invites",
+                            {"subject": "dup", "role": "member"})
+        assert status == 409
+        assert "already has a seat" in body["detail"]
+
+    def test_change_role_with_a_missing_field_is_a_400(self, admin_table):
+        seed_member(admin_table, "carol", D.Role.MEMBER, org=OWNER)
+        status, _ = call("PATCH", "/admin/directory/carol", {})  # no "role"
+        assert status == 400
+
+    def test_change_role_with_an_unknown_role_is_a_400(self, admin_table):
+        seed_member(admin_table, "carol", D.Role.MEMBER, org=OWNER)
+        status, body = call("PATCH", "/admin/directory/carol", {"role": "wizard"})
+        assert status == 400
+        assert "wizard" in body["detail"]
+
+
+class TestAuditIsWrittenFirst:
+    """Review issue 6: for suspend/reactivate/change-role the audit row is
+    written BEFORE the state change, so a crash between them over-records
+    (an audit row without its state change) rather than under-records (a state
+    change with no audit trail)."""
+
+    def test_a_failed_state_change_still_left_the_audit_row(self, admin_table, monkeypatch):
+        seed_member(admin_table, "bob", D.Role.MEMBER, org=OWNER)
+
+        # Simulate a crash on the state-change write that lands AFTER the audit
+        # write. Because the audit is written first, the trail survives.
+        real_update = Store.update
+
+        def boom(self, *a, **k):
+            raise RuntimeError("crash between audit and state change")
+
+        monkeypatch.setattr(Store, "update", boom)
+        status, _ = call("POST", "/admin/directory/bob/suspend")
+        assert status == 500  # the update failed
+        monkeypatch.setattr(Store, "update", real_update)
+
+        # The audit row is present even though the suspend never applied: the
+        # trail over-records rather than losing the record.
+        rows = audit_rows(admin_table)
+        assert [r["action"] for r in rows] == ["member.suspended"]
+        # And the member is still ACTIVE -- the state change did not land.
+        member = Store(OWNER, table=admin_table).get(K.org_pk(OWNER), K.member_sk("bob"))
+        assert member["state"] == D.MemberState.ACTIVE.value
+
+
+class TestOrgIdIsThreadedConsistently:
+    """Review issue 4: reads and writes key on ONE org id (the verified
+    principal's org), so status/audit reads see exactly what the write path
+    wrote rather than reading a divergent notion of "the org"."""
+
+    def test_killswitch_status_reads_the_same_org_the_set_wrote(self, admin_table):
+        assert call("POST", "/admin/killswitch",
+                    {"frozen": True, "reason": "incident"})[0] == 200
+        status, body = call("GET", "/admin/killswitch")
+        assert status == 200
+        assert body["frozen"] is True
+        assert body["reason"] == "incident"
