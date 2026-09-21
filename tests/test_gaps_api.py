@@ -254,9 +254,27 @@ def test_editing_the_expression_reschedules(api_table, agent):
     assert scheduled[-1]["trigger"]["expression"] == "cron(0 17 * * ? *)"
 
 
-# --- artifacts --------------------------------------------------------------
+# --- files ------------------------------------------------------------------
 
-def test_only_runs_that_sealed_a_bundle_are_artifacts(api_table, agent):
+class ArtifactS3:
+    def list_objects_v2(self, **kwargs):
+        return {"Contents": [
+            {"Key": "evidence/run_sealed/artifacts/launch-plan.md", "Size": 1200,
+             "LastModified": "2026-01-02T00:00:00Z"},
+            {"Key": "evidence/run_sealed/manifest.json", "Size": 400,
+             "LastModified": "2026-01-02T00:00:00Z"},
+            {"Key": "evidence/run_open/artifacts/draft.md", "Size": 20,
+             "LastModified": "2026-01-03T00:00:00Z"},
+        ]}
+
+    def generate_presigned_url(self, operation, *, Params, ExpiresIn):
+        assert operation == "get_object" and ExpiresIn == 300
+        return f"https://download.example/{Params['Key']}"
+
+
+def test_only_actual_files_are_listed_not_sealed_runs(api_table, agent, monkeypatch):
+    monkeypatch.setenv("EVIDENCE_BUCKET", "evidence-test")
+    monkeypatch.setattr(api, "_artifact_s3", ArtifactS3)
     store = Store("owner-a")
     base = {"entity": "Run", "gsi1pk": "RUNS", "agentId": agent["agentId"]}
     store.put({**base, "pk": K.run_pk("run_sealed"), "sk": "META", "gsi1sk": "2026-01-02",
@@ -267,20 +285,21 @@ def test_only_runs_that_sealed_a_bundle_are_artifacts(api_table, agent):
 
     status, body = call("GET", "/artifacts")
     assert status == 200
-    # A run still in flight has produced nothing to point at yet.
-    assert [a["runId"] for a in body["artifacts"]] == ["run_sealed"]
-    assert body["artifacts"][0]["evidenceKey"] == "runs/run_sealed/manifest.json"
+    assert [a["name"] for a in body["artifacts"]] == ["draft.md", "launch-plan.md"]
+    assert body["artifacts"][1]["downloadUrl"].endswith("launch-plan.md")
 
 
-def test_artifacts_are_newest_first(api_table, agent):
+def test_files_are_newest_first(api_table, agent, monkeypatch):
+    monkeypatch.setenv("EVIDENCE_BUCKET", "evidence-test")
+    monkeypatch.setattr(api, "_artifact_s3", ArtifactS3)
     store = Store("owner-a")
-    for run_id, ended in (("run_old", "2026-01-01"), ("run_new", "2026-03-01")):
+    for run_id, ended in (("run_sealed", "2026-01-01"), ("run_open", "2026-03-01")):
         store.put({"pk": K.run_pk(run_id), "sk": "META", "entity": "Run",
                    "gsi1pk": "RUNS", "gsi1sk": ended, "runId": run_id,
                    "agentId": agent["agentId"], "state": "completed",
                    "endedAt": ended, "evidenceKey": f"runs/{run_id}/manifest.json"})
     _, body = call("GET", "/artifacts")
-    assert [a["runId"] for a in body["artifacts"]] == ["run_new", "run_old"]
+    assert [a["name"] for a in body["artifacts"]] == ["draft.md", "launch-plan.md"]
 
 
 # --- settings ---------------------------------------------------------------

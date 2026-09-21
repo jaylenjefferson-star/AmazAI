@@ -92,6 +92,24 @@ class TestDeliverFirstThenOffer:
         # Nothing was created: a card is a suggestion.
         assert call("GET", "/routines")[1]["routines"] == []
 
+
+class TestRetryState:
+    def test_a_second_transient_failure_retries_without_an_illegal_transition(self, world, monkeypatch):
+        monkeypatch.setattr(orch, "_reinvoke", lambda *args, **kwargs: None)
+
+        def unavailable(_):
+            raise RuntimeError("service unavailable")
+
+        world.script(unavailable)
+        assert world.drive()["state"] == RunState.RETRYING.value
+
+        # The next invocation starts in RETRYING. It must pass through
+        # EXECUTING before it can be parked for another retry.
+        world.script(unavailable)
+        assert world.drive({"runId": world.run["runId"], "resume": True})["state"] == RunState.RETRYING.value
+        saved = world.store.get(world.run["pk"], "META")
+        assert saved["state"] == RunState.RETRYING.value and saved["attempt"] == 2
+
     def test_a_connect_offer_needs_no_pause_and_the_run_completes(self, world):
         world.script([text("I set up a workspace."),
                       *tool_use("request_connector", {"connectorId": "nonexistentapp", "why": "x"})])

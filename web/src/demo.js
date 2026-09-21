@@ -154,22 +154,12 @@ const ROUTINES = [
 ];
 
 const ARTIFACTS = [
-  { runId: 'run_9a22', agentId: 'eng', threadId: 't-deploy',
-    goal: 'Ship the console to CloudFront',
-    outcome: 'completed', summary: 'Synced 14 objects and invalidated the cache.',
-    evidenceKey: 'runs/run_9a22/manifest.json',
-    startedAt: iso(-2 * 3600_000 - 6 * 60_000), endedAt: iso(-2 * 3600_000), costUsd: 0.128 },
-  { runId: 'run_5xx', agentId: 'ops', threadId: 't-alarm',
-    goal: 'Investigate the 5xx spike',
-    outcome: 'completed',
-    summary: 'Root cause was a stale cache entry from the previous deploy. Documented in the report.',
-    evidenceKey: 'runs/run_5xx/manifest.json',
-    startedAt: iso(-26 * 3600_000 - 40 * 60_000), endedAt: iso(-26 * 3600_000), costUsd: 0.41 },
-  { runId: 'run_fail1', agentId: 'res', threadId: null,
-    goal: 'Source vendors for the Q3 renewal',
-    outcome: 'failed', summary: 'Stopped after the browser connector hit its rate limit twice.',
-    evidenceKey: 'runs/run_fail1/manifest.json',
-    startedAt: iso(-4 * 86400_000 - 12 * 60_000), endedAt: iso(-4 * 86400_000), costUsd: 0.06 },
+  { artifactId: 'evidence/run_9a22/artifacts/launch-checklist.md', runId: 'run_9a22', agentId: 'eng',
+    name: 'launch-checklist.md', sizeBytes: 4821, updatedAt: iso(-2 * 3600_000), downloadUrl: '#' },
+  { artifactId: 'evidence/run_5xx/artifacts/incident-report.md', runId: 'run_5xx', agentId: 'ops',
+    name: 'incident-report.md', sizeBytes: 12334, updatedAt: iso(-26 * 3600_000), downloadUrl: '#' },
+  { artifactId: 'evidence/run_5xx/artifacts/cache-timeline.csv', runId: 'run_5xx', agentId: 'ops',
+    name: 'cache-timeline.csv', sizeBytes: 944, updatedAt: iso(-26 * 3600_000 - 40 * 60_000), downloadUrl: '#' },
 ];
 
 const MESSAGES = {
