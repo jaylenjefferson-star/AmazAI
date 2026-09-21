@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import ConfirmAction from './ConfirmAction';
 
-const ROLES = ['owner', 'admin', 'member', 'viewer'];
+// The six real roles, matching the server's directory.Role enum exactly
+// (owner, admin, security, billing, member, auditor). Anything not in this
+// set is rejected by the server with a 400 (`unknown role`), so the picker
+// must never offer a value outside it.
+const ROLES = ['owner', 'admin', 'security', 'billing', 'member', 'auditor'];
 
 /**
  * The Directory: who is in the organization, and the governance actions that
@@ -40,7 +44,7 @@ export default function AdminDirectory() {
       description: 'A suspended member keeps no active session and cannot act until reactivated.',
       confirmToken: m.subject,
       confirmLabel: 'Suspend member',
-      run: () => api.admin.suspend(m.subject),
+      run: (reason) => api.admin.suspend(m.subject, reason),
     };
   }
   function reactivateAction(m) {
@@ -50,7 +54,7 @@ export default function AdminDirectory() {
       confirmToken: m.subject,
       confirmLabel: 'Reactivate member',
       danger: false,
-      run: () => api.admin.reactivate(m.subject),
+      run: (reason) => api.admin.reactivate(m.subject, reason),
     };
   }
   function changeRoleAction(m, role) {
@@ -60,7 +64,7 @@ export default function AdminDirectory() {
       confirmToken: m.subject,
       confirmLabel: `Set role to ${role}`,
       danger: role === 'owner',
-      run: () => api.admin.changeRole(m.subject, { role }),
+      run: (reason) => api.admin.changeRole(m.subject, { role, reason }),
     };
   }
   function resetOnboardingAction(m) {
@@ -71,8 +75,9 @@ export default function AdminDirectory() {
       confirmToken: m.subject,
       confirmLabel: 'Reset onboarding',
       // The agent to reset is keyed on the member's subject in this
-      // single-tenant seam; the server resolves it to the entrypoint Bot.
-      run: () => api.admin.resetOnboarding(m.subject),
+      // single-tenant seam (org_id == user_id); the server resolves it to the
+      // owner's entrypoint Bot and 400s anything that is not the entrypoint.
+      run: (reason) => api.admin.resetOnboarding(m.subject, reason),
     };
   }
   function archiveMemoryAction(m) {
@@ -82,7 +87,7 @@ export default function AdminDirectory() {
         + 'appearing in future prompts. Evidence and audit rows are never touched.',
       confirmToken: m.subject,
       confirmLabel: 'Archive memory',
-      run: () => api.admin.archiveMemory(m.subject),
+      run: (reason) => api.admin.archiveMemory(m.subject, reason),
     };
   }
 
@@ -147,8 +152,18 @@ export default function AdminDirectory() {
                 </select>
               </label>
 
-              <button type="button" className="ghost" onClick={() => setPending(resetOnboardingAction(m))}>Reset onboarding</button>
-              <button type="button" className="danger" onClick={() => setPending(archiveMemoryAction(m))}>Archive memory</button>
+              {/* Single-tenant seam: only the Owner's row maps to a real
+                  agent (the entrypoint Bot and the owner-scoped memory the
+                  server can act on). Surfacing reset/archive on every row --
+                  including members and Bots that map to no agent -- would just
+                  400/404. Scope them to the Owner until the console has a
+                  real agent listing to key on (a multi-tenant follow-up). */}
+              {m.role === 'owner' && (
+                <>
+                  <button type="button" className="ghost" onClick={() => setPending(resetOnboardingAction(m))}>Reset onboarding</button>
+                  <button type="button" className="danger" onClick={() => setPending(archiveMemoryAction(m))}>Archive memory</button>
+                </>
+              )}
             </div>
           </div>
         ))}

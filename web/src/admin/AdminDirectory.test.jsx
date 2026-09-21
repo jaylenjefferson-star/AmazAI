@@ -58,38 +58,46 @@ describe('AdminDirectory', () => {
     fireEvent.click(confirmBtn);
     expect(api.admin.suspend).not.toHaveBeenCalled();
 
-    // Both present: the gate opens and the call fires against the right subject.
+    // Both present: the gate opens and the call fires against the right
+    // subject, carrying the typed reason so the audit detail records why.
     fireEvent.change(within(dialog).getByLabelText('Confirmation'), { target: { value: 'auth0|teammate' } });
+    fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'off-boarding' } });
     expect(confirmBtn.disabled).toBe(false);
     fireEvent.click(confirmBtn);
-    await waitFor(() => expect(api.admin.suspend).toHaveBeenCalledWith('auth0|teammate'));
+    await waitFor(() => expect(api.admin.suspend).toHaveBeenCalledWith('auth0|teammate', 'off-boarding'));
   });
 
-  it('blocks reset-onboarding and archive-memory the same way', async () => {
+  it('scopes reset-onboarding and archive-memory to the Owner row and threads the reason', async () => {
     render(<AdminDirectory />);
     await screen.findByText('auth0|teammate');
 
+    // Single-tenant seam: only the Owner's row ('you') maps to a real agent,
+    // so the reset/archive buttons appear there and nowhere else. The member
+    // row has no such buttons -- exactly one of each exists in the directory.
+    expect(screen.getAllByRole('button', { name: 'Reset onboarding' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'Archive memory' }).length).toBe(1);
+
     // Reset onboarding, scoped to the confirm dialog so the row button and the
     // confirm button (same label) are never confused.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Reset onboarding' })[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset onboarding' }));
     let dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Reset onboarding' }));
     expect(api.admin.resetOnboarding).not.toHaveBeenCalled();
 
-    fireEvent.change(within(dialog).getByLabelText('Confirmation'), { target: { value: 'auth0|teammate' } });
+    fireEvent.change(within(dialog).getByLabelText('Confirmation'), { target: { value: 'you' } });
     fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'stale setup' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Reset onboarding' }));
-    await waitFor(() => expect(api.admin.resetOnboarding).toHaveBeenCalledWith('auth0|teammate'));
+    await waitFor(() => expect(api.admin.resetOnboarding).toHaveBeenCalledWith('you', 'stale setup'));
 
     // Archive memory: same gate.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Archive memory' })[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive memory' }));
     dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive memory' }));
     expect(api.admin.archiveMemory).not.toHaveBeenCalled();
 
-    fireEvent.change(within(dialog).getByLabelText('Confirmation'), { target: { value: 'auth0|teammate' } });
+    fireEvent.change(within(dialog).getByLabelText('Confirmation'), { target: { value: 'you' } });
     fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'privacy request' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive memory' }));
-    await waitFor(() => expect(api.admin.archiveMemory).toHaveBeenCalledWith('auth0|teammate'));
+    await waitFor(() => expect(api.admin.archiveMemory).toHaveBeenCalledWith('you', 'privacy request'));
   });
 });

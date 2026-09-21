@@ -375,10 +375,18 @@ function adminAudit(action, extra = {}) {
   });
 }
 
-function adminSetState(subject, state, action) {
+// Fold an operator's typed reason into a demo detail string, mirroring the
+// server's _with_reason so the demo audit trail reads the same way.
+function withReason(base, reason) {
+  return (typeof reason === 'string' && reason.trim())
+    ? `${base} (reason: ${reason.trim()})`
+    : base;
+}
+
+function adminSetState(subject, state, action, detail) {
   const m = ADMIN_MEMBERS.find((x) => x.subject === subject);
   if (m) m.state = state;
-  adminAudit(action, { after: { state } });
+  adminAudit(action, { after: { state }, detail: detail || '' });
   return { member: m, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
 }
 
@@ -679,13 +687,18 @@ export const demoApi = {
       adminAudit('member.invited', { after: { subject: member.subject, role: member.role } });
       return { member, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
     },
-    suspend: async (subject) => (await wait(80), adminSetState(subject, 'suspended', 'member.suspended')),
-    reactivate: async (subject) => (await wait(80), adminSetState(subject, 'active', 'member.reactivated')),
+    suspend: async (subject, reason) => (await wait(80),
+      adminSetState(subject, 'suspended', 'member.suspended', withReason(`suspended ${subject}`, reason))),
+    reactivate: async (subject, reason) => (await wait(80),
+      adminSetState(subject, 'active', 'member.reactivated', withReason(`reactivated ${subject}`, reason))),
     changeRole: async (subject, body) => {
       await wait(80);
       const m = ADMIN_MEMBERS.find((x) => x.subject === subject);
       if (m) m.role = body.role;
-      adminAudit('member.role_changed', { after: { role: body.role } });
+      adminAudit('member.role_changed', {
+        after: { role: body.role },
+        detail: withReason(`role of ${subject} -> ${body.role}`, body.reason),
+      });
       return { member: m, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
     },
     killswitch: async () => (await wait(70), { ...ADMIN_KILLSWITCH }),
@@ -697,15 +710,18 @@ export const demoApi = {
       return { ...ADMIN_KILLSWITCH, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
     },
     audit: async () => (await wait(90), { audit: [...ADMIN_AUDIT].reverse() }),
-    resetOnboarding: async (agentId) => {
+    resetOnboarding: async (agentId, reason) => {
       await wait(120);
-      adminAudit('onboarding.reset', { detail: `reset ${agentId} to onboarding` });
+      adminAudit('onboarding.reset', { detail: withReason(`reset ${agentId} to onboarding`, reason) });
       return { agentId, reset: true, clearedMessages: 0,
                correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
     },
-    archiveMemory: async (agentId) => {
+    archiveMemory: async (agentId, reason) => {
       await wait(120);
-      adminAudit('agent.memory_archived', { before: { published: 3 }, after: { published: 0 } });
+      adminAudit('agent.memory_archived', {
+        before: { published: 3 }, after: { published: 0 },
+        detail: withReason(`archived 3 memory rows for ${agentId}`, reason),
+      });
       return { agentId, revoked: 3, publishedBefore: 3,
                correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
     },

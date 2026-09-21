@@ -118,16 +118,20 @@ const live = {
   admin: {
     directory: () => call('GET', '/admin/directory'),
     invite: (body) => call('POST', '/admin/directory/invites', body),
-    suspend: (subject) => call('POST', `/admin/directory/${encodeURIComponent(subject)}/suspend`, {}),
-    reactivate: (subject) => call('POST', `/admin/directory/${encodeURIComponent(subject)}/reactivate`, {}),
+    // The typed reason from ConfirmAction rides in the body so the server folds
+    // it into the append-only audit `detail`. The {subject}/{agentId} is the
+    // TARGET from the path; only the free-text reason is body-supplied.
+    suspend: (subject, reason) => call('POST', `/admin/directory/${encodeURIComponent(subject)}/suspend`, { reason }),
+    reactivate: (subject, reason) => call('POST', `/admin/directory/${encodeURIComponent(subject)}/reactivate`, { reason }),
     changeRole: (subject, body) => call('PATCH', `/admin/directory/${encodeURIComponent(subject)}`, body),
     killswitch: () => call('GET', '/admin/killswitch'),
     setKillswitch: (body) => call('POST', '/admin/killswitch', body),
     audit: () => call('GET', '/admin/audit'),
     // Put the entrypoint Bot back through onboarding; archive (revoke) a Bot's
-    // accumulated memory. Neither ever deletes an audit/evidence row.
-    resetOnboarding: (agentId) => call('POST', `/admin/agents/${encodeURIComponent(agentId)}/reset-onboarding`, {}),
-    archiveMemory: (agentId) => call('POST', `/admin/agents/${encodeURIComponent(agentId)}/archive-memory`, {}),
+    // accumulated memory. Neither ever deletes an audit/evidence row. The
+    // operator's reason travels in the body into the audit detail.
+    resetOnboarding: (agentId, reason) => call('POST', `/admin/agents/${encodeURIComponent(agentId)}/reset-onboarding`, { reason }),
+    archiveMemory: (agentId, reason) => call('POST', `/admin/agents/${encodeURIComponent(agentId)}/archive-memory`, { reason }),
   },
 };
 

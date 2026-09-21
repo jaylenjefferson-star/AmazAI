@@ -899,10 +899,10 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         return _admin_invite(store, body, event)
 
     if (p := _match(path, "/admin/directory/{subject}/suspend")) and method == "POST":
-        return _admin_suspend(store, p[0], event)
+        return _admin_suspend(store, p[0], body, event)
 
     if (p := _match(path, "/admin/directory/{subject}/reactivate")) and method == "POST":
-        return _admin_reactivate(store, p[0], event)
+        return _admin_reactivate(store, p[0], body, event)
 
     if (p := _match(path, "/admin/directory/{subject}")) and method == "PATCH":
         return _admin_change_role(store, p[0], body, event)
@@ -921,7 +921,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     # archive a bot's accumulated memory. Both are gated on the RBAC matrix and
     # audited; neither ever deletes an AUDIT#/evidence row (docs/architecture/10).
     if (p := _match(path, "/admin/agents/{id}/reset-onboarding")) and method == "POST":
-        return _admin_reset_onboarding(store, p[0], event)
+        return _admin_reset_onboarding(store, p[0], body, event)
 
     if (p := _match(path, "/admin/agents/{id}/archive-memory")) and method == "POST":
         return _admin_archive_memory(store, p[0], body, event)
@@ -970,6 +970,21 @@ def _correlation_id(event: dict) -> str | None:
     state change so a UI can link the admin action to the run evidence it
     causes (docs/architecture/10)."""
     return _header(event, "x-correlation-id") or None
+
+
+def _with_reason(base: str, body: dict) -> str:
+    """Fold the operator's typed reason into a system-generated audit detail.
+
+    The confirm dialog collects a free-text reason precisely so the
+    append-only trail records WHY, not just what. The subject/agent id is
+    still taken from the path (never from the body); only the reason is
+    body-supplied. A blank or missing reason leaves the base detail untouched,
+    so the row is never worse than before this change.
+    """
+    reason = (body or {}).get("reason")
+    if isinstance(reason, str) and reason.strip():
+        return f"{base} (reason: {reason.strip()})"
+    return base
 
 
 def _parse_role(value, *, default: "D.Role | None" = None) -> "D.Role":
@@ -1086,12 +1101,16 @@ def _admin_invite(store: Store, body: dict, event: dict):
                        "correlationId": audit["correlationId"]})
 
 
-def _admin_suspend(store: Store, subject: str, event: dict):
+def _admin_suspend(store: Store, subject: str, body: dict, event: dict):
     """Offboard a human. Mapped to TERMINATE_COMPUTER: it is the closest
     offboarding control in the matrix (Owner/Admin/Security), and suspending a
     seat is the human analogue of terminating a running computer -- both are
     "stop this actor now". The seat becomes SUSPENDED, never deleted, so the
-    audit trail survives it."""
+    audit trail survives it.
+
+    The subject is the TARGET, read from the path; the optional free-text
+    reason on the body is the operator's justification and is folded into the
+    audit detail so the trail records why the seat was suspended."""
     actor = _actor(event)
     D.assert_can(_membership(store, event), D.Capability.TERMINATE_COMPUTER)
     org_id = _admin_org_id(event)
@@ -1103,15 +1122,18 @@ def _admin_suspend(store: Store, subject: str, event: dict):
         action="member.suspended",
         before={"state": target.state.value},
         after={"state": patch["state"]},
-        detail=f"suspended {subject}")
+        detail=_with_reason(f"suspended {subject}", body))
     return _resp(200, updated)
 
 
-def _admin_reactivate(store: Store, subject: str, event: dict):
+def _admin_reactivate(store: Store, subject: str, body: dict, event: dict):
     """Return an invited or suspended seat to ACTIVE. Requires INVITE_USERS:
     reactivating is the same "who may seat a human" authority as inviting
     (Owner/Admin), so it shares that capability rather than the offboarding
-    one."""
+    one.
+
+    The subject is the TARGET, read from the path; the optional free-text
+    reason on the body is folded into the audit detail."""
     actor = _actor(event)
     D.assert_can(_membership(store, event), D.Capability.INVITE_USERS)
     org_id = _admin_org_id(event)
@@ -1123,7 +1145,7 @@ def _admin_reactivate(store: Store, subject: str, event: dict):
         action="member.reactivated",
         before={"state": target.state.value},
         after={"state": patch["state"]},
-        detail=f"reactivated {subject}")
+        detail=_with_reason(f"reactivated {subject}", body))
     return _resp(200, updated)
 
 
@@ -1144,7 +1166,7 @@ def _admin_change_role(store: Store, subject: str, body: dict, event: dict):
         action="member.role_changed",
         before={"role": target.role.value},
         after={"role": patch["role"]},
-        detail=f"role of {subject} -> {new_role.value}")
+        detail=_with_reason(f"role of {subject} -> {new_role.value}", body))
     return _resp(200, updated)
 
 
@@ -1240,7 +1262,7 @@ def _admin_audit(store: Store, event: dict):
     return _resp(200, {"audit": [_audit_view(r) for r in rows]})
 
 
-def _admin_reset_onboarding(store: Store, agent_id: str, event: dict):
+def _admin_reset_onboarding(store: Store, agent_id: str, body: dict, event: dict):
     """Put the entrypoint Bot back through onboarding.
 
     Gated on CHANGE_ORG_POLICIES rather than the per-agent PATCH authority:
@@ -1259,10 +1281,13 @@ def _admin_reset_onboarding(store: Store, agent_id: str, event: dict):
     they describe (docs/architecture/10).
     """
     actor = _actor(event)
-    # Gate BEFORE any read or write: the RBAC negative must fire before the
-    # agent is even looked up, and before any audit row is written.
-    D.assert_can(_membership(store, event), D.Capability.CHANGE_ORG_POLICIES)
+    # Gate BEFORE any read or write, in the documented order the member-write
+    # handlers use: guard_principal (via _membership) -> assert_not_frozen ->
+    # assert_can. The kill switch is the outermost gate, so a frozen org is
+    # rejected even for a principal who would also fail RBAC.
+    membership = _membership(store, event)
     govern.assert_not_frozen(store.try_get(K.org_pk(_admin_org_id(event)), "KILLSWITCH"))
+    D.assert_can(membership, D.Capability.CHANGE_ORG_POLICIES)
 
     agent = store.get(K.agent_pk(agent_id), "META")   # 404 if not this owner's
     if agent.get("entrypoint") is not True:
@@ -1315,7 +1340,7 @@ def _admin_reset_onboarding(store: Store, agent_id: str, event: dict):
         correlation_id=_correlation_id(event),
         before={"messages": len(existing_msgs)},
         after={"systemPrompt": "brief", "messages": 1},
-        detail=f"reset {agent_id} to onboarding")
+        detail=_with_reason(f"reset {agent_id} to onboarding", body))
     store.put(audit)
     return _resp(200, {"agentId": agent_id, "reset": True,
                        "clearedMessages": len(existing_msgs),
@@ -1337,10 +1362,14 @@ def _admin_archive_memory(store: Store, agent_id: str, body: dict, event: dict):
     rows are never touched (append-only, permanent per docs/architecture/10).
     """
     actor = _actor(event)
-    # Gate FIRST: the RBAC negative fires before the agent is looked up and
-    # before any row is revoked or any audit row is written.
-    D.assert_can(_membership(store, event), D.Capability.TERMINATE_COMPUTER)
+    # Gate FIRST, in the documented order the member-write handlers use:
+    # guard_principal (via _membership) -> assert_not_frozen -> assert_can.
+    # The kill switch is the outermost gate, so a frozen org is rejected even
+    # for a principal who would also fail RBAC; all three still precede the
+    # agent lookup and any revoke or audit write.
+    membership = _membership(store, event)
     govern.assert_not_frozen(store.try_get(K.org_pk(_admin_org_id(event)), "KILLSWITCH"))
+    D.assert_can(membership, D.Capability.TERMINATE_COMPUTER)
 
     agent = store.get(K.agent_pk(agent_id), "META")   # 404 if not this owner's
 
@@ -1372,7 +1401,7 @@ def _admin_archive_memory(store: Store, agent_id: str, body: dict, event: dict):
         correlation_id=_correlation_id(event),
         before={"published": published_before},
         after={"published": published_before - revoked},
-        detail=f"archived {revoked} memory rows for {agent_id}")
+        detail=_with_reason(f"archived {revoked} memory rows for {agent_id}", body))
     store.put(audit)
     return _resp(200, {"agentId": agent_id, "revoked": revoked,
                        "publishedBefore": published_before,

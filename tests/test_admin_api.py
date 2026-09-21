@@ -768,3 +768,66 @@ class TestArchiveMemory:
             reason="incident"))
         status, _ = call("POST", f"/admin/agents/{agent_id}/archive-memory")
         assert status == 403
+
+
+class TestOperatorReasonReachesTheAuditDetail:
+    """The confirm dialog collects a free-text reason precisely so the
+    append-only trail records WHY, not just what. The reason travels in the
+    POST body and the handler folds it into the audit `detail`. The subject/
+    agent id is still taken from the path (never the body); only the reason is
+    body-supplied."""
+
+    def test_suspend_reason_lands_in_the_detail(self, admin_table):
+        seed_member(admin_table, "bob", D.Role.MEMBER, org=OWNER)
+        status, _ = call("POST", "/admin/directory/bob/suspend",
+                         {"reason": "left the company"})
+        assert status == 200
+        row = audit_rows(admin_table)[0]
+        assert row["action"] == "member.suspended"
+        assert "suspended bob" in row["detail"]
+        assert "left the company" in row["detail"]
+
+    def test_reactivate_reason_lands_in_the_detail(self, admin_table):
+        seed_member(admin_table, "bob", D.Role.MEMBER, org=OWNER,
+                    state=D.MemberState.SUSPENDED)
+        status, _ = call("POST", "/admin/directory/bob/reactivate",
+                         {"reason": "rehired for Q3"})
+        assert status == 200
+        row = audit_rows(admin_table)[0]
+        assert row["action"] == "member.reactivated"
+        assert "rehired for Q3" in row["detail"]
+
+    def test_change_role_reason_lands_in_the_detail(self, admin_table):
+        seed_member(admin_table, "carol", D.Role.MEMBER, org=OWNER)
+        status, _ = call("PATCH", "/admin/directory/carol",
+                         {"role": "admin", "reason": "promoted to admin"})
+        assert status == 200
+        row = audit_rows(admin_table)[0]
+        assert row["action"] == "member.role_changed"
+        assert "promoted to admin" in row["detail"]
+
+    def test_reset_onboarding_reason_lands_in_the_detail(self, admin_table):
+        agent_id = seed_entrypoint_agent(admin_table)
+        status, _ = call("POST", f"/admin/agents/{agent_id}/reset-onboarding",
+                         {"reason": "stale onboarding brief"})
+        assert status == 200
+        row = audit_rows(admin_table)[0]
+        assert row["action"] == "onboarding.reset"
+        assert "stale onboarding brief" in row["detail"]
+
+    def test_archive_memory_reason_lands_in_the_detail(self, admin_table):
+        agent_id = seed_entrypoint_agent(admin_table)
+        seed_agent_memory(admin_table, agent_id)
+        status, _ = call("POST", f"/admin/agents/{agent_id}/archive-memory",
+                         {"reason": "data retention purge"})
+        assert status == 200
+        row = audit_rows(admin_table)[0]
+        assert row["action"] == "agent.memory_archived"
+        assert "data retention purge" in row["detail"]
+
+    def test_a_blank_reason_leaves_the_base_detail_untouched(self, admin_table):
+        seed_member(admin_table, "bob", D.Role.MEMBER, org=OWNER)
+        status, _ = call("POST", "/admin/directory/bob/suspend", {"reason": "  "})
+        assert status == 200
+        row = audit_rows(admin_table)[0]
+        assert row["detail"] == "suspended bob"
