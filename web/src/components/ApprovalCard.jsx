@@ -19,7 +19,7 @@ function remaining(expiresAt) {
 const PROPOSALS = {
   'agent.create': {
     title: 'A Bot is proposed', yes: 'Create Bot', no: 'Not now',
-    fields: ['name', 'role', 'description'],
+    fields: ['name', 'title', 'role', 'description', 'firstTask'],
     note: 'It starts with the apps you have connected and a small budget. Anything that changes something still asks you.',
   },
   'skill.create': {
@@ -89,6 +89,17 @@ export default function ApprovalCard({ approval, onDecide }) {
   const urgent = !!left && left.ms < 60000;
   const high = approval.risk === 'high' && !proposal;
   const irreversible = approval.reversible === false && !proposal;
+  const outcome = approval.executionStatus === 'failed'
+    ? { tone: 'failed', text: `Creation failed: ${approval.executionError || 'unknown error'}` }
+    : approval.action === 'agent.create' && approval.executionStatus === 'created'
+      ? approval.firstTaskStatus?.status === 'deferred'
+        ? { tone: 'waiting', text: `Bot created. First task is waiting: ${approval.firstTaskStatus.reason || 'recipient unavailable'}` }
+        : approval.firstTaskStatus?.status === 'queued'
+          ? { tone: 'waiting', text: 'Bot created. First task is queued for retry.' }
+          : approval.firstTaskStatus?.status === 'started'
+            ? { tone: 'done', text: 'Bot created. First task started.' }
+            : { tone: 'done', text: 'Bot created.' }
+      : null;
   // Only an ordinary write can be waved through next time: never a destructive or
   // irreversible one, and never one on the always-approve floor (policy ignores a
   // pre-approval there anyway, so offering it would be a promise the server breaks).
@@ -127,6 +138,10 @@ export default function ApprovalCard({ approval, onDecide }) {
         </div>
       )}
 
+      {outcome && (
+        <div className={`proposal-outcome ${outcome.tone}`} role="status">{outcome.text}</div>
+      )}
+
       {irreversible && !settled && !expired && (
         <div className="irreversible">
           <span aria-hidden="true">⚠</span>
@@ -145,8 +160,10 @@ export default function ApprovalCard({ approval, onDecide }) {
         <dt>Action</dt><dd>{actionLabel(approval.action)}</dd>
         {shown.map(([k, v]) => (
           <span key={k} style={{ display: 'contents' }}>
-            <dt>{k}</dt>
-            <dd className={k === 'body' ? 'prose' : undefined}>{clip(v)}</dd>
+            <dt>{k === 'firstTask' ? 'first task' : k}</dt>
+            <dd className={k === 'firstTask' ? 'prose proposal-task' : k === 'body' ? 'prose' : undefined}>
+              {k === 'firstTask' ? String(v) : clip(v)}
+            </dd>
           </span>
         ))}
         {!proposal && target.account && (

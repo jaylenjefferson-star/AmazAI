@@ -246,3 +246,107 @@ class TestApprovingMakesTheAgentUsable:
         child = self._approve(store, api_table, monkeypatch)
         assert C.granted_apps(store, child)
         assert evaluate("SLACK_SEND_MESSAGE", Cap.WRITE).required is True
+
+
+
+class TestApprovedCreationAlwaysResumesTheProposer:
+    def setup_approval(self, api_table, *, first_task="Summarise the rivals."):
+        from amazai.store import Store
+
+        call("POST", "/agents", NEW_AGENT)
+        store = Store("owner-a", table=api_table)
+        store.update(K.agent_pk("cloud-operations"), "META",
+                     {"model": {"modelId": "resolved-model", "tier": "balanced"}})
+        run = runs.create(store, agent_id="cloud-operations", thread_id="dm-cloud-operations",
+                          goal="propose a companion", trigger={"type": "routine"})
+        run = runs.advance(store, run, RunState.PLANNING)
+        run = runs.advance(store, run, RunState.EXECUTING)
+        proposal = orch._agent_creation_proposal({
+            "name": "Shadow Agent", "role": "Handles a bounded lane.",
+            "description": "Owns a bounded lane.", "firstTask": first_task,
+        }, parent_agent_id="cloud-operations")
+        apv = approvals.request(store, run, action="agent.create", arguments=proposal,
+                                why="x", capability=Capability.ADMIN)
+        run = runs.pause_for_approval(store, run, apv)
+        return store, run, apv
+
+    def test_a_deferred_first_task_is_reported_and_the_parent_resumes(self, api_table, monkeypatch):
+        import handlers.api as api
+        store, run, apv = self.setup_approval(api_table)
+        monkeypatch.setattr(api.collab, "may_wake_now",
+                            lambda store, bot, limits: (False, "over budget"))
+        resumed = []
+        monkeypatch.setattr(api, "_invoke_orchestrator",
+                            lambda run_id, owner_id, **kw: resumed.append((run_id, kw)))
+
+        status, result = call(
+            "POST", f"/approvals/{run['runId']}/{apv['approvalId']}", {"approve": True})
+
+        assert status == 200 and result["createdAgent"]["status"] == "active"
+        assert result["firstTask"] == {"status": "deferred", "reason": "over budget"}
+        assert result["approval"]["executionStatus"] == "created"
+        assert result["approval"]["firstTaskStatus"] == result["firstTask"]
+        assert store.get(run["pk"], "META")["state"] == RunState.EXECUTING.value
+        assert resumed and resumed[-1][0] == run["runId"] and resumed[-1][1]["resume"] is True
+        saved = store.get(run["pk"], K.approval_sk(apv["approvalId"]))
+        assert saved["executionStatus"] == "created"
+        assert saved["firstTaskStatus"]["status"] == "deferred"
+        events = store.query(K.thread_pk(run["threadId"]), sk_prefix="MSG#")
+        assert any("first task waiting: over budget" in e.get("text", "") for e in events)
+
+    def test_a_creation_failure_is_recorded_and_the_parent_still_resumes(self, api_table, monkeypatch):
+        import handlers.api as api
+        store, run, apv = self.setup_approval(api_table)
+        monkeypatch.setattr(api, "_create_approved_agent",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("provision failed")))
+        resumed = []
+        monkeypatch.setattr(api, "_invoke_orchestrator",
+                            lambda run_id, owner_id, **kw: resumed.append((run_id, kw)))
+
+        status, result = call(
+            "POST", f"/approvals/{run['runId']}/{apv['approvalId']}", {"approve": True})
+
+        assert status == 200 and "provision failed" in result["creationError"]
+        assert result["approval"]["executionStatus"] == "failed"
+        assert "provision failed" in result["approval"]["executionError"]
+        assert store.get(run["pk"], "META")["state"] == RunState.EXECUTING.value
+        assert resumed and resumed[-1][0] == run["runId"]
+        saved = store.get(run["pk"], K.approval_sk(apv["approvalId"]))
+        assert saved["executionStatus"] == "failed"
+        assert "provision failed" in saved["executionError"]
+        events = store.query(K.thread_pk(run["threadId"]), sk_prefix="MSG#")
+        assert any("Bot creation failed" in e.get("text", "") for e in events)
+
+
+
+def test_creation_outcome_history_failure_cannot_strand_the_parent(api_table, monkeypatch):
+    import handlers.api as api
+    from amazai.store import Store
+
+    call("POST", "/agents", NEW_AGENT)
+    store = Store("owner-a", table=api_table)
+    store.update(K.agent_pk("cloud-operations"), "META",
+                 {"model": {"modelId": "resolved-model", "tier": "balanced"}})
+    run = runs.create(store, agent_id="cloud-operations", thread_id="dm-cloud-operations",
+                      goal="propose a companion", trigger={"type": "routine"})
+    run = runs.advance(store, run, RunState.PLANNING)
+    run = runs.advance(store, run, RunState.EXECUTING)
+    proposal = orch._agent_creation_proposal(
+        {"name": "Shadow Agent", "role": "Handles a bounded lane.", "description": "x"},
+        parent_agent_id="cloud-operations")
+    apv = approvals.request(store, run, action="agent.create", arguments=proposal,
+                            why="x", capability=Capability.ADMIN)
+    run = runs.pause_for_approval(store, run, apv)
+    resumed = []
+    monkeypatch.setattr(api.threads, "event",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("history unavailable")))
+    monkeypatch.setattr(api, "_invoke_orchestrator",
+                        lambda run_id, owner_id, **kw: resumed.append((run_id, kw)))
+
+    status, result = call(
+        "POST", f"/approvals/{run['runId']}/{apv['approvalId']}", {"approve": True})
+
+    assert status == 200 and result["createdAgent"]["status"] == "active"
+    assert "execution history" in result["creationWarning"]
+    assert store.get(run["pk"], "META")["state"] == RunState.EXECUTING.value
+    assert resumed and resumed[-1][0] == run["runId"]

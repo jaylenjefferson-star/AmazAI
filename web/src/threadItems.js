@@ -24,6 +24,19 @@ export function threadToItems(messages = []) {
       out.push({ type: 'event', text: m.text, icon: m.icon, key: `${base}:event` });
       continue;
     }
+    if (m.kind === 'briefing') {
+      out.push({
+        type: 'agentnote', key: `${base}:briefing`,
+        at: m.at || String(m.sk || '').split('#')[1],
+        note: {
+          kind: 'briefing', fromAgentId: m.fromAgentId,
+          fromName: m.author,
+          toAgentId: m.toAgentId || m.agentId,
+          summary: m.text, at: m.at || String(m.sk || '').split('#')[1],
+        },
+      });
+      continue;
+    }
     if (m.steps?.length) {
       out.push({ type: 'steps', key: `${base}:steps`, steps: {
         items: m.steps.map((s) => ({ ...s, at: ms(s.at) })),

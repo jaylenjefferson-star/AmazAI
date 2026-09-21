@@ -70,8 +70,9 @@ INLINE_TOOLS = {
                 "tools": {"type": "array", "items": {"type": "string"},
                           "description": "Optional built-ins: browser, code_interpreter (only ones you have)"},
                 "avatar": {"type": "object"},
-                "firstTask": {"type": "string",
-                              "description": "The first job, with what done looks like"},
+                "firstTask": {"type": "string", "maxLength": 4000,
+                              "description": ("The exact first job, at most 4000 characters, "
+                                              "including what done looks like")},
                 "why": {"type": "string", "description": "Why a separate Bot is needed"},
             },
             "required": ["name", "role", "description"],

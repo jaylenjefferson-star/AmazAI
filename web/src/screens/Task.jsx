@@ -12,7 +12,7 @@ import ToolsSheet from '../components/ToolsSheet';
 import WorkspaceSheet from '../components/WorkspaceSheet';
 import { api } from '../api';
 import { presentAgent, useAgents } from '../hooks/useAgents';
-import { alwaysAllow } from '../lib/approvals';
+import { alwaysAllow, settledApproval } from '../lib/approvals';
 import { download } from '../lib/download';
 import { COPY, friendly } from '../lib/errors';
 import { clearStream, usePresence, useSteps, useStreamingText } from '../presence';
@@ -27,6 +27,21 @@ const COMMANDS = [
   { key: 'remember', hint: 'Save a fact to this Bot’s memory' },
   { key: 'routine', hint: 'Set up a routine for this Bot' },
 ];
+
+export function transcriptFor(agent, items) {
+  const lines = [`# ${agent?.name || 'Conversation'}`, ''];
+  for (const item of items) {
+    if (item.type === 'message') {
+      lines.push(`**${item.role === 'user' ? 'You' : item.author || 'Bot'}:** ${item.text}`, '');
+    } else if (item.type === 'event') {
+      lines.push(`_${item.text}_`, '');
+    } else if (item.type === 'agentnote' && item.note?.kind === 'briefing') {
+      const from = item.note.fromName || item.note.fromAgentId || 'A teammate';
+      lines.push(`**${from} → ${agent?.name || item.note.toAgentId || 'Bot'}:** ${item.note.summary}`, '');
+    }
+  }
+  return lines.join('\n');
+}
 
 /**
  * One Bot, one thread.
@@ -206,10 +221,12 @@ export default function Task() {
   }
 
   async function decide(approval, approve, note, opts) {
-    await api.decide(approval.runId, approval.approvalId, approve, note);
+    const result = await api.decide(approval.runId, approval.approvalId, approve, note);
     if (approve && opts?.always) await alwaysAllow(approval).catch((e) => setError(e.message));
     setPendingApprovals((current) => current.map((a) => (
-      a.approvalId === approval.approvalId ? { ...a, status: approve ? 'approved' : 'denied' } : a
+      a.approvalId === approval.approvalId
+        ? settledApproval(a, result, approve)
+        : a
     )));
     // The decision resumes the run; watch it.
     if (approve && approval.runId) pollRun(approval.runId);
@@ -258,6 +275,7 @@ export default function Task() {
   const mentionables = useMemo(() => agents
     .filter((a) => a.agentId !== agentId && !['offline', 'blocked'].includes(a.state))
     .map((a) => ({ id: a.agentId, name: a.name, archetype: a.archetype, color: a.color })), [agents, agentId]);
+  const mentionIds = useMemo(() => mentionables.map((m) => m.id), [mentionables]);
   const skills = useMemo(() => {
     const byId = Object.fromEntries(skillCatalog.map((s) => [s.skillId, s]));
     return (agent?.skillAssignments || [])
@@ -271,14 +289,7 @@ export default function Task() {
   // still "thinking", and that is only the fallback.
   const shown = live?.state || (typing ? 'thinking' : agent?.state);
 
-  const exportTranscript = useCallback(() => {
-    const lines = [`# ${agent?.name || 'Conversation'}`, ''];
-    for (const it of items) {
-      if (it.type === 'message') lines.push(`**${it.role === 'user' ? 'You' : it.author || 'Bot'}:** ${it.text}`, '');
-      else if (it.type === 'event') lines.push(`_${it.text}_`, '');
-    }
-    return lines.join('\n');
-  }, [items, agent]);
+  const exportTranscript = useCallback(() => transcriptFor(agent, items), [items, agent]);
 
   if (!agent) {
     return error
@@ -308,7 +319,7 @@ export default function Task() {
                 approvals={pendingApprovals} onDecide={decide} onSuggest={(t) => sendText(t)}
                 cardCtx={cardCtx} showAuthor={false}
                 onSaveSkill={(item) => setSkillDraft({ text: item.text })}
-                onRemember={rememberMessage} mentionIds={mentionables.map((m) => m.id)} />
+                onRemember={rememberMessage} mentionIds={mentionIds} />
 
       <Composer ref={composer} name={agent.name} mentionables={mentionables} skills={skills}
                 commands={COMMANDS} busy={busy} onSend={sendText} onStop={stop} onCommand={command}

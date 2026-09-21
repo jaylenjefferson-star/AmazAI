@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Children, cloneElement, isValidElement, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import ApprovalCard from './ApprovalCard';
 import Icon from './Icon';
 import Card, { EventLine } from './Cards';
@@ -82,23 +83,111 @@ function Mention({ value, ids, onContact }) {
   if (!ids?.includes(id)) return value;
   // A mention is a way to a contact card, not just a coloured word.
   return onContact
-    ? <button type="button" className="mention" onClick={() => onContact(id)}>{value}</button>
+    ? <button type="button" className="mention" aria-label={`Open ${id} contact`}
+              onClick={() => onContact(id)}>{value}</button>
     : <span className="mention">{value}</span>;
 }
 
-/** The conversational surface supports the two pieces of Markdown Bots use
- * most: emphasis and mentions. A deliberately small renderer keeps a Bot's
- * words as text (never HTML), while making `**important**` read naturally. */
-export function Body({ text, ids, onContact }) {
-  if (!text) return null;
-  return String(text).split(/(\*\*[^*\n]+\*\*|@[\w-]+)/g).map((part, i) => {
-    if (!part) return null;
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
+function looksLikeEmailAt(text, mentionStart) {
+  let left = mentionStart;
+  let right = mentionStart;
+  while (left > 0 && !/\s/.test(text[left - 1])) left -= 1;
+  while (right < text.length && !/\s/.test(text[right])) right += 1;
+  const token = text.slice(left, right);
+  const at = mentionStart - left;
+  const local = token.slice(0, at).replace(/^[([{<]+/, '');
+  const domain = token.slice(at + 1).replace(/[),.;:!?\]}>]+$/, '');
+  const quoted = /^"[^"\r\n]+"$/u.test(local);
+  const unquoted = /^[\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-]+$/u.test(local)
+    && !/[.,]$/.test(local);
+  const dottedDomain = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(domain);
+  return !!local && (quoted || unquoted) && dottedDomain;
+}
+
+function mentionText(value, ids, onContact, keyPrefix) {
+  const text = String(value);
+  const out = [];
+  const pattern = /(^|[^\w@])@([\w-]+)/g;
+  let cursor = 0;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const start = match.index + match[1].length;
+    const valueAt = `@${match[2]}`;
+    if (looksLikeEmailAt(text, start)) continue;
+    if (start > cursor) out.push(text.slice(cursor, start));
+    out.push(<Mention key={`${keyPrefix}:${start}`} value={valueAt}
+                      ids={ids} onContact={onContact} />);
+    cursor = start + valueAt.length;
+  }
+  if (cursor < text.length) out.push(text.slice(cursor));
+  return out.length ? out : text;
+}
+
+/** Add contact actions only to ordinary prose. A mention inside a link or code
+ * stays text: nesting a button inside an anchor is invalid, and source/code
+ * examples should never become actions. */
+function withMentions(children, ids, onContact, keyPrefix = 'm') {
+  return Children.map(children, (child, index) => {
+    if (typeof child === 'string') {
+      return mentionText(child, ids, onContact, `${keyPrefix}:${index}`);
     }
-    if (part.startsWith('@')) return <Mention key={i} value={part} ids={ids} onContact={onContact} />;
-    return part;
+    if (!isValidElement(child) || child.props?.children == null) return child;
+    // react-markdown represents overridden components (notably our safe link)
+    // as function elements before they render. Each overridden block decorates
+    // its own children; descending here would turn a link label into a button
+    // before the link component has a chance to keep it as text.
+    if (typeof child.type !== 'string' || child.type === Mention) return child;
+    const tag = child.type;
+    if (['a', 'code', 'pre'].includes(tag)) return child;
+    return cloneElement(child, undefined,
+      withMentions(child.props.children, ids, onContact, `${keyPrefix}:${index}`));
   });
+}
+
+const MARKDOWN_ELEMENTS = [
+  'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'ul', 'ol', 'li', 'blockquote', 'hr', 'strong', 'em', 'code', 'pre', 'a',
+];
+
+function safeUrl(value) {
+  const url = String(value || '').trim();
+  if (/^(https?:|mailto:)/i.test(url)) return url;
+  if (/^\/(?!\/)/.test(url) || /^(#|\.\.?\/)/.test(url)) return url;
+  return '';
+}
+
+/** Safe CommonMark for model chat. Raw HTML and media are excluded; headings
+ * are clamped below the page title; mentions remain contact actions outside
+ * links/code. The same renderer is used for committed and streaming words, so
+ * syntax does not visibly switch meanings when a run finishes. */
+export function Body({ text, ids, onContact }) {
+  const components = useMemo(() => {
+    const decorate = (children, key) => withMentions(children, ids, onContact, key);
+    const block = (Tag, key) => function MarkdownBlock({ node: _node, children, ...props }) {
+      return <Tag {...props}>{decorate(children, key)}</Tag>;
+    };
+    return {
+      p: block('p', 'p'),
+      li: block('li', 'li'),
+      blockquote: block('blockquote', 'quote'),
+      h1: block('h3', 'h1'), h2: block('h3', 'h2'), h3: block('h3', 'h3'),
+      h4: block('h4', 'h4'), h5: block('h4', 'h5'), h6: block('h4', 'h6'),
+      a({ node: _node, href, children, ...props }) {
+        const safe = safeUrl(href);
+        if (!safe) return <span>{children}</span>;
+        const external = /^https?:/i.test(safe);
+        return <a {...props} href={safe} target={external ? '_blank' : undefined}
+                  rel={external ? 'noopener noreferrer' : undefined}>{children}</a>;
+      },
+    };
+  }, [ids, onContact]);
+  if (!text) return null;
+  return (
+    <ReactMarkdown skipHtml unwrapDisallowed allowedElements={MARKDOWN_ELEMENTS}
+                   urlTransform={safeUrl} components={components}>
+      {String(text)}
+    </ReactMarkdown>
+  );
 }
 
 /**
@@ -154,7 +243,9 @@ export default function Timeline({
   }
 
   return (
-    <div className="timeline" ref={listRef} onScroll={onScroll}>
+    <div className="timeline" ref={listRef} onScroll={onScroll}
+         role="log" aria-label="Conversation" aria-live="polite"
+         aria-busy={streaming != null ? 'true' : undefined}>
       {items.length === 0 && !streaming && !typing && (
         <div className="tl-empty">
           <strong>Say hello</strong>
@@ -200,7 +291,7 @@ export default function Timeline({
                   {speaker.name}
                 </button>
               )}
-              {item.text && <div className="body"><Body text={item.text} ids={mentionIds} onContact={openContact} /></div>}
+              {item.text && <div className="body body--markdown"><Body text={item.text} ids={mentionIds} onContact={openContact} /></div>}
               {!mine && item.cards?.length > 0 && (
                 <div className="cards">
                   {item.cards.map((card, j) => <Card key={j} card={card} ctx={cardCtx} />)}
@@ -239,7 +330,10 @@ export default function Timeline({
       {streaming != null && (
         <div className="msg">
           {showAuthor && <div className="who">{streaming.author || 'agent'}</div>}
-          <div className="body">{streaming.text}<span className="cursor" /></div>
+          <div className="body body--markdown body--streaming">
+            <Body text={streaming.text} ids={mentionIds} onContact={openContact} />
+            <span className="cursor" aria-hidden="true" />
+          </div>
         </div>
       )}
 

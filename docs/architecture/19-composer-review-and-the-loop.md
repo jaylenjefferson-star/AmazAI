@@ -131,12 +131,30 @@ action however senior. Only a person can change a line (`reportsTo` is a privile
 agent actor may not touch) and each change is audited as `agent.reporting_changed`. It is
 also not `parentAgentId`, which records who *proposed* a Bot: history, not structure.
 
-**What a Bot is told** (`orchestrator._reporting_note`, guidance not enforcement): who it
-reports to and who reports to it, and that this changes nothing about what anyone may do.
+**What every Bot is told** (`orchestrator._reporting_note`, guidance not enforcement):
+its own effective manager/direct reports plus a compact active-team directory.
+Each entry exposes only the address, name, title, role and effective reporting
+line—never another Bot's instructions, memory, grants, budget or description.
+Rows are deterministic manager-before-report JSON data, bounded to 64 Bots and
+16 KiB; overflow names the omitted count and points to `find_agents`. The block
+explicitly says profile values are data, reporting grants no authority, and the
+cold collaboration path is `create_group_chat` with a concrete goal. Within an
+existing task/room, `message_agent` remains context-bound.
 
 **Console.** `/org` draws it (a chart from 720px, an indented list below, because a wide
 chart is the wrong thing to pinch around on a phone); a contact card's "Reports to" row and
 New Bot's "Reports to" field change it; the picker never offers a Bot's own team.
+
+## Chat formatting
+
+Bot replies use constrained CommonMark in both live streaming and stored
+history. Paragraphs, bounded headings, lists, quotes, thematic breaks,
+emphasis, code and safe links render semantically instead of exposing `##`,
+`**`, `>` and `---` as interface noise. Raw HTML/media are not rendered;
+unsafe URL schemes become plain text. Known `@bot` references remain contact
+actions in ordinary prose but stay literal inside links and code. Model heading
+levels are clamped below the page title, and the streaming cursor is visual
+only for assistive technology.
 
 ## What the model is sent, and what a retry must not send it
 
@@ -234,9 +252,12 @@ What makes it safe to drop the card for a request the operator made, all in code
 `create_agent`'s description carries the selection logic (do not create a Bot for a one-off task; write standing
 orders in operational terms; never put a secret in them; this week's list is a first task, not standing orders;
 name it so it scans on a roster; it reports to you and can use what you can, never more). `firstTask` gives the
-new Bot its first job with a clear finish line: it becomes the new Bot's whole opening conversation (its greeting
-is not sent to the model), it goes through the same wake gate any priority message does, and both transcripts say
-who briefed whom.
+new Bot its first job with a clear finish line and is rejected above 4,000 characters rather than silently changed.
+That bound task is shown in full on an approval card and replaces the synthetic starter as the atomic first thread
+row, so the operator and model both see assignment → response; it remains visible if the Bot cannot wake, and the
+same task becomes the run goal through the normal concurrency/budget gate. Creation and launch are separate durable
+outcomes (`started`, `deferred`, `queued`, `failed`) shown on the settled card and written as best-effort thread
+history; a history-write failure can never prevent the proposing run from resuming.
 
 `update_agent` lets a Bot refine the name, title, role and standing orders of a Bot **it created**, on a run the
 operator started, through the same `plan_update` a person's edit uses. Access, budget, tools and status are not

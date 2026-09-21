@@ -169,3 +169,33 @@ class TestSortKeySuffixes:
         rows = store.query("AGENT#x", sk_prefix="AUDIT#")
         assert len(rows) == 5
         assert [r["n"] for r in rows] == [0, 1, 2, 3, 4]
+
+
+
+class TestOwnedFilteredIndexPagination:
+    def test_foreign_rows_cannot_consume_the_owners_limit(self, two_stores):
+        owner, other = two_stores
+        for n in range(5):
+            other.put({"pk": f"AGENT#foreign-{n}", "sk": "META",
+                       "gsi1pk": "AGENTS", "gsi1sk": f"000-{n}"})
+        for n in range(2):
+            owner.put({"pk": f"AGENT#mine-{n}", "sk": "META",
+                       "gsi1pk": "AGENTS", "gsi1sk": f"zzz-{n}"})
+
+        rows = owner.query_index("gsi1", "gsi1pk", "AGENTS", limit=2)
+
+        assert [r["pk"] for r in rows] == ["AGENT#mine-0", "AGENT#mine-1"]
+
+    def test_rejected_rows_do_not_consume_a_filtered_limit(self, store):
+        for n in range(5):
+            store.put({"pk": f"AGENT#archived-{n}", "sk": "META",
+                       "gsi1pk": "AGENTS", "gsi1sk": f"000-{n}", "status": "archived"})
+        for n in range(2):
+            store.put({"pk": f"AGENT#active-{n}", "sk": "META",
+                       "gsi1pk": "AGENTS", "gsi1sk": f"zzz-{n}", "status": "active"})
+
+        rows = store.query_index(
+            "gsi1", "gsi1pk", "AGENTS", limit=2,
+            predicate=lambda row: row.get("status") == "active")
+
+        assert [r["pk"] for r in rows] == ["AGENT#active-0", "AGENT#active-1"]

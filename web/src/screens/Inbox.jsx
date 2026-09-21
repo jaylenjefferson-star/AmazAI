@@ -48,11 +48,15 @@ function timeLabel(value) {
   return at.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-/** "You: " only when the last word was yours; a Bot's own line needs no
- *  name, the row already has one. */
-function previewOf(thread) {
+/** "You: " only when the last word was yours. A Bot-created first task
+ *  names the teammate who assigned it instead of impersonating the operator. */
+export function previewOf(thread) {
   if (!thread?.preview) return '';
-  return `${thread.previewRole === 'user' ? 'You: ' : ''}${thread.preview}`;
+  if (thread.previewRole === 'user') return `You: ${thread.preview}`;
+  if (thread.previewRole === 'briefing' && thread.previewAuthor) {
+    return `${thread.previewAuthor}: ${thread.preview}`;
+  }
+  return thread.preview;
 }
 
 // States that mean the Bot is in a turn right now -- what the presence dot and

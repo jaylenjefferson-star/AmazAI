@@ -1197,12 +1197,50 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict,
                                approve=approve, note=body.get("note"))
 
     created = None
+    creation_error = ""
+    creation_warning = ""
+    first_task = None
     if approve and decided["action"] == "agent.create":
-        created = _create_approved_agent(store, decided["arguments"], actor)
-        store.update(run_pk, K.approval_sk(approval_id), {
-            "createdAgentId": created["agentId"],
-            "executionStatus": "created",
-        })
+        try:
+            created = _create_approved_agent(store, decided["arguments"], actor)
+        except Exception as exc:  # creation itself failed; resume the proposer with the fact
+            creation_error = f"{type(exc).__name__}: {str(exc)[:500]}"
+            try:
+                store.update(run_pk, K.approval_sk(approval_id), {
+                    "executionStatus": "failed", "executionError": creation_error,
+                })
+            except Exception as record_exc:  # the parent still must not remain parked
+                creation_warning = f"could not record creation failure ({type(record_exc).__name__})"
+        else:
+            # Persist creation before attempting the first wake. From this
+            # point a launch failure cannot leave an approved card claiming
+            # nothing happened or strand the parent run on an already-spent
+            # decision.
+            try:
+                store.update(run_pk, K.approval_sk(approval_id), {
+                    "createdAgentId": created["agentId"],
+                    "executionStatus": "created",
+                })
+            except Exception as record_exc:
+                creation_warning = f"could not annotate created Bot ({type(record_exc).__name__})"
+
+            try:
+                first_task = _launch_approved_first_task(
+                    store, created, decided["arguments"])
+            except Exception as launch_exc:  # no launch bug may relabel a real Bot as failed
+                first_task = {
+                    "status": "deferred",
+                    "reason": f"first-task launch failed ({type(launch_exc).__name__})",
+                }
+            try:
+                store.update(run_pk, K.approval_sk(approval_id), {
+                    "firstTaskStatus": first_task,
+                })
+            except Exception as record_exc:
+                creation_warning = (creation_warning + "; " if creation_warning else "") + \
+                    f"could not record first-task status ({type(record_exc).__name__})"
+            if first_task.get("runId"):
+                created = {**created, "firstTaskRunId": first_task["runId"]}
     if approve and decided["action"] == "skill.create":
         created = _create_approved_skill(store, decided["arguments"], actor)
         store.update(run_pk, K.approval_sk(approval_id), {
@@ -1222,21 +1260,54 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict,
         note += f" Note: {body['note']}"
     if not approve:
         note += " Do not attempt this action again; find another way or stop and explain."
+    if creation_error:
+        note += f" The Bot could not be created: {creation_error}. Nothing was created."
+    elif first_task and first_task.get("status") == "deferred":
+        note += (" The Bot was created and its first task is visible, but it was not "
+                 f"started yet: {first_task.get('reason', 'recipient unavailable')}.")
+    elif first_task and first_task.get("status") == "queued":
+        note += (" The Bot was created and its first task was queued. The immediate wake "
+                 "failed, so the sweeper will retry it.")
 
-    if created:
-        # Written by the approval that did it: the transcript only ever says a
-        # Bot was created, a skill saved or a fact shared after it happened.
+    try:
         if decided["action"] == "agent.create":
-            threads.event(store, decided["threadId"], f"Created {created['name']}", icon="check")
-        elif decided["action"] == "skill.create":
-            threads.event(store, decided["threadId"], f"Saved as a skill: {created['name']}", icon="file")
-        elif decided["action"] == "memory.publish":
-            threads.event(store, decided["threadId"], f"Shared with every Bot: {_label(created)}", icon="layers")
+            if creation_error:
+                threads.event(store, decided["threadId"],
+                              f"Bot creation failed: {creation_error}", icon="x")
+            elif created:
+                launch = (first_task or {}).get("status")
+                if launch == "started":
+                    event_text = f"Created {created['name']} and started its first task"
+                elif launch == "queued":
+                    event_text = f"Created {created['name']}; first task queued for retry"
+                elif launch == "deferred":
+                    event_text = (f"Created {created['name']}; first task waiting: "
+                                  f"{first_task.get('reason', 'recipient unavailable')}")
+                else:
+                    event_text = f"Created {created['name']}"
+                threads.event(store, decided["threadId"], event_text, icon="check")
+        elif created:
+            # Written by the approval that did it: the transcript only ever says a
+            # skill was saved or a fact shared after it happened.
+            if decided["action"] == "skill.create":
+                threads.event(store, decided["threadId"], f"Saved as a skill: {created['name']}", icon="file")
+            elif decided["action"] == "memory.publish":
+                threads.event(store, decided["threadId"], f"Shared with every Bot: {_label(created)}", icon="layers")
+    except Exception as event_exc:  # history is observability, never a liveness gate
+        creation_warning = (creation_warning + "; " if creation_warning else "") + \
+            f"could not write execution history ({type(event_exc).__name__})"
 
     runs.advance(store, run, RunState.EXECUTING, pending=None)
     _invoke_orchestrator(run_id, store.owner_id, resume=True, resume_note=note,
                          resume_approval=decided)
-    result = {"approval": approvals.to_card(decided), "resumed": True}
+    fresh_decision = store.get(run_pk, K.approval_sk(approval_id), consistent=True)
+    result = {"approval": approvals.to_card(fresh_decision), "resumed": True}
+    if creation_error:
+        result["creationError"] = creation_error
+    if creation_warning:
+        result["creationWarning"] = creation_warning
+    if first_task:
+        result["firstTask"] = first_task
     if created and decided["action"] == "agent.create":
         result["createdAgent"] = created
     elif created and decided["action"] == "skill.create":
@@ -1293,11 +1364,20 @@ def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict
     active = [row for row in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
               if row.get("status", row.get("state")) in A.SEATED]
     proposal = {**proposal, "grants": C.default_grants(store)}
+    task = provisioning.first_task(proposal.get("firstTask"))
+    proposer_id = proposal.get("parentAgentId") or proposal.get("proposedBy") or ""
+    proposer = store.try_get(K.agent_pk(proposer_id), "META") if proposer_id else None
+    briefing = ({
+        "text": task,
+        "author": (proposer or {}).get("name") or proposer_id or "a teammate",
+        "fromAgentId": proposer_id,
+    } if task else None)
     plan = A.plan_create(
         proposal, actor,
         org_connectors=_org_connectors(store),
         active_count=len(active),
         max_agents=int(os.environ.get("MAX_AGENTS", A.DEFAULT_MAX_AGENTS)),
+        initial_briefing=briefing,
     )
     if store.try_get(K.agent_pk(plan.agent_id), "META"):
         raise Conflict(f"agent {plan.agent_id!r} already exists")
@@ -1314,6 +1394,46 @@ def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict
         store.put(A.audit_event(plan.agent_id, "agent.provision_failed", actor,
                                 detail="approved agent creation could not provision"))
         raise
+
+
+def _launch_approved_first_task(store: Store, created: dict, proposal: dict) -> dict:
+    """Best-effort launch after durable approved creation.
+
+    The exact bound task is already the Bot's first durable briefing. Creation
+    succeeds independently of the wake: budget/concurrency can defer it, queue
+    creation can fail cleanly, and a Lambda invoke failure leaves a QUEUED run
+    the sweeper can recover. No exception here may strand the proposing run on
+    an approval that was already consumed.
+    """
+    try:
+        task = provisioning.first_task(proposal.get("firstTask"))
+    except A.ValidationError as exc:
+        return {"status": "deferred", "reason": str(exc)}
+    if not task:
+        return {"status": "not_requested"}
+
+    ok, reason = collab.may_wake_now(store, created, collab.limits_for_org(store))
+    if not ok:
+        return {"status": "deferred", "reason": reason}
+
+    proposer_id = proposal.get("parentAgentId") or proposal.get("proposedBy") or ""
+    try:
+        run = runs.create(
+            store, agent_id=created["agentId"],
+            thread_id=f"dm-{created['agentId']}", goal=task,
+            trigger={"type": "agent", "fromAgentId": proposer_id,
+                     "brief": True, "approved": True},
+        )
+    except Exception as exc:  # no run exists; task remains visible for a later retry
+        return {"status": "deferred",
+                "reason": f"could not queue the first task ({type(exc).__name__})"}
+
+    try:
+        _invoke_orchestrator(run["runId"], store.owner_id)
+    except Exception as exc:  # the durable QUEUED run is recoverable by the sweeper
+        return {"status": "queued", "runId": run["runId"],
+                "reason": f"immediate wake failed ({type(exc).__name__})"}
+    return {"status": "started", "runId": run["runId"]}
 
 
 def _invoke_orchestrator(run_id: str, owner_id: str, *, resume: bool = False,

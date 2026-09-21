@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Timeline, { Body } from './Timeline';
 
@@ -126,5 +126,155 @@ describe('Timeline live reply', () => {
   it('keeps the empty state away while a reply is arriving', () => {
     render(<Timeline {...props} items={[]} streaming={{ text: 'Hi' }} />);
     expect(screen.queryByText('Say hello')).toBeNull();
+  });
+});
+
+
+
+const JANEISHA_RESPONSE = [
+  '### 1. What are AmazAI’s current top-level priorities and OKRs?',
+  '> I own company-wide priorities and **executive alignment**.',
+  '',
+  '### 2. Who are the key executives / team leads, and what does each own?',
+  '> I need a clear map of ownership.',
+  '',
+  '---',
+  '',
+  '1. Review the current priorities.',
+  '2. Confirm each reporting line.',
+].join('\n');
+
+describe('safe Markdown in chat', () => {
+  it('renders the Janeisha response as structure without raw markers', () => {
+    const { container } = render(<Body text={JANEISHA_RESPONSE} />);
+    const headings = [...container.querySelectorAll('h3')];
+    expect(headings).toHaveLength(2);
+    expect(headings[0].textContent).toContain('current top-level priorities');
+    expect(screen.getByText('executive alignment').tagName).toBe('STRONG');
+    expect(container.querySelectorAll('blockquote')).toHaveLength(2);
+    expect(container.querySelector('hr')).toBeTruthy();
+    expect([...container.querySelectorAll('ol > li')].map((n) => n.textContent))
+      .toEqual(['Review the current priorities.', 'Confirm each reporting line.']);
+    expect(container.textContent).not.toContain('###');
+    expect(container.textContent).not.toContain('**');
+    expect(container.textContent).not.toContain('---');
+  });
+
+  it('renders paragraphs, hard breaks, emphasis and code semantically', () => {
+    const { container } = render(<Body text={'First soft\nline.\n\nSecond hard  \nbreak with *careful* **bold** and `code`.'} />);
+    expect(container.querySelectorAll('p')).toHaveLength(2);
+    expect(container.querySelectorAll('br')).toHaveLength(1);
+    expect(screen.getByText('careful').tagName).toBe('EM');
+    expect(screen.getByText('bold').tagName).toBe('STRONG');
+    expect(screen.getByText('code').tagName).toBe('CODE');
+  });
+
+  it('handles nested CommonMark emphasis that the old regex exposed', () => {
+    const { container } = render(<Body text={'***both*** and **bold *plus italic* text**'} />);
+    const both = screen.getByText('both');
+    expect(both.closest('em')).toBeTruthy();
+    expect(both.closest('strong')).toBeTruthy();
+    expect(container.textContent).not.toContain('***');
+  });
+
+  it('keeps malformed and escaped markers literal', () => {
+    const { container } = render(<Body text={'**unfinished\n\n\\*\\*literal\\*\\*\n\n** not bold**'} />);
+    expect(container.querySelector('strong')).toBeNull();
+    expect(container.textContent).toContain('**unfinished');
+    expect(container.textContent).toContain('**literal**');
+  });
+
+  it('keeps a known mention interactive inside emphasis', () => {
+    const onContact = vi.fn();
+    const { container } = render(
+      <Body text={'Ask *@janeisha* about strategy.'} ids={['janeisha']} onContact={onContact} />);
+    const mention = screen.getByRole('button', { name: 'Open janeisha contact' });
+    expect(mention.closest('em')).toBeTruthy();
+    fireEvent.click(mention);
+    expect(onContact).toHaveBeenCalledWith('janeisha');
+    expect(container.querySelectorAll('button.mention')).toHaveLength(1);
+  });
+
+  it('does not turn email, code, linked text, or unknown names into actions', () => {
+    const { container } = render(
+      <Body text={'person@example.com, alerts+@ops.com, `@janeisha`, [@janeisha](https://example.com), (@janeisha). Hi,@janeisha. and @nobody'}
+            ids={['example', 'ops', 'janeisha']} onContact={() => {}} />);
+    expect(container.querySelectorAll('button.mention')).toHaveLength(2);
+    expect(container.querySelector('code')?.textContent).toBe('@janeisha');
+    expect(container.querySelector('a')?.textContent).toBe('@janeisha');
+    expect(container.querySelector('a button')).toBeNull();
+    expect(container.textContent).toContain('person@example.com');
+    expect(container.textContent).toContain('alerts+@ops.com');
+    expect(container.textContent).toContain('@nobody');
+  });
+
+  it('allows only intentional links and strips active content', () => {
+    globalThis.__amazaiPwned = 0;
+    const { container } = render(<Body text={[
+      '[safe](https://example.com)',
+      '[mail](mailto:test@example.com)',
+      '[bad](javascript:globalThis.__amazaiPwned=1)',
+      '[network](//evil.example/path)',
+      '[triple](///evil.example/path)',
+      '<script>globalThis.__amazaiPwned=1</script>',
+      '<img src=x onerror="globalThis.__amazaiPwned=1">',
+      '![image](https://example.com/x.png)',
+    ].join(' ')} />);
+    const hrefs = [...container.querySelectorAll('a')].map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual(['https://example.com', 'mailto:test@example.com']);
+    expect(container.querySelector('a')?.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(container.querySelector('script')).toBeNull();
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.textContent).toContain('network');
+    expect(container.textContent).toContain('triple');
+    expect([...container.querySelectorAll('a')].some((a) => a.getAttribute('href')?.startsWith('//'))).toBe(false);
+    expect(globalThis.__amazaiPwned).toBe(0);
+    delete globalThis.__amazaiPwned;
+  });
+
+  it('clamps model headings below the page-level outline', () => {
+    const { container } = render(<Body text={'# Model title\n\n## Section\n\n### Detail\n\n#### Small'} />);
+    expect(container.querySelector('h1')).toBeNull();
+    expect(container.querySelector('h2')).toBeNull();
+    expect(container.querySelectorAll('h3')).toHaveLength(3);
+    expect(container.querySelectorAll('h4')).toHaveLength(1);
+  });
+
+  it('does not create invalid block nesting', () => {
+    const { container } = render(<Body text={JANEISHA_RESPONSE} />);
+    for (const selector of ['p p', 'p ol', 'p blockquote', 'a button']) {
+      expect(container.querySelector(selector)).toBeNull();
+    }
+  });
+});
+
+describe('Markdown while streaming', () => {
+  it('uses the same renderer and hides its visual cursor from assistive tech', () => {
+    const { container } = render(
+      <Timeline {...props} items={[]} streaming={{ text: '**Ready**', author: 'Janeisha Carter' }} />);
+    expect(screen.getByText('Ready').tagName).toBe('STRONG');
+    expect(container.textContent).not.toContain('**');
+    expect(container.querySelectorAll('.cursor')).toHaveLength(1);
+    expect(container.querySelector('.cursor')?.getAttribute('aria-hidden')).toBe('true');
+    expect(screen.getByRole('log').getAttribute('aria-busy')).toBe('true');
+  });
+});
+
+
+
+describe('streaming Markdown stability', () => {
+  it('keeps the existing paragraph DOM node while the buffer grows', () => {
+    const mentionIds = ['janeisha']; // the memoized value Task and Room pass in production
+    const { container, rerender } = render(
+      <Timeline {...props} items={[]} mentionIds={mentionIds}
+                streaming={{ text: 'Working', author: 'Janeisha' }} />);
+    const paragraph = container.querySelector('.body--streaming p');
+
+    rerender(
+      <Timeline {...props} items={[]} mentionIds={mentionIds}
+                streaming={{ text: 'Working on it', author: 'Janeisha' }} />);
+
+    expect(container.querySelector('.body--streaming p')).toBe(paragraph);
+    expect(paragraph.textContent).toBe('Working on it');
   });
 });

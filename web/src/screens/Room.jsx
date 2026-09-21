@@ -12,7 +12,7 @@ import Timeline from '../components/Timeline';
 import ToolsSheet from '../components/ToolsSheet';
 import { api } from '../api';
 import { useAgents } from '../hooks/useAgents';
-import { alwaysAllow } from '../lib/approvals';
+import { alwaysAllow, settledApproval } from '../lib/approvals';
 import { COPY, friendly } from '../lib/errors';
 import { usePresence } from '../presence';
 import { threadsChanged } from '../threadsBus';
@@ -108,10 +108,12 @@ export default function Room() {
   }
 
   async function decide(approval, approve, note, opts) {
-    await api.decide(approval.runId, approval.approvalId, approve, note);
+    const result = await api.decide(approval.runId, approval.approvalId, approve, note);
     if (approve && opts?.always) await alwaysAllow(approval).catch((e) => setError(e.message));
     setPendingApprovals((cur) => cur.map((a) => (
-      a.approvalId === approval.approvalId ? { ...a, status: approve ? 'approved' : 'denied' } : a
+      a.approvalId === approval.approvalId
+        ? settledApproval(a, result, approve)
+        : a
     )));
     if (approve) watch(approval.runId, approval.requestedBy?.agentId);
     loadThread();
@@ -131,6 +133,7 @@ export default function Room() {
     () => members.map((a) => ({ id: a.agentId, name: a.name, archetype: a.archetype, color: a.color })),
     [members],
   );
+  const mentionIds = useMemo(() => mentionables.map((m) => m.id), [mentionables]);
 
   // A room is task-bound, so it ends. When it has, the composer goes rather
   // than sitting there disabled: a greyed-out box invites a click and then
@@ -188,7 +191,7 @@ export default function Room() {
           Streaming here needs `push.delta` to carry the agent first. */}
       <Timeline items={timelineItems} streaming={null} typing={null} agents={agents}
                 approvals={pendingApprovals} onDecide={decide}
-                mentionIds={mentionables.map((m) => m.id)} />
+                mentionIds={mentionIds} />
 
       {readOnly ? (
         <div className="room-closed" role="status">

@@ -135,3 +135,32 @@ describe('which run wrote a message', () => {
     expect(items[0].runId).toBeUndefined();
   });
 });
+
+
+
+describe('a Bot-created Bot’s first assignment', () => {
+  it('maps a user-protocol briefing to visible teammate coordination, not my bubble', () => {
+    const items = threadToItems([
+      {
+        sk: 'MSG#2026-09-21T15:55:00Z#a', role: 'user', kind: 'briefing',
+        author: 'Chief', fromAgentId: 'chief', toAgentId: 'janeisha-carter',
+        text: 'Review your role and return five questions.',
+      },
+      {
+        sk: 'MSG#2026-09-21T15:56:00Z#b', role: 'assistant', author: 'Janeisha Carter',
+        agentId: 'janeisha-carter', text: 'Here are the five questions.',
+      },
+    ]);
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      type: 'agentnote', key: 'MSG#2026-09-21T15:55:00Z#a:briefing',
+      note: {
+        kind: 'briefing', fromAgentId: 'chief', toAgentId: 'janeisha-carter',
+        summary: 'Review your role and return five questions.',
+      },
+    });
+    expect(items[1]).toMatchObject({ type: 'message', role: 'assistant' });
+    expect(items.some((item) => item.type === 'message' && item.role === 'user')).toBe(false);
+  });
+});
