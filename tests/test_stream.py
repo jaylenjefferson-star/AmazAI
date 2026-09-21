@@ -227,3 +227,161 @@ class TestUsage:
         assert EventKind.TEXT in kinds
         assert EventKind.USAGE in kinds
         assert EventKind.TOOL_USE in kinds
+
+
+
+class TestCurrentInvokeHarnessToolInput:
+    """The production shape published by AWS and emitted by botocore 1.43.98.
+
+    Start carries only the tool name/id. Each delta carries a string under
+    `toolUse.input`; that string is a partial JSON fragment. The old parser
+    accepted a dict there and silently ignored the required string, then
+    emitted the correctly named tool with `{}`.
+    """
+
+    def test_json_string_fragments_under_delta_input_are_accumulated(self):
+        p = StreamParser()
+        out = _drain(p, [
+            {"contentBlockStart": {"contentBlockIndex": 4, "start": {"toolUse": {
+                "name": "create_agent", "toolUseId": "tu-prod"}}}},
+            {"contentBlockDelta": {"contentBlockIndex": 4, "delta": {"toolUse": {
+                "input": '{"name":"Janeisha '}}}},
+            {"contentBlockDelta": {"contentBlockIndex": 4, "delta": {"toolUse": {
+                "input": 'Carter","role":"Runs strategy","description":"Owns execution"}'}}}},
+            {"contentBlockStop": {"contentBlockIndex": 4}},
+        ])
+        tool = [e for e in out if e.kind is EventKind.TOOL_USE][0]
+        assert tool.tool_name == "create_agent"
+        assert tool.tool_use_id == "tu-prod"
+        assert tool.tool_input == {
+            "name": "Janeisha Carter",
+            "role": "Runs strategy",
+            "description": "Owns execution",
+        }
+        assert tool.tool_input_observed is True
+        assert tool.block_index == 4
+
+    def test_complete_json_string_in_one_delta_is_decoded(self):
+        p = StreamParser()
+        out = _drain(p, [
+            {"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
+                "name": "remember", "toolUseId": "tu"}}}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {
+                "input": '{"scope":"agent","body":"prefers bullets"}'}}}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+        ])
+        assert [e for e in out if e.kind is EventKind.TOOL_USE][0].tool_input \
+            == {"scope": "agent", "body": "prefers bullets"}
+
+    def test_empty_string_on_start_does_not_mask_later_fragments(self):
+        p = StreamParser()
+        out = _drain(p, [
+            {"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
+                "name": "remember", "toolUseId": "tu", "input": ""}}}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {
+                "input": '{"scope":"agent","body":"x"}'}}}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+        ])
+        assert [e for e in out if e.kind is EventKind.TOOL_USE][0].tool_input["body"] == "x"
+
+    def test_empty_dict_on_start_does_not_mask_later_fragments(self):
+        p = StreamParser()
+        out = _drain(p, [
+            {"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
+                "name": "remember", "toolUseId": "tu", "input": {}}}}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {
+                "input": '{"scope":"agent","body":"x"}'}}}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+        ])
+        assert [e for e in out if e.kind is EventKind.TOOL_USE][0].tool_input["body"] == "x"
+
+    def test_complete_dict_delta_from_an_older_preview_still_works(self):
+        p = StreamParser()
+        out = _drain(p, [
+            {"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
+                "name": "remember", "toolUseId": "tu"}}}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {
+                "input": {"scope": "agent", "body": "x"}}}}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+        ])
+        assert [e for e in out if e.kind is EventKind.TOOL_USE][0].tool_input["body"] == "x"
+
+    def test_partial_json_legacy_aliases_still_work_without_duplication(self):
+        for key in ("partial_json", "partialJson"):
+            p = StreamParser()
+            out = _drain(p, [
+                {"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
+                    "name": "remember", "toolUseId": "tu"}}}},
+                {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {
+                    key: '{"body":"x"}'}}}},
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+            ])
+            assert [e for e in out if e.kind is EventKind.TOOL_USE][0].tool_input == {"body": "x"}
+
+    def test_flush_uses_string_fragments_when_stop_is_missing(self):
+        p = StreamParser()
+        p.feed({"contentBlockStart": {"contentBlockIndex": 2, "start": {"toolUse": {
+            "name": "remember", "toolUseId": "tu"}}}})
+        p.feed({"contentBlockDelta": {"contentBlockIndex": 2, "delta": {"toolUse": {
+            "input": '{"body":"x"}'}}}})
+        tool = p.flush()[0]
+        assert tool.tool_input == {"body": "x"} and tool.block_index == 2
+
+    def test_missing_input_is_structurally_distinguishable_from_empty_json(self):
+        missing = StreamParser()
+        missing.feed({"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
+            "name": "create_agent", "toolUseId": "a"}}}})
+        empty = StreamParser()
+        empty.feed({"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
+            "name": "find_agents", "toolUseId": "b"}}}})
+        empty.feed({"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {
+            "input": "{}"}}}})
+        assert missing.flush()[0].tool_input_observed is False
+        observed = empty.flush()[0]
+        assert observed.tool_input_observed is True and observed.tool_input == {}
+
+
+
+def test_delta_input_wins_when_a_test_double_sends_every_alias():
+    p = StreamParser()
+    out = _drain(p, [
+        {"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
+            "name": "remember", "toolUseId": "tu"}}}},
+        {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {
+            "input": '{"body":"once"}',
+            "partial_json": '{"body":"duplicated"}',
+            "partialJson": '{"body":"duplicated again"}',
+        }}}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+    ])
+    assert [e for e in out if e.kind is EventKind.TOOL_USE][0].tool_input == {"body": "once"}
+
+
+def test_stop_then_flush_emits_a_tool_exactly_once():
+    p = StreamParser()
+    events = [
+        {"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
+            "name": "remember", "toolUseId": "tu"}}}},
+        {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {
+            "input": '{"body":"x"}'}}}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+    ]
+    emitted = []
+    for event in events:
+        emitted.extend(p.feed(event))
+    emitted.extend(p.flush())
+    assert [e.tool_use_id for e in emitted if e.kind is EventKind.TOOL_USE] == ["tu"]
+
+
+def test_malformed_current_shape_is_not_silently_emptied():
+    p = StreamParser()
+    out = _drain(p, [
+        {"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
+            "name": "create_agent", "toolUseId": "tu"}}}},
+        {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {
+            "input": '{"name":"Janeisha"'}}}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+    ])
+    tool = [e for e in out if e.kind is EventKind.TOOL_USE][0]
+    assert tool.tool_input != {}
+    assert tool.tool_input == {"_unparsed": '{"name":"Janeisha"'}

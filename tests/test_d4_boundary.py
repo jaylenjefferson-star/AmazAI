@@ -69,8 +69,8 @@ def tool_use_stream(tool_use_id="tu-1"):
         {"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {
             "toolUseId": tool_use_id, "name": "request_approval"}}}},
         {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {
-            "partial_json": json.dumps({"action": "spike.ping", "arguments": {"n": 1},
-                                        "why": "D4 spike"})}}}},
+            "input": json.dumps({"action": "spike.ping", "arguments": {"n": 1},
+                                 "why": "D4 spike"})}}}},
         {"contentBlockStop": {"contentBlockIndex": 0}},
     ]
 

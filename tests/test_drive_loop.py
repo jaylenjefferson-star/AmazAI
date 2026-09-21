@@ -30,11 +30,21 @@ def text(t):
 
 
 def tool_use(name, args, tool_use_id="tu-1", index=1):
+    """The current AWS InvokeHarness shape (botocore 1.43.98).
+
+    Start carries identity only; one or more `delta.toolUse.input` strings
+    carry partial JSON. Keeping the shared end-to-end fixture provider-shaped
+    prevents every loop test from passing against a stream AWS never sends.
+    """
+    encoded = json.dumps(args)
+    at = max(1, len(encoded) // 2)
     return [
         {"contentBlockStart": {"contentBlockIndex": index, "start": {"toolUse": {
             "toolUseId": tool_use_id, "name": name}}}},
         {"contentBlockDelta": {"contentBlockIndex": index, "delta": {"toolUse": {
-            "partial_json": json.dumps(args)}}}},
+            "input": encoded[:at]}}}},
+        {"contentBlockDelta": {"contentBlockIndex": index, "delta": {"toolUse": {
+            "input": encoded[at:]}}}},
         {"contentBlockStop": {"contentBlockIndex": index}},
     ]
 
@@ -510,3 +520,37 @@ class TestARepeatedToolFailureStopsTheTurn:
         world.drive()
         assert len(fake.calls) == 3
         assert world.store.get(world.run["pk"], "META")["consecutiveToolErrors"] == 0
+
+
+
+class TestToolInputStructureDiagnostics:
+    def test_a_required_tool_with_no_input_logs_structure_not_argument_values(self, world, capsys):
+        world.script([
+            {"contentBlockStart": {"contentBlockIndex": 7, "start": {"toolUse": {
+                "toolUseId": "missing-1", "name": "create_agent"}}}},
+            {"contentBlockStop": {"contentBlockIndex": 7}},
+        ])
+        world.drive()
+        line = next(line for line in capsys.readouterr().out.splitlines()
+                    if "agentcore.tool_input_missing" in line)
+        event = json.loads(line)
+        assert event == {
+            "event": "agentcore.tool_input_missing",
+            "runId": world.run["runId"],
+            "tool": "create_agent",
+            "toolUseId": "missing-1",
+            "blockIndex": 7,
+            "requiredFieldCount": 3,
+        }
+
+    def test_a_valid_empty_input_for_an_optional_tool_is_not_reported_missing(self, world, capsys):
+        world.script([
+            {"contentBlockStart": {"contentBlockIndex": 2, "start": {"toolUse": {
+                "toolUseId": "empty-ok", "name": "find_agents"}}}},
+            {"contentBlockDelta": {"contentBlockIndex": 2, "delta": {"toolUse": {
+                "input": "{}"}}}},
+            {"contentBlockStop": {"contentBlockIndex": 2}},
+            text("No query was needed."),
+        ])
+        world.drive()
+        assert "agentcore.tool_input_missing" not in capsys.readouterr().out
