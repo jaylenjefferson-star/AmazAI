@@ -160,7 +160,7 @@ agents cannot silently expand each other's capabilities. See §6.
 | Shared computer/filesystem across all agents | Per-agent execution role + S3 prefix stays — GrokBot's own one-pager flags this as its biggest gap |
 | "Any agent with shell can read AWS creds" | Grants stay per-agent (`GRANT#` rows), never ambient |
 | Approving actions from chat/Slack | Approvals stay console-only (unchanged D8 default) |
-| Free agent-created agents/rooms with no operator gate | Agent creation and skill activation stay operator-gated; agents can propose, not mint, authority |
+| Free agent-created agents/rooms with no operator gate | Skill activation stays operator-gated. A Bot makes a Bot only when the operator's own message asked for it, and the child holds no more than its creator (see [19](19-composer-review-and-the-loop.md#bots-that-make-bots)); anything else is a proposal a person approves |
 
 ## Data model deltas (summary, extends 03)
 

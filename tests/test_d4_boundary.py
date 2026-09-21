@@ -192,7 +192,8 @@ class TestExistingHarnessesAreReportedNotGuessedAt:
         report = core_with(self.OLD).missing_inline_tools("arn")
         assert report["known"] is True
         assert sorted(report["missing"]) == ["connector_call", "connector_search",
-                                            "propose_routine", "request_connector"]
+                                            "create_agent", "propose_routine",
+                                            "request_connector", "update_agent"]
 
     def test_a_current_harness_is_missing_nothing(self):
         every = [{"type": "inline_function", "name": n} for n in agentcore.INLINE_TOOLS]
@@ -230,7 +231,7 @@ class TestExistingHarnessesAreReportedNotGuessedAt:
 class TestTheFirstBotOffersWithRealTools:
     def test_the_brief_only_names_tools_that_exist(self):
         import re
-        named = set(re.findall(r"\b(request_connector|propose_\w+)\b", onboarding.brief("Chief")))
+        named = set(re.findall(r"\b(request_connector|create_agent|propose_\w+)\b", onboarding.brief("Chief")))
         assert named, "the brief no longer tells the Bot how to make an offer"
         assert named <= set(agentcore.INLINE_TOOLS), named - set(agentcore.INLINE_TOOLS)
 
@@ -240,4 +241,4 @@ class TestTheFirstBotOffersWithRealTools:
 
     def test_every_offer_tool_is_actually_declared_on_new_harnesses(self):
         declared = {t["name"] for t in agentcore.harness_tools([]) if t["type"] == "inline_function"}
-        assert {"request_connector", "propose_routine", "propose_agent", "propose_skill"} <= declared
+        assert {"request_connector", "propose_routine", "create_agent", "propose_skill"} <= declared

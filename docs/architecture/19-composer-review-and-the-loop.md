@@ -48,7 +48,7 @@ same `Decision`.
 proposals (nothing is connected or created), validated server-side (a routine
 proposal can name a *preset*, never an expression -- `routines.PRESETS` is kept
 identical to the console's `schedules.js` by a test). A Bot, skill or shared-memory
-proposal is an **approval** (`propose_agent`, `propose_skill`,
+proposal is an **approval** (`create_agent` when the operator did not ask, `propose_skill`,
 `propose_shared_memory`), drawn as a proposal card and created by the server with
 fixed safe defaults when approved. The brief tells the Bot to deliver the result
 first and make the offer its last action. A `file` card exists in the console but
@@ -163,17 +163,73 @@ being asked to answer.
 re-planned, and re-planning an identical request only spends the attempts. The error that *starts* a retry
 is kept on the run as `lastError`: only the final attempt's evidence is sealed, so it was otherwise gone.
 
+## A tool's answer goes back to the model
+
+An inline tool ends the model's stream at the call: the harness returns the request and waits. Approvals
+always resumed a run with the decision (`continuation.resume_messages`); every other inline tool -- a
+connector read, `message_agent`, `remember`, a Bot being created -- ran, and its result was dropped, so the
+turn simply ended where the model asked. A Bot could not act on what a connector returned, or on the id of a
+Bot it had just made.
+
+`_drive` now runs the model in rounds. When a round ends with inline tools the code answered, it sends the
+same history plus the turn that made the calls and a turn carrying the results
+(`continuation.tool_round_messages`, the shape D4 verified for approvals), and lets the model go on. Calls
+made together are answered together. What it said before and after reads as one reply. The whole turn is one
+message with every step in it. A tool that runs inside the harness (the terminal, the files, a browser) is not
+answered by the code, and a pause for an approval still ends the round. `MAX_TOOL_ROUNDS` (40) stops a loop
+that would otherwise run to the deadline; it says so and the Bot carries on in the next message.
+
+Every inline handler returns something the model can act on: a result, or `{"error": ...}` (sent as an error).
+
 ## A Bot's tools
 
 A harness is created bare (the call that is known to work in this account) and its inline tools --
-`propose_agent`, `request_approval`, `message_agent`, `remember`, `connector_search`, `connector_call`
--- arrive by an update. Nothing did that for a Bot made through the console, so it could talk but not
-propose a Bot, ask for an approval, bring in a teammate, or use a connected app. Before a Bot's first run
-`orchestrator._ensure_harness_tools` adds what is missing, waits for the harness to be READY, and records
-`harnessToolsVersion` on the Bot (a fingerprint of the tool names, so adding a tool re-syncs every Bot). It
-never fails a run: a refused update is logged, the Bot goes on with the tools it has, and the next run tries
-again. `scripts/sync_harness_tools.py` does the same ahead of time.
+`create_agent`, `update_agent`, `request_approval`, `message_agent`, `remember`, `connector_search`,
+`connector_call` -- arrive by an update. Nothing did that for a Bot made through the console, so it could talk
+but not make a Bot, ask for an approval, bring in a teammate, or use a connected app. Before a Bot's first run
+`orchestrator._ensure_harness_tools` waits for the harness to be READY, adds what is missing, refreshes a tool
+whose wording has changed, waits for READY again, and records `harnessToolsVersion` on the Bot (a fingerprint of
+each tool's name, description and inputs, so improving the wording reaches every Bot). It never fails a run: a
+refused update is logged, the Bot goes on with the tools it has, and the next run tries again.
+`scripts/sync_harness_tools.py` does the same ahead of time.
 
-`propose_agent` still produces an approval card, not a Bot: an agent cannot create authority, including for
-the next agent, and a card is what stops an instruction planted in something a Bot read from doing it.
+The orchestrator's role must allow this: `bedrock-agentcore:UpdateHarness` was missing, so the update was
+denied and swallowed. `tests/test_iam_contract.py` reads the control-plane calls the code makes and checks the
+stack grants each one.
+
+## Bots that make Bots
+
+`create_agent` makes a Bot **when the operator's own message started the run** (`trigger.type == "user"`,
+read from how the run was created and never from anything the model wrote). Any other run -- a routine, a
+teammate's message, background work -- is a Bot acting on its own initiative, and still ends in an
+`agent.create` approval card. An instruction planted in something a Bot read must not be able to create Bots
+without a person, and the trigger is what tells the two apart.
+
+What makes it safe to drop the card for a request the operator made, all in code (`provisioning.create_child`):
+
+- **The child holds no more than its creator.** Its apps are the creator's, each at the creator's own ceiling,
+  and its optional tools are a subset of the creator's. A read-only Bot cannot make a write-capable one. What the
+  model writes cannot widen this: grants, budget and tools in the call are ignored in favour of the store.
+- **It reports to its creator** (`reportsTo`), is recorded as its creator's (`parentAgentId`) and is audited as
+  `agent.created` with the creating Bot named. A Bot the creator makes is no one else's.
+- **No cap on how many.** The only ceiling is the organisation's (`DEFAULT_MAX_AGENTS`, 200), which is what the
+  roster can list: every read is capped at 200 rows, so past it a Bot would exist and not appear.
+- **It starts with the standard budget** ($1 a run, $20 a month, a hard stop), not the reduced one a proposal
+  carries. The stop is unchanged and is edited from the Bot's settings.
+- **`plan_create` still refuses an agent actor** unless `on_owners_request` is set, which only the orchestrator
+  sets, from the trigger.
+
+`create_agent`'s description carries the selection logic (do not create a Bot for a one-off task; write standing
+orders in operational terms; never put a secret in them; this week's list is a first task, not standing orders;
+name it so it scans on a roster; it reports to you and can use what you can, never more). `firstTask` gives the
+new Bot its first job with a clear finish line: it becomes the new Bot's whole opening conversation (its greeting
+is not sent to the model), it goes through the same wake gate any priority message does, and both transcripts say
+who briefed whom.
+
+`update_agent` lets a Bot refine the name, title, role and standing orders of a Bot **it created**, on a run the
+operator started, through the same `plan_update` a person's edit uses. Access, budget, tools and status are not
+fields it accepts. Deleting is a person's alone.
+
+Not the same as a card: nothing about this makes an approval unnecessary for anything that changes what a Bot may
+*reach*; that is still decided by grants and `policy.evaluate` on every call.
 

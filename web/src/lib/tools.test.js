@@ -11,6 +11,9 @@ describe('stepLabel', () => {
   it('names what the loop does in words, not identifiers', () => {
     expect(stepLabel('request_connector')).toBe('Asked to connect an app');
     expect(stepLabel('agent.create')).toBe('Suggested a new Bot');
+    expect(stepLabel('agent.created')).toBe('Created a Bot');       // it exists, not just proposed
+    expect(stepLabel('agent.update')).toBe('Refined a Bot');
+    expect(stepLabel('create_agent')).toBe('Created a Bot');
     expect(stepLabel('message_agent')).toBe('Messaged a teammate');
   });
 

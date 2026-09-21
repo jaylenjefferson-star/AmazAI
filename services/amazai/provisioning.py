@@ -1,0 +1,181 @@
+"""Making a Bot real: its harness, and creating one on someone's behalf.
+
+Two callers need this and neither may import the other's handler: the API (a
+person creates a Bot, or approves a proposal) and the orchestrator (a Bot creates
+one because the operator asked it to). So the parts they share live here.
+
+**Creating a Bot at the operator's request** (`create_child`) is the one place an
+agent brings a new agent into being, and it is deliberately narrow:
+
+* The caller decides *whether* it is allowed -- only from a run the operator's own
+  message started -- and passes `on_owners_request` to `agents.plan_create`, which
+  otherwise refuses any agent actor. Nothing the model writes can set that.
+* The child never holds more than its creator does. Its apps are the creator's,
+  each at the creator's own ceiling, and its optional tools are a subset of the
+  creator's. A read-only Bot cannot make a write-capable one.
+* The child reports to its creator, is recorded as its creator's, and carries the
+  same budget any Bot the operator makes carries. There is no cap on how many a Bot
+  may create; the only ceiling is the organisation's own (`agents.DEFAULT_MAX_AGENTS`).
+* Every one is audited as `agent.created` with the creating Bot named.
+"""
+
+from __future__ import annotations
+
+import os
+
+from amazai import agentcore, agents as A, connectors, keys as K
+from amazai.policy import Capability
+from amazai.store import Store
+
+#: Optional built-ins a Bot may ask for. The terminal and the Bot's own files are always on.
+OPTIONAL_TOOLS = frozenset({"browser", "code_interpreter"})
+
+
+class ChildCreationError(Exception):
+    """A Bot could not be created. The message is written for the model to read."""
+
+
+def org_connectors(store: Store) -> dict[str, A.OrgConnector]:
+    """Connectors the organization has installed, keyed by id.
+
+    The ceiling for every per-agent grant. Empty until a connector is
+    installed, which is why a grant request on a fresh org is refused rather
+    than quietly granted -- there is nothing yet to grant from.
+    """
+    out: dict[str, A.OrgConnector] = {}
+    for row in store.query_index("gsi1", "gsi1pk", "CONNECTORS", limit=200):
+        if row.get("status") not in (None, "installed", "authorized"):
+            continue
+        try:
+            capability = Capability(row.get("capability", "read"))
+        except ValueError:
+            continue
+        out[row["connectorId"]] = A.OrgConnector(
+            connector_id=row["connectorId"],
+            allowed_tools=frozenset(row.get("allowedTools") or []),
+            capability=capability,
+        )
+    return out
+
+
+def seated_agents(store: Store) -> list[dict]:
+    """Bots that count against the organisation's ceiling."""
+    return [r for r in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
+            if r.get("status", r.get("state")) in A.SEATED]
+
+
+def max_agents() -> int:
+    return int(os.environ.get("MAX_AGENTS", A.DEFAULT_MAX_AGENTS))
+
+
+def resolve_model_id(agent: dict, seated: list[dict]) -> None:
+    """Give a new Bot the model an existing one already resolved, in place.
+
+    A Bot is created by *tier*, never by a guessed Bedrock identifier. The account's
+    resolved model is reused from a Bot that has one. Both creation paths need this:
+    without it a Bot approved from a proposal reached provisioning with no model and
+    was refused.
+    """
+    if (agent.get("model") or {}).get("modelId"):
+        return
+    resolved = next((r.get("model", {}).get("modelId") for r in seated
+                     if r.get("model", {}).get("modelId")), None)
+    if resolved:
+        agent["model"]["modelId"] = resolved
+
+
+def provision_harness(store: Store, agent: dict) -> dict:
+    """Give the agent its runtime identity and mark it runnable.
+
+    Separated so the whole create path can be exercised without an AWS
+    account: a test swaps this for a stub and still drives the transaction,
+    the rollback and the audit trail.
+    """
+    model_id = (agent.get("model") or {}).get("modelId")
+    if not model_id:
+        # An unresolved model is the intended failure, not a surprise. A
+        # guessed Bedrock identifier fails later, in a way that reads as a
+        # permissions bug (decision D2).
+        raise RuntimeError(
+            f"no modelId resolved for tier "
+            f"{(agent.get('model') or {}).get('tier')!r}; "
+            "run scripts/resolve_models.py against this account first"
+        )
+
+    # User-created Bots use the stack's restricted dynamic role. It has model
+    # and harness-state permissions only: no drive, evidence, connector,
+    # computer, or shell permissions. Passing no role makes AgentCore reject
+    # the request before it creates the harness, which previously made every
+    # new Bot and the first-Bot offer fail.
+    role_arn = os.environ.get("AGENT_ROLE_ARN", "").strip()
+    if not role_arn:
+        raise RuntimeError("no AgentCore execution role is configured for new Bots")
+    client = agentcore.AgentCore()
+    harness_arn = client.create_harness(
+        name=f"amazai_{agent['agentId']}",
+        execution_role_arn=role_arn,
+        tool_names=agent.get("allowedTools") or [],
+    )
+
+    return store.update(K.agent_pk(agent["agentId"]), "META", {
+        "harnessArn": harness_arn,
+        "executionRoleArn": role_arn,
+        "status": "active",
+        "state": "active",
+    })
+
+
+def child_body(store: Store, creator: dict, args: dict) -> dict:
+    """What a Bot may nominate for a child, and what it inherits from the nominator.
+
+    The model supplies who the child is (name, title, role, standing orders, tier).
+    It does not supply what the child may reach: that is the creator's own access,
+    read from the store, so it can neither be widened by what the model writes nor
+    exceed what the creator holds.
+    """
+    grants = [{"connectorId": g.connector_id, "capability": g.capability.value,
+               "allowedTools": sorted(g.tools)}
+              for g in connectors.granted_apps(store, creator["agentId"])]
+    held = set(creator.get("allowedTools") or [])
+    tools = [t for t in (args.get("tools") or [])
+             if isinstance(t, str) and t in OPTIONAL_TOOLS and t in held]
+    body = {k: args[k] for k in ("name", "title", "role", "description", "systemPrompt",
+                                 "modelTier", "workingStyle", "avatar")
+            if args.get(k) not in (None, "")}
+    body["tools"] = tools
+    body["grants"] = grants
+    return body
+
+
+def create_child(store: Store, creator: dict, args: dict) -> dict:
+    """Create a Bot on the operator's request and return its row. Raises ChildCreationError.
+
+    Whether the operator asked is the caller's to establish; this trusts that it did.
+    See the module docstring for what it does and does not do.
+    """
+    actor = A.Actor(user_id=store.owner_id, org_id=creator.get("orgId") or "",
+                    agent_id=creator["agentId"])
+    seated = seated_agents(store)
+    try:
+        plan = A.plan_create(child_body(store, creator, args), actor,
+                             org_connectors=org_connectors(store),
+                             active_count=len(seated), max_agents=max_agents(),
+                             on_owners_request=True)
+    except (A.ValidationError, A.QuotaExceeded, A.Conflict, A.Escalation) as exc:
+        raise ChildCreationError(str(exc)) from exc
+
+    if store.try_get(K.agent_pk(plan.agent_id), "META"):
+        raise ChildCreationError(
+            f"a Bot with the id {plan.agent_id!r} already exists; choose a different name")
+
+    resolve_model_id(plan.agent, seated)
+    store.transact_put(plan.items)
+    try:
+        return provision_harness(store, plan.agent)
+    except Exception as exc:  # noqa: BLE001
+        store.transact_delete(plan.rollback_keys)
+        store.put(A.audit_event(plan.agent_id, "agent.provision_failed", actor,
+                                detail=f"{type(exc).__name__}: {exc}"))
+        raise ChildCreationError(
+            f"its harness could not be set up ({type(exc).__name__}: {str(exc)[:200]}); "
+            "nothing was left behind") from exc

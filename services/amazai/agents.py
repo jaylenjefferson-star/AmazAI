@@ -99,10 +99,11 @@ TZ_RE = re.compile(r"^(UTC|[A-Za-z]+(?:_[A-Za-z]+)*(?:/[A-Za-z0-9+_-]+){1,2})$")
 
 AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 
-#: Ceiling on agents an organization may hold at once. Refused at creation
-#: rather than degrading later, because the failure mode of an unbounded agent
-#: count is a bill, not an error.
-DEFAULT_MAX_AGENTS = 25
+#: The most Bots an organization may hold at once. Not a brake on what a Bot may
+#: create -- there is none of those -- but the point where the console and the org
+#: chart stop being able to list them: every roster read is capped at 200 rows, so
+#: past it a Bot would exist and silently not appear. Refused at creation instead.
+DEFAULT_MAX_AGENTS = 200
 
 #: Per-agent limits a caller may not exceed without an explicit org override.
 MAX_CONCURRENT_RUNS_CEILING = 8
@@ -469,7 +470,8 @@ def plan_create(body: dict, actor: Actor, *,
                 org_connectors: dict[str, OrgConnector] | None = None,
                 active_count: int = 0,
                 max_agents: int = DEFAULT_MAX_AGENTS,
-                has_entrypoint: bool = False) -> CreatePlan:
+                has_entrypoint: bool = False,
+                on_owners_request: bool = False) -> CreatePlan:
     """Validate a create request and lay out every row it implies.
 
     Nothing here touches the store. If this returns, the agent is creatable;
@@ -479,9 +481,17 @@ def plan_create(body: dict, actor: Actor, *,
     a parameter rather than a lookup so the rule below stays testable without
     a table, and so the caller -- which already listed the agents to count them
     -- does not list them twice.
+
+    An agent actor is refused, with one exception: `on_owners_request`, which the
+    orchestrator sets from how the *run* started (the operator's own message), never
+    from anything the model wrote. That is the operator asking a Bot to make a Bot.
+    Such a Bot is recorded as its creator's, reports to it, and is audited with the
+    creator named. Everything else -- a routine, a teammate, background work -- still
+    reaches this refusal and has to be approved by a person.
     """
-    if actor.is_agent:
+    if actor.is_agent and not on_owners_request:
         raise Escalation("agents do not create agents; a person does")
+    creator = actor.agent_id if actor.is_agent else None
 
     check_quota(active_count, max_agents=max_agents)
 
@@ -499,7 +509,7 @@ def plan_create(body: dict, actor: Actor, *,
 
     agent_id = normalize_agent_id(profile["name"], explicit=body.get("agentId"))
 
-    parent = body.get("parentAgentId") or None
+    parent = creator or body.get("parentAgentId") or None
     if parent is not None:
         _require(bool(AGENT_ID_RE.match(parent)), "parentAgentId is malformed")
         _require(parent != agent_id, "an agent cannot be its own parent")
@@ -508,7 +518,7 @@ def plan_create(body: dict, actor: Actor, *,
     # absent means the default (Chief), which is what makes it need no migration.
     # Whether that Bot exists is the caller's check (`org.validate`); the shape
     # and the self-reference are checked here so a bad value dies with the rest.
-    reports_to = body.get("reportsTo") or None
+    reports_to = body.get("reportsTo") or creator or None
     if reports_to is not None:
         _require(isinstance(reports_to, str)
                  and (reports_to == "owner" or bool(AGENT_ID_RE.match(reports_to))),
@@ -624,7 +634,8 @@ def plan_create(body: dict, actor: Actor, *,
                                     "role": profile["role"],
                                     "modelTier": profile["modelTier"],
                                     "grants": [g["connectorId"] for g in grants]},
-                             detail="created via API"))
+                             detail=(f"created by {creator} at the operator's request"
+                                     if creator else "created via API")))
 
     return CreatePlan(agent_id=agent_id, items=items, agent=agent)
 

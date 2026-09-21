@@ -24,8 +24,12 @@ const STEP = {
   request_connector: 'Asked to connect an app',
   request_approval: 'Asked for approval',
   propose_routine: 'Suggested a routine',
+  create_agent: 'Created a Bot',
+  update_agent: 'Refined a Bot',
   propose_agent: 'Suggested a new Bot',
-  'agent.create': 'Suggested a new Bot',
+  'agent.create': 'Suggested a new Bot',        // waiting on your approval
+  'agent.created': 'Created a Bot',
+  'agent.update': 'Refined a Bot',
   propose_skill: 'Suggested a skill',
   'skill.create': 'Suggested a skill',
   propose_shared_memory: 'Suggested a shared memory',

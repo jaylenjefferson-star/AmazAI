@@ -20,26 +20,60 @@ REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or
 #: file_operations, browser, gateway targets -- executes inside the harness
 #: and never round-trips through us.
 INLINE_TOOLS = {
-    "propose_agent": {
+    "create_agent": {
         "description": (
-            "Propose a new companion when the task genuinely needs a separate lane. "
-            "This never creates an agent directly: it creates an owner approval card "
-            "showing the proposed role, model tier, and fixed safe starter budget. "
-            "The new companion starts with no connector grants and no optional tools."
+            "Create a new Bot: a long-lived specialist with its own memory, its own schedule and its "
+            "own approval boundary. Create one when the operator asks for it, or when a job will recur "
+            "or needs a separate owner. Do not create one for a one-off task; do that yourself.\n"
+            "Write `description` as standing orders to that Bot, in operational terms: what it owns "
+            "and what it does not, what it pulls and what it produces, and what it must never do "
+            "without approval. Never put a secret in it. This week's list is not standing orders; "
+            "send it as `firstTask`. Name the Bot so it reads on a roster (\"Expense Manager\", not "
+            "\"Bot 3\"); `title` is the short label beside the name (\"Finance\").\n"
+            "The new Bot reports to you, can use the apps you can (never more), and starts with the "
+            "standard budget. When the operator's own message asked for it, it exists at once and you "
+            "are told its id. Otherwise the operator is asked to approve it first, and you are told "
+            "that instead. Give `firstTask`: a concrete first job with a clear finish line, and the "
+            "new Bot starts on it immediately."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
+                "name": {"type": "string", "description": "What the roster calls it"},
+                "title": {"type": "string", "description": "A short label, at most 24 characters"},
+                "role": {"type": "string", "description": "One line: what it is for"},
+                "description": {"type": "string",
+                                "description": "Standing orders: owns, does not own, produces, never without approval"},
+                "systemPrompt": {"type": "string", "description": "Optional deeper instructions"},
+                "modelTier": {"type": "string", "description": "fast, balanced or deep"},
+                "workingStyle": {"type": "string"},
+                "tools": {"type": "array", "items": {"type": "string"},
+                          "description": "Optional built-ins: browser, code_interpreter (only ones you have)"},
+                "avatar": {"type": "object"},
+                "firstTask": {"type": "string",
+                              "description": "The first job, with what done looks like"},
+                "why": {"type": "string", "description": "Why a separate Bot is needed"},
+            },
+            "required": ["name", "role", "description"],
+        },
+    },
+    "update_agent": {
+        "description": (
+            "Refine a Bot you created: its name, title, role or standing orders (`description`). Use it "
+            "when you learn a durable preference or boundary that should outlive this conversation. "
+            "It changes only what you pass. It cannot change access, budget or status, and it works "
+            "only on Bots you created, when the operator's own message started this turn."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agentId": {"type": "string", "description": "The Bot to refine"},
                 "name": {"type": "string"},
+                "title": {"type": "string"},
                 "role": {"type": "string"},
                 "description": {"type": "string"},
-                "systemPrompt": {"type": "string"},
-                "modelTier": {"type": "string"},
-                "workingStyle": {"type": "string"},
-                "avatar": {"type": "object"},
-                "why": {"type": "string", "description": "Why a separate companion is needed"},
             },
-            "required": ["name", "role", "why"],
+            "required": ["agentId"],
         },
     },
     "request_approval": {
@@ -283,15 +317,17 @@ def harness_tools(tool_names: list[str]) -> list[dict]:
 
 
 def tools_version() -> str:
-    """A short fingerprint of which inline tools a harness should carry.
+    """A short fingerprint of which inline tools a harness should carry, and how they read.
 
     Recorded on a Bot once its harness has been checked, so the check is a one-off
-    per Bot and per set of tools: adding a tool to `INLINE_TOOLS` changes this, and
-    every Bot's harness is brought up to date the next time it runs. Names only: a
-    tool already on a harness is not rewritten when its description changes.
+    per Bot and per set of tools. It covers each tool's description and inputs as
+    well as its name: what a tool says about itself is how a model decides to use
+    it, so improving the wording has to reach the Bots that already have the tool.
     """
     import hashlib
-    return hashlib.sha256(",".join(sorted(INLINE_TOOLS)).encode()).hexdigest()[:12]
+    import json
+    blob = json.dumps({n: INLINE_TOOLS[n] for n in sorted(INLINE_TOOLS)}, sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
 def _harness_id(harness_arn: str) -> str:
@@ -393,7 +429,7 @@ class AgentCore:
                 "missing": sorted(n for n in INLINE_TOOLS if n not in have)}
 
     def add_inline_tools(self, harness_arn: str) -> dict:
-        """Add the missing inline tools to an existing harness.
+        """Bring a harness's inline tools up to date: add the missing, refresh the reworded.
 
         `update_harness` *replaces* what it is given, so this reads the harness,
         merges, and sends the whole list. Engineering's harness in this account
@@ -401,16 +437,38 @@ class AgentCore:
         shape has worked here before; the first sync of any other harness is still
         that harness's first, which is why `ensure_inline_tools` is written so a
         failure is reported and never stops a run.
+
+        A tool already there is rewritten only when its description is readable
+        and differs from ours. If the service hands the description back in a shape
+        this cannot read, the tool is left alone rather than rewritten on every run.
         """
         resp = self.get_harness(harness_arn)
         body = resp.get("harness", resp)
         current = list(body.get("tools") or [])
-        have = {t.get("name") for t in current if t.get("type") == "inline_function"}
-        added = [t for t in harness_tools([]) if t["name"] not in have]
-        if not added:
+        desired = {t["name"]: t for t in harness_tools([]) if t.get("type") == "inline_function"}
+
+        def described(tool: dict) -> str | None:
+            cfg = (tool.get("config") or {}).get("inlineFunction") or {}
+            return cfg.get("description") if isinstance(cfg.get("description"), str) else None
+
+        kept, changed = [], []
+        have = set()
+        for tool in current:
+            name = tool.get("name")
+            if tool.get("type") == "inline_function" and name in desired:
+                have.add(name)
+                theirs = described(tool)
+                if theirs is not None and theirs != described(desired[name]):
+                    kept.append(desired[name])           # reworded: refresh it
+                    changed.append(name)
+                    continue
+            kept.append(tool)
+        added = [desired[n] for n in desired if n not in have]
+        changed += [t["name"] for t in added]
+        if not changed:
             return {"changed": False, "added": []}
-        self._control.update_harness(harnessId=_harness_id(harness_arn), tools=current + added)
-        return {"changed": True, "added": [t["name"] for t in added]}
+        self._control.update_harness(harnessId=_harness_id(harness_arn), tools=kept + added)
+        return {"changed": True, "added": changed}
 
     def ensure_inline_tools(self, harness_arn: str, *, wait_seconds: int = 60,
                             poll_seconds: float = 3.0, sleep=time.sleep) -> dict:
@@ -421,19 +479,28 @@ class AgentCore:
         READY, and a harness that goes FAILED or DELETING is an error here rather
         than a mystery at the next invoke.
         """
+        self._await_ready(harness_arn, "before its tools were updated", wait_seconds,
+                           poll_seconds, sleep)
         result = self.add_inline_tools(harness_arn)
         if not result["changed"]:
             return result
+        self._await_ready(harness_arn, "after its tools were updated", wait_seconds,
+                          poll_seconds, sleep)
+        return result
+
+    def _await_ready(self, harness_arn: str, when: str, wait_seconds: int,
+                     poll_seconds: float, sleep) -> None:
+        """Return once the harness is READY. A Bot made a moment ago may still be creating."""
         waited = 0.0
         while True:
             resp = self.get_harness(harness_arn)
             status = (resp.get("harness", resp) or {}).get("status")
-            if status == "READY":
-                return result
-            if status in ("FAILED", "DELETING", "UPDATE_FAILED"):
-                raise RuntimeError(f"harness went {status} after its tools were updated")
+            if status in (None, "READY"):
+                return
+            if status in ("FAILED", "DELETING", "UPDATE_FAILED", "CREATE_FAILED"):
+                raise RuntimeError(f"harness went {status} {when}")
             if waited >= wait_seconds:
-                raise TimeoutError(f"harness still {status} {wait_seconds}s after its tools were updated")
+                raise TimeoutError(f"harness still {status} {wait_seconds}s {when}")
             sleep(poll_seconds)
             waited += poll_seconds
 
@@ -492,9 +559,11 @@ def end_on_user(messages: list[dict], goal: str = "") -> list[dict]:
     When the history does not end on a user turn (a Bot woken by a teammate, a
     routine), the run's own goal is the request it was created for, so it is
     said as that turn. With no goal there is nothing honest to say on anyone's
-    behalf, so the list is returned as it is and the service's own error shows.
+    behalf, so the list is returned as it is and the service's own error shows. A Bot
+    that has never been spoken to has no history at all (its greeting is not sent), so
+    the goal is its whole conversation.
     """
-    if not messages or messages[-1].get("role") == "user":
+    if messages and messages[-1].get("role") == "user":
         return messages
     goal = (goal or "").strip()
     if not goal:

@@ -23,15 +23,20 @@ ARN = "arn:aws:bedrock-agentcore:us-west-2:1:harness/amazai_chief-abc123"
 class FakeControl:
     """The control plane's harness API, one harness deep."""
 
-    def __init__(self, tools=None, after_update=("READY",)):
+    def __init__(self, tools=None, after_update=("READY",), before_update=()):
         self.tools = list(tools or [])
         self.after_update = list(after_update)
+        self.before_update = list(before_update)      # e.g. still CREATING when first asked
         self.updated = False
         self.updates = []
 
     def get_harness(self, harnessId):
-        status = (self.after_update.pop(0) if self.updated and self.after_update
-                  else "READY")
+        if not self.updated and self.before_update:
+            status = self.before_update.pop(0)
+        elif self.updated and self.after_update:
+            status = self.after_update.pop(0)
+        else:
+            status = "READY"
         return {"harness": {"harnessId": harnessId, "status": status, "tools": self.tools}}
 
     def update_harness(self, harnessId, tools):
@@ -46,6 +51,11 @@ def core(control):
 def inline(name):
     return {"type": "inline_function", "name": name,
             "config": {"inlineFunction": {"description": "x", "inputSchema": {}}}}
+
+
+def current_specs():
+    """Every inline tool exactly as the code declares it: what an up-to-date harness holds."""
+    return [t for t in agentcore.harness_tools([]) if t["type"] == "inline_function"]
 
 
 class TestTheVersion:
@@ -70,27 +80,65 @@ class TestEnsuringToolsOnAHarness:
         (harness_id, sent), = control.updates
         assert harness_id == "amazai_chief-abc123"                      # the id, not the ARN
         assert {t["name"] for t in sent} == set(agentcore.INLINE_TOOLS)
-        assert {"propose_agent", "connector_call", "connector_search", "message_agent"} <= {t["name"] for t in sent}
+        assert {"create_agent", "update_agent", "connector_call", "connector_search", "message_agent"} <= {t["name"] for t in sent}
         assert len(sleeps) == 2                                          # UPDATING, UPDATING, then READY
 
     def test_it_keeps_what_the_harness_already_has(self):
-        existing = [inline("request_approval"), {"type": "agentcore_browser", "name": "browser"}]
-        control = FakeControl(tools=existing)
+        approval = next(t for t in current_specs() if t["name"] == "request_approval")
+        browser = {"type": "agentcore_browser", "name": "browser"}
+        control = FakeControl(tools=[approval, browser])
 
         core(control).ensure_inline_tools(ARN, sleep=lambda _s: None)
 
         (_, sent), = control.updates
-        assert sent[:2] == existing                                      # UpdateHarness replaces: nothing dropped
+        assert sent[:2] == [approval, browser]                           # UpdateHarness replaces: nothing dropped
         assert [t["name"] for t in sent].count("request_approval") == 1  # and nothing doubled
 
-    def test_a_harness_with_everything_is_left_alone(self):
-        control = FakeControl(tools=[inline(n) for n in agentcore.INLINE_TOOLS])
+    def test_a_harness_with_everything_current_is_left_alone(self):
+        control = FakeControl(tools=current_specs())
         slept = []
 
         result = core(control).ensure_inline_tools(ARN, sleep=slept.append)
 
         assert result == {"changed": False, "added": []}
         assert control.updates == [] and slept == []
+
+    def test_a_tool_whose_wording_has_changed_is_refreshed_in_place(self):
+        # What a tool says about itself is how a model decides to use it, so improving the
+        # words has to reach the Bots that already have the tool.
+        stale = [inline(t["name"]) for t in current_specs()]                # every description is "x"
+        control = FakeControl(tools=stale)
+
+        result = core(control).ensure_inline_tools(ARN, sleep=lambda _s: None)
+
+        assert result["changed"] is True
+        (_, sent), = control.updates
+        assert [t["name"] for t in sent] == [t["name"] for t in stale]     # same tools, same order
+        create = next(t for t in sent if t["name"] == "create_agent")
+        assert "standing orders" in create["config"]["inlineFunction"]["description"]
+
+    def test_a_description_it_cannot_read_is_not_rewritten_on_every_run(self):
+        # If the service hands a tool back in a shape with no readable description, "differs"
+        # is unknowable; rewriting it every time would be an update per Bot per deploy.
+        unreadable = [{"type": "inline_function", "name": t["name"]} for t in current_specs()]
+        control = FakeControl(tools=unreadable)
+
+        assert core(control).ensure_inline_tools(ARN)["changed"] is False
+        assert control.updates == []
+
+    def test_a_harness_still_being_created_is_waited_for_before_it_is_touched(self):
+        control = FakeControl(before_update=("CREATING", "CREATING", "READY"))
+        sleeps = []
+
+        core(control).ensure_inline_tools(ARN, sleep=sleeps.append)
+
+        assert len(control.updates) == 1 and len(sleeps) == 2
+
+    def test_one_that_never_finishes_creating_gives_up_without_updating(self):
+        control = FakeControl(before_update=("CREATING",) * 50)
+        with pytest.raises(TimeoutError, match="before"):
+            core(control).ensure_inline_tools(ARN, wait_seconds=6, poll_seconds=3, sleep=lambda _s: None)
+        assert control.updates == []
 
     def test_a_harness_that_goes_bad_after_the_update_is_an_error_not_a_mystery(self):
         control = FakeControl(after_update=("UPDATING", "FAILED"))

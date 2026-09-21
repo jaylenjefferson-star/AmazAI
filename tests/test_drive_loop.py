@@ -53,6 +53,10 @@ class FakeCore:
         script = self.scripts.pop(0) if self.scripts else []
         yield from (script(kw) if callable(script) else script)
 
+    def ensure_inline_tools(self, harness_arn):
+        """The pre-run tool sync: this harness is already up to date."""
+        return {"changed": False, "added": []}
+
 
 @pytest.fixture
 def world(api_table, monkeypatch):
@@ -116,6 +120,9 @@ class TestRetryState:
         assert world.drive()["state"] == RunState.COMPLETED.value
 
     def test_a_bot_proposal_pauses_the_run_on_an_approval_that_names_its_rule(self, world):
+        # A run the operator did not start (a schedule fired it): a Bot acting on its own
+        # initiative. When the operator's message started it, the Bot is created at once.
+        world.store.update(world.run["pk"], "META", {"trigger": {"type": "routine"}})
         world.script([text("Here is the plan."),
                       *tool_use("propose_agent", {"name": "Calendar", "role": "Keeps the calendar.",
                                                   "why": "A separate lane."})])

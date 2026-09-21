@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import traceback
 
 import boto3
@@ -23,7 +24,7 @@ import boto3
 from dataclasses import dataclass, field
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
-                    continuation, cost, keys as K, memory, onboarding, org, policy, redact, review,
+                    continuation, cost, keys as K, memory, onboarding, org, policy, provisioning, redact, review,
                     router, routines, runs, skills, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
@@ -35,6 +36,21 @@ from amazai.store import Store, new_id, now_iso, ordered_suffix
 from amazai.stream import EventKind, StreamParser
 
 MAX_HISTORY = 40
+
+#: Model calls in one turn, each answering the tools the last one asked for. Not a
+#: limit on how much a Bot may do -- it can carry on in the next message -- but a stop
+#: for a loop that would otherwise run until the run's deadline.
+MAX_TOOL_ROUNDS = 40
+
+#: Wall-clock seconds a turn may spend before it stops asking the model for more. The
+#: worker Lambda is killed at 15 minutes, and a run killed mid-round is left in a state
+#: nobody chose; stopping cleanly with the work so far is better than either.
+ROUND_BUDGET_SECONDS = 11 * 60
+
+#: The inline tools the code answers itself. Their result goes back to the model;
+#: the tools that run inside the harness (a shell, the files, a browser) never do.
+#: `propose_agent` is the name a harness made before `create_agent` still carries.
+ROUND_TRIP_TOOLS = frozenset(agentcore.INLINE_TOOLS) | {"propose_agent"}
 
 
 @dataclass
@@ -210,8 +226,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # The first-conversation script is written for a private chat and is wrong in a
     # group; a room leaves it out (the role and identity still say who this Bot is).
     prompt_agent = agent
-    if thread.get("kind") == "room" and onboarding.is_brief(agent.get("systemPrompt")):
-        prompt_agent = {**agent, "systemPrompt": ""}
+    if onboarding.is_brief(agent.get("systemPrompt")):
+        # In a room the script is left out. In a private chat the *current* brief is used
+        # rather than the copy stored when the Bot was made, which names tools that have
+        # since been replaced; a prompt the operator has rewritten is not touched.
+        prompt_agent = {**agent, "systemPrompt": "" if thread.get("kind") == "room"
+                        else onboarding.brief(agent.get("name") or "Chief")}
     system_prompt = agentcore.build_system_prompt(prompt_agent, memories, skills=assigned_skills,
                                                   opening=opening)
     system_prompt += _request_notes(run, agent, thread)
@@ -242,46 +262,89 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     turn = Turn()
     started_at = now_iso()
 
+    # Inline tools the code answered this round, to hand back so the model can go on.
+    answered: list[dict] = []
+    carried: list[dict] = []
+    rounds = 0
+    drive_started = time.monotonic()
+
+    def answer(parsed, at_seq: int) -> bool:
+        """Handle one tool call. True when the run has to pause for a decision."""
+        nonlocal pending_approval
+        result = _handle_tool(store, run, agent, ev, push, resolution,
+                              parsed, at_seq, spend, turn)
+        if result.get("pause"):
+            pending_approval = result["approval"]
+            return True
+        if parsed.tool_name in ROUND_TRIP_TOOLS:
+            out = result.get("toolResult", {"ok": True})
+            answered.append({"toolUseId": parsed.tool_use_id, "name": parsed.tool_name,
+                             "input": parsed.tool_input, "result": out,
+                             "error": isinstance(out, dict) and "error" in out})
+        return False
+
     try:
-        stream = core.invoke_stream(
-            harness_arn=agent["harnessArn"],
-            session_id=run["sessionId"],
-            messages=messages,
-            model_id=model_id,
-            system_prompt=system_prompt,
-            allowed_tools=list(resolution.tools) or None,
-        )
+        while True:
+            parser = StreamParser()
+            answered.clear()
+            round_from = len(buffer)
+            stream = core.invoke_stream(
+                harness_arn=agent["harnessArn"],
+                session_id=run["sessionId"],
+                messages=messages + carried,
+                model_id=model_id,
+                system_prompt=system_prompt,
+                allowed_tools=list(resolution.tools) or None,
+            )
 
-        for raw in stream:
-            for parsed in parser.feed(raw):
-                seq += 1
+            for raw in stream:
+                for parsed in parser.feed(raw):
+                    seq += 1
 
-                if parsed.kind is EventKind.TEXT:
-                    buffer.append(parsed.text)
-                    push.delta(run["runId"], run["threadId"], parsed.text)
-                    continue
+                    if parsed.kind is EventKind.TEXT:
+                        buffer.append(parsed.text)
+                        push.delta(run["runId"], run["threadId"], parsed.text)
+                        continue
 
-                if parsed.kind is EventKind.ERROR:
-                    stream_error = parsed.error
-                    break
-
-                if parsed.kind is EventKind.TOOL_USE:
-                    result = _handle_tool(store, run, agent, ev, push, resolution,
-                                          parsed, seq, spend, turn)
-                    if result.get("pause"):
-                        pending_approval = result["approval"]
+                    if parsed.kind is EventKind.ERROR:
+                        stream_error = parsed.error
                         break
 
-            if stream_error or pending_approval:
-                break
+                    if parsed.kind is EventKind.TOOL_USE and answer(parsed, seq):
+                        break
 
+                if stream_error or pending_approval:
+                    break
+                if runs.is_cancelled(store, run):
+                    return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at)
+
+            if not (stream_error or pending_approval):
+                for parsed in parser.flush():
+                    if parsed.kind is EventKind.TOOL_USE:
+                        seq += 1
+                        if answer(parsed, seq):
+                            break
+
+            # The model asked for something and stopped to wait for it. Answer, and let it go on.
+            if stream_error or pending_approval or not answered:
+                break
             if runs.is_cancelled(store, run):
                 return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at)
-
-        for parsed in parser.flush():
-            if parsed.kind is EventKind.TOOL_USE:
-                seq += 1
-                _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, spend, turn)
+            rounds += 1
+            out_of_rounds = rounds > MAX_TOOL_ROUNDS
+            out_of_time = time.monotonic() - drive_started > ROUND_BUDGET_SECONDS
+            if out_of_rounds or out_of_time:
+                note = ("\n\n(I stopped here: that was more tool calls than one turn allows. Ask me to carry on.)"
+                        if out_of_rounds else
+                        "\n\n(I stopped here: that turn ran as long as one turn may. Ask me to carry on.)")
+                buffer.append(note)
+                push.delta(run["runId"], run["threadId"], note)
+                break
+            said = "".join(buffer[round_from:])
+            carried += continuation.tool_round_messages(said.strip(), list(answered))
+            if said.strip():                      # a paragraph break between what it said and what it says next
+                buffer.append("\n\n")
+                push.delta(run["runId"], run["threadId"], "\n\n")
 
     except Exception as exc:  # noqa: BLE001
         stream_error = f"{type(exc).__name__}: {exc}"
@@ -532,29 +595,11 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
     args = parsed.tool_input
     preapproved = frozenset(agent.get("preapproved", []))
 
-    if name == "propose_agent":
-        # This is deliberately a proposal rather than an agent-originated
-        # create. The model can nominate a role, but cannot choose grants,
-        # optional tools, or an open-ended budget; those fields are fixed
-        # below and the human approval is bound to the exact proposal.
-        proposal = _agent_creation_proposal(args, parent_agent_id=agent["agentId"])
-        A.validate_profile(proposal)
-        # The always-approve floor includes agent.create. Calling the central
-        # policy gate here keeps that invariant explicit if the policy evolves.
-        decision = policy.evaluate("agent.create", Capability.ADMIN)
-        approval = approvals.request(
-            store, run,
-            action="agent.create", arguments=proposal,
-            why=args.get("why", "A separate companion is needed for this lane."),
-            capability=Capability.ADMIN,
-            tool_use_id=parsed.tool_use_id, tool_name=name, tool_input=args,
-            target={"parentAgentId": agent["agentId"]},
-            reversible=False, decision=decision,
-        )
-        ev.action(seq, "agent.create", "agent creation proposed", approvalId=approval["approvalId"])
-        _step(push, run, turn, "agent.create", f"proposed {proposal['name']}",
-              review.from_decision(decision))
-        return {"pause": True, "approval": approval}
+    if name in ("create_agent", "propose_agent"):
+        return _create_agent_tool(store, run, agent, ev, push, turn, parsed, seq, args)
+
+    if name == "update_agent":
+        return _update_agent_tool(store, run, agent, ev, push, turn, seq, args)
 
     if name == "request_approval":
         action = args.get("action", "unknown")
@@ -566,13 +611,14 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
         except policy.Refused as exc:
             ev.error(seq, "terminal", str(exc))
             _step(push, run, turn, action, f"refused: {exc}", review.refused(exc))
-            return {"pause": False}
+            return {"pause": False, "toolResult": {"error": f"refused: {exc}"}}
 
         if not decision.required:
             # Already covered; tell the agent to proceed rather than pausing.
             _step(push, run, turn, action, f"pre-approved ({decision.reason})",
                   review.from_decision(decision))
-            return {"pause": False}
+            return {"pause": False, "toolResult": {
+                "decision": "pre-approved", "proceed": True, "reason": decision.reason}}
 
         approval = approvals.request(
             store, run,
@@ -592,7 +638,9 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
         push.handoff(run["runId"], run["threadId"], handoff)
         _step(push, run, turn, "handoff", f"to {args.get('to')}",
               review.scoped("handoff", "you stay the owner, and no access travels with it"))
-        return {"pause": False}
+        return {"pause": False, "toolResult": {
+            "ok": True, "handoffId": handoff["handoffId"],
+            "note": "recorded and shown to the operator; no access travels with a handoff"}}
 
     if name == "message_agent":
         try:
@@ -601,14 +649,16 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
             ev.error(seq, "terminal", str(exc))
             _step(push, run, turn, "message_agent", f"blocked: {exc}",
                   review.Review(review.DENIED, "collab", str(exc)))
-            return {"pause": False}
+            return {"pause": False, "toolResult": {"error": str(exc)}}
         ev.action(seq, "message_agent", f"to {args.get('to')}"
                  f" ({'priority' if result['priorityGranted'] else 'deferred'})",
                  messageId=result["message"]["messageId"])
         _step(push, run, turn, "message_agent",
               f"-> {args.get('to')}: {args.get('text','')[:120]}",
               review.scoped("collab", "bound to this task; the recipient's own limits still apply"))
-        return {"pause": False}
+        return {"pause": False, "toolResult": {
+            "delivered": True, "woke": result["woke"],
+            "note": "the recipient will answer in their own turn; do not wait for it here"}}
 
     if name == "remember":
         # Direct write, no approval: scope is limited to this agent's own
@@ -629,7 +679,7 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
             ev.error(seq, "terminal", str(exc))
             _step(push, run, turn, "remember", f"not saved: {exc}",
                   review.Review(review.DENIED, "memory", str(exc)))
-            return {"pause": False}
+            return {"pause": False, "toolResult": {"error": str(exc)}}
         store.put(row)
         ev.action(seq, "remember", f"{scope} memory saved", memId=row["memId"])
         label = (row.get("title") or row.get("body") or "")[:80]
@@ -639,7 +689,7 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
         # console noticed. It is what lets the operator see the save happened.
         threads.event(store, run["threadId"], f"{agent['name']} saved to memory: {label}",
                       icon="layers", memId=row["memId"])
-        return {"pause": False}
+        return {"pause": False, "toolResult": {"saved": True, "memId": row["memId"]}}
 
     if name == "propose_shared_memory":
         # Same pattern as propose_agent/propose_skill: the model nominates, a
@@ -651,7 +701,7 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
             ev.error(seq, "terminal", str(exc))
             _step(push, run, turn, "memory.publish", f"not proposed: {exc}",
                   review.Review(review.DENIED, "memory", str(exc)))
-            return {"pause": False}
+            return {"pause": False, "toolResult": {"error": str(exc)}}
         proposal = {**fields, "proposedBy": agent["agentId"]}
         decision = policy.evaluate("memory.publish", Capability.WRITE, preapproved=preapproved)
         approval = approvals.request(
@@ -677,7 +727,7 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
             ev.error(seq, "terminal", str(exc))
             _step(push, run, turn, "skill.create", f"not proposed: {exc}",
                   review.Review(review.DENIED, "skill", str(exc)))
-            return {"pause": False}
+            return {"pause": False, "toolResult": {"error": str(exc)}}
         proposal["proposedBy"] = agent["agentId"]
         decision = policy.evaluate("skill.create", Capability.ADMIN)
         approval = approvals.request(
@@ -712,13 +762,17 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
         if any(g.connector_id == cid for g in connectors.granted_apps(store, run["agentId"])):
             _step(push, run, turn, "request_connector", f"{app['name']} is already connected",
                   review.scoped("proposal", "already connected and granted; nothing to ask for"))
-            return {"pause": False}
+            return {"pause": False, "toolResult": {
+                "already_connected": True,
+                "note": f"{app['name']} is already connected; use connector_search to find what you can do in it"}}
         turn.cards.append({"type": "connect", "connectorId": cid, "name": app["name"],
                            "why": (args.get("why") or "")[:200]})
         ev.action(seq, "request_connector", f"asked to connect {app['name']}")
         _step(push, run, turn, "request_connector", f"asked you to connect {app['name']}",
               review.scoped("proposal", "a suggestion; nothing is connected until you do it"))
-        return {"pause": False}
+        return {"pause": False, "toolResult": {
+            "ok": True,
+            "note": f"the operator was shown a card to connect {app['name']}; say what it is for and stop"}}
 
     if name == "propose_routine":
         try:
@@ -727,12 +781,13 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
             ev.error(seq, "terminal", str(exc))
             _step(push, run, turn, "propose_routine", f"not proposed: {exc}",
                   review.Review(review.DENIED, "routine", str(exc)))
-            return {"pause": False}
+            return {"pause": False, "toolResult": {"error": str(exc)}}
         turn.cards.append({"type": "routine", **proposal, "agentId": agent["agentId"]})
         ev.action(seq, "propose_routine", f"proposed {proposal['name']}")
         _step(push, run, turn, "propose_routine", f"suggested {proposal['name']}",
               review.scoped("proposal", "a suggestion; you review it before it exists"))
-        return {"pause": False}
+        return {"pause": False, "toolResult": {
+            "ok": True, "note": "the operator was shown the routine to review; nothing runs until they set it up"}}
 
     # --- connector tools ------------------------------------------------------
     if name == "connector_search":
@@ -897,6 +952,147 @@ def _connector_call(store, run, ev, push, turn, parsed, seq, cost, args, preappr
     return {"pause": False, "toolResult": redact.redact(result)[0]}
 
 
+def _owner_asked(run: dict) -> bool:
+    """Whether the operator's own message started this run.
+
+    Read from how the run was created, in code, and never from anything the model
+    said: a routine, a teammate's message or background work is not the operator
+    asking. It is what lets a Bot make a Bot without a card -- and only then.
+    """
+    return (run.get("trigger") or {}).get("type") == "user"
+
+
+def _create_agent_tool(store, run, agent, ev, push, turn, parsed, seq, args) -> dict:
+    """`create_agent`: make a Bot when the operator asked for one, otherwise ask them.
+
+    When the operator's own message started this run, the Bot exists at once (see
+    `provisioning.create_child` for what it inherits and what it does not). Any other
+    run is a Bot acting on its own initiative, and that still ends in a card the
+    operator approves: an instruction planted in something a Bot read must not be
+    able to create Bots. The model is told which happened.
+    """
+    if not _owner_asked(run):
+        return _propose_agent(store, run, agent, ev, push, turn, parsed, seq, args)
+
+    try:
+        child = provisioning.create_child(store, agent, args)
+    except provisioning.ChildCreationError as exc:
+        ev.error(seq, "terminal", f"create_agent: {exc}")
+        _step(push, run, turn, "agent.create", f"not created: {exc}",
+              review.Review(review.DENIED, "agent", str(exc)))
+        return {"pause": False, "toolResult": {"error": str(exc)}}
+
+    ev.action(seq, "agent.created", f"created {child['agentId']}", agentId=child["agentId"])
+    _step(push, run, turn, "agent.created", f"created {child['name']}",
+          review.scoped("agent", f"you asked for it; it reports to {agent['name']} and holds no more "
+                                 "access than they do"))
+    threads.event(store, run["threadId"], f"{agent['name']} created {child['name']}",
+                  icon="check", agentId=child["agentId"])
+    push.notification("info", f"{agent['name']} created {child['name']}")
+
+    briefed = _brief_child(store, run, agent, child, args.get("firstTask"))
+    return {"pause": False, "toolResult": {
+        "created": True, "agentId": child["agentId"], "name": child["name"],
+        "reportsTo": agent["agentId"], **briefed,
+        "note": ("It is in the operator's roster now. Tell them briefly what you made; "
+                 "do not wait for it here.")}}
+
+
+def _propose_agent(store, run, agent, ev, push, turn, parsed, seq, args) -> dict:
+    """A Bot's own idea for a new Bot: shown to the operator to approve, never created."""
+    proposal = _agent_creation_proposal(args, parent_agent_id=agent["agentId"])
+    try:
+        A.validate_profile(proposal)
+    except A.ValidationError as exc:
+        ev.error(seq, "terminal", f"create_agent: {exc}")
+        _step(push, run, turn, "agent.create", f"not proposed: {exc}",
+              review.Review(review.DENIED, "agent", str(exc)))
+        return {"pause": False, "toolResult": {"error": str(exc)}}
+    # The always-approve floor includes agent.create. Calling the central
+    # policy gate here keeps that invariant explicit if the policy evolves.
+    decision = policy.evaluate("agent.create", Capability.ADMIN)
+    approval = approvals.request(
+        store, run,
+        action="agent.create", arguments=proposal,
+        why=args.get("why", "A separate companion is needed for this lane."),
+        capability=Capability.ADMIN,
+        tool_use_id=parsed.tool_use_id, tool_name=parsed.tool_name, tool_input=args,
+        target={"parentAgentId": agent["agentId"]},
+        reversible=False, decision=decision,
+    )
+    ev.action(seq, "agent.create", "agent creation proposed", approvalId=approval["approvalId"])
+    _step(push, run, turn, "agent.create", f"proposed {proposal['name']}",
+          review.from_decision(decision))
+    return {"pause": True, "approval": approval}
+
+
+def _brief_child(store, run, creator: dict, child: dict, task) -> dict:
+    """Give a new Bot its first job, and wake it to start on it.
+
+    The job is the run's goal, so it is what the new Bot is asked; the transcript
+    gets one line saying who briefed whom, on both Bots' threads. It goes through
+    the same wake gate any priority message does (`collab.may_wake_now`: the Bot's own
+    concurrency and budget), so a Bot that cannot start yet is told so instead of
+    being started anyway.
+    """
+    task = (task or "").strip() if isinstance(task, str) else ""
+    if not task:
+        return {"briefed": False, "briefing": "no firstTask was given, so it is waiting for one"}
+    ok, why = collab.may_wake_now(store, child, collab.limits_for_org(store))
+    if not ok:
+        return {"briefed": False, "briefing": f"it could not start yet: {why}"}
+    thread_id = f"dm-{child['agentId']}"
+    new_run = runs.create(store, agent_id=child["agentId"], thread_id=thread_id, goal=task,
+                          trigger={"type": "agent", "fromAgentId": creator["agentId"], "brief": True})
+    threads.event(store, thread_id,
+                  f"{creator['name']} briefed {child['name']}: {task[:240]}", icon="task",
+                  fromAgentId=creator["agentId"])
+    _invoke_orchestrator_async(new_run["runId"], store.owner_id)
+    return {"briefed": True, "runId": new_run["runId"]}
+
+
+#: What a Bot may refine about a Bot it made. Not access, budget, tools or status.
+_REFINABLE = ("name", "title", "role", "description")
+
+
+def _update_agent_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
+    """`update_agent`: refine a Bot this Bot created, when the operator asked.
+
+    Names, titles, roles and standing orders only, through the same `plan_update` a
+    person's edit goes through, so it is validated and audited the same way. The
+    fields that carry authority are privileged there and an agent is refused them.
+    """
+    def refuse(why: str) -> dict:
+        ev.error(seq, "terminal", f"update_agent: {why}")
+        _step(push, run, turn, "agent.update", f"not updated: {why}",
+              review.Review(review.DENIED, "agent", why))
+        return {"pause": False, "toolResult": {"error": why}}
+
+    if not _owner_asked(run):
+        return refuse("this only works when the operator's own message started the turn; "
+                      "ask them for the change instead")
+    target_id = (args.get("agentId") or "").strip()
+    target = store.try_get(K.agent_pk(target_id), "META") if target_id else None
+    if not target or target.get("parentAgentId") != agent["agentId"]:
+        return refuse("you can only refine a Bot you created")
+    body = {k: args[k].strip() for k in _REFINABLE
+            if isinstance(args.get(k), str) and args[k].strip()}
+    if not body:
+        return refuse("nothing to change: pass at least one of " + ", ".join(_REFINABLE))
+    actor = A.Actor(user_id=store.owner_id, org_id=agent.get("orgId") or "", agent_id=agent["agentId"])
+    try:
+        changes, events = A.plan_update(target, body, actor)
+    except (A.ValidationError, A.Escalation) as exc:
+        return refuse(str(exc))
+    store.update(K.agent_pk(target_id), "META", changes)
+    for event_row in events:
+        store.put(event_row)
+    ev.action(seq, "agent.update", f"refined {target_id}", agentId=target_id)
+    _step(push, run, turn, "agent.update", f"refined {target['name']}",
+          review.scoped("agent", "a Bot you created; name, title, role and standing orders only"))
+    return {"pause": False, "toolResult": {"updated": sorted(body), "agentId": target_id}}
+
+
 def _agent_creation_proposal(args: dict, *, parent_agent_id: str) -> dict:
     """Normalize the only fields a model may nominate for a child agent.
 
@@ -907,6 +1103,7 @@ def _agent_creation_proposal(args: dict, *, parent_agent_id: str) -> dict:
     """
     return {
         "name": args.get("name", ""),
+        "title": args.get("title", ""),
         "role": args.get("role", ""),
         "description": args.get("description", ""),
         "systemPrompt": args.get("systemPrompt", ""),
