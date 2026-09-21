@@ -663,15 +663,23 @@ export function demoConnect(onEvent, onStatus) {
   ];
   script.forEach(([ms, ev]) => at(ms, () => onEvent(ev)));
 
+  // Streamed into `dm-eng`, the thread the conversation screen actually opens.
+  // These words used to go to `t-deploy`, which no screen in the current
+  // console renders, so the one part of the demo that shows a reply arriving
+  // could not be seen. The approval that follows stays on the same thread, so
+  // the sequence a reviewer is meant to judge -- words, then the thing that
+  // needs them -- happens in one place.
   const prose = 'Build is clean and the bundle is on S3. The distribution is still serving the '
     + 'previous index.html from cache, so the last step is an invalidation — which is immediate '
     + 'and irreversible, so it needs you.';
-  prose.split(/(?<= )/).forEach((word, i) => {
-    at(3600 + i * 34, () => onEvent({ type: 'delta', threadId: 't-deploy', text: word }));
+  const words = prose.split(/(?<= )/);
+  at(3400, () => onEvent({ type: 'run.state', threadId: 'dm-eng', runId: 'run-eng', state: 'EXECUTING' }));
+  words.forEach((word, i) => {
+    at(3600 + i * 34, () => onEvent({ type: 'delta', threadId: 'dm-eng', runId: 'run-eng', text: word }));
   });
 
-  at(3600 + prose.split(/(?<= )/).length * 34 + 400, () => {
-    onEvent({ type: 'approval.requested', threadId: 't-deploy', approval: APPROVAL });
+  at(3600 + words.length * 34 + 400, () => {
+    onEvent({ type: 'approval.requested', threadId: 'dm-eng', runId: 'run-eng', approval: APPROVAL });
   });
 
   return {

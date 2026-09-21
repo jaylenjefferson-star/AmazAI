@@ -88,3 +88,43 @@ describe('Timeline scrolling', () => {
     expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number), behavior: 'instant' });
   });
 });
+
+
+describe('Timeline live reply', () => {
+  it('draws the words as they arrive, with a cursor', () => {
+    // The renderer was already here and nothing ever fed it: both live screens
+    // passed streaming={null}, so the console showed a dot over a poll.
+    const { container } = render(
+      <Timeline {...props} items={[]} streaming={{ text: 'Looking into it', author: 'Engle' }} />);
+    expect(screen.getByText('Looking into it')).toBeTruthy();
+    expect(container.querySelector('.cursor')).toBeTruthy();
+  });
+
+  it('grows the same bubble rather than adding a second one', () => {
+    const { container, rerender } = render(
+      <Timeline {...props} items={[]} streaming={{ text: 'Look' }} />);
+    rerender(<Timeline {...props} items={[]} streaming={{ text: 'Looking into it' }} />);
+    expect(container.querySelectorAll('.cursor')).toHaveLength(1);
+    expect(screen.getByText('Looking into it')).toBeTruthy();
+  });
+
+  it('replaces the typing dots once the first word lands', () => {
+    const { container } = render(
+      <Timeline {...props} items={[]}
+                streaming={{ text: 'Working on it' }} typing={{ name: 'Engle', verb: 'thinking' }} />);
+    expect(screen.getByText('Working on it')).toBeTruthy();
+    expect(container.querySelector('.typing-dots')).toBeNull();
+  });
+
+  it('shows the dots while a turn has produced no words yet', () => {
+    const { container } = render(
+      <Timeline {...props} items={[]} streaming={null} typing={{ name: 'Engle', verb: 'thinking' }} />);
+    expect(container.querySelector('.typing-dots')).toBeTruthy();
+    expect(container.querySelector('.cursor')).toBeNull();
+  });
+
+  it('keeps the empty state away while a reply is arriving', () => {
+    render(<Timeline {...props} items={[]} streaming={{ text: 'Hi' }} />);
+    expect(screen.queryByText('Say hello')).toBeNull();
+  });
+});

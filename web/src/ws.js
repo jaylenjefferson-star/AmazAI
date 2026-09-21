@@ -11,8 +11,14 @@ const URL = import.meta.env.VITE_WS_URL;
 export function connect(onEvent, onStatus) {
   if (DEMO) return demoConnect(onEvent, onStatus);
   // Nothing to connect to. Without this the client builds `undefined?token=`,
-  // throws, and reconnects on a backoff for the life of the tab.
-  if (!URL) return { send: () => {}, close: () => {} };
+  // throws, and reconnects on a backoff for the life of the tab. Reported as
+  // its own status rather than left at 'connecting': a build with no socket
+  // configured is not a connection that is about to succeed, and telling a
+  // reader it is reconnecting would be a lie with no end.
+  if (!URL) {
+    onStatus?.('unconfigured');
+    return { send: () => {}, close: () => {} };
+  }
 
   let socket = null;
   let attempt = 0;
