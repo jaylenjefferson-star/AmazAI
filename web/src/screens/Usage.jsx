@@ -104,7 +104,7 @@ export default function Usage() {
         <span>
           No model call has run yet, so these figures are fixtures shaped like
           the real ledger. The Usage screen will switch to live rows the first
-          time a companion actually calls a model.
+          time an agent actually calls a model.
         </span>
       </div>
 
@@ -144,7 +144,7 @@ export default function Usage() {
       </section>
 
       <section className="card-list">
-        <h2 className="section-title">By companion</h2>
+        <h2 className="section-title">By agent</h2>
         {s.byAgent.map((a) => (
           <div key={a.agentId} className="usage-row with-face">
             <Companion archetype={a.archetype} color={a.color} state="idle"

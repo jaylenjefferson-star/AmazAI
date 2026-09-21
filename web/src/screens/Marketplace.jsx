@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
+import Problem from '../components/Problem';
+import { RosterSkeleton } from '../components/Skeleton';
+import { friendly } from '../lib/errors';
 import Connectors from './Connectors';
 
 /**
@@ -65,7 +68,7 @@ function Skills() {
 
   return (
     <section aria-label="Skills">
-      {error && <div className="err" style={{ marginBottom: 12 }}><span className="msg-text">{error}</span></div>}
+      {error && <Problem message={friendly(error, "Couldn't complete that.")} inline />}
 
       {proposed.length > 0 && (
         <>
@@ -75,7 +78,7 @@ function Skills() {
               <div className="mk-text">
                 <strong>{s.name}</strong>
                 <small>{s.description}</small>
-                <em>Proposed by {s.proposedBy || 'a Bot'}; no Bot can use it until you approve it.</em>
+                <em>Proposed by {s.proposedBy || 'an agent'}; no agent can use it until you approve it.</em>
               </div>
               <button className="primary sm" disabled={busy === s.skillId} onClick={() => approve(s)}>Approve</button>
             </div>
@@ -105,7 +108,7 @@ function Skills() {
         </form>
       )}
 
-      {skills === null && <div className="empty">Loading…</div>}
+      {skills === null && <RosterSkeleton rows={3} />}
       {skills && library.length === 0 && !creating && (
         <div className="empty">
           <span className="title">No skills yet</span>
@@ -142,12 +145,12 @@ export default function Marketplace() {
       <header className="page-head">
         <div>
           <h1>Marketplace</h1>
-          <p>Plugins connect your Bots to your tools. Skills teach them how you work.
-            Neither gives a Bot anything until you grant or assign it.</p>
+          <p>Apps connect your agents to your tools. Skills teach them how you work.
+            A skill only reaches an agent once you assign it.</p>
         </div>
       </header>
       <div className="seg" role="tablist" aria-label="Marketplace">
-        {[['plugins', 'Plugins'], ['skills', 'Skills']].map(([key, label]) => (
+        {[['plugins', 'Apps'], ['skills', 'Skills']].map(([key, label]) => (
           <button key={key} type="button" role="tab" aria-selected={tab === key}
                   className={tab === key ? 'on' : ''}
                   onClick={() => setParams(key === 'plugins' ? {} : { tab: key }, { replace: true })}>

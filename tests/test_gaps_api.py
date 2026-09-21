@@ -290,7 +290,7 @@ def test_settings_answer_with_defaults_before_anything_is_written(api_table):
     assert status == 200
     assert body["notifications"] == {"completion": True, "inputNeeded": True,
                                      "failure": True}
-    assert body["theme"] == "system"
+    assert body["theme"] == "dark"   # the app's default; "system" is a choice, not a default
 
 
 def test_a_partial_write_leaves_the_rest_alone(api_table):

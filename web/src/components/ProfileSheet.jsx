@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { api } from '../api';
 import { startLogout, useAuth0 } from '../auth0';
 import { applyMode, storedMode } from '../theme';
 import AccountSettings from './AccountSettings';
@@ -22,7 +23,9 @@ export default function ProfileSheet({ onClose }) {
   const [look, setLook] = useState(storedMode());
 
   const go = (to) => { onClose(); navigate(to); };
-  const pick = (mode) => { applyMode(mode); setLook(mode); };
+  // Local for the first paint, the account for every other device: the same two places
+  // the Settings screen writes, so the two controls can never disagree.
+  const pick = (mode) => { applyMode(mode); setLook(mode); api.saveSettings({ theme: mode }).catch(() => {}); };
 
   if (view === 'tools') return <ToolsSheet onClose={onClose} back={() => setView('menu')} />;
 
@@ -47,7 +50,7 @@ export default function ProfileSheet({ onClose }) {
       <div className="sx-group">
         <SheetRow icon="user" title="Account" hint="Who you are signed in as" onClick={() => setView('acct-account')} />
         <SheetRow icon="building" title="Organization" hint="Your workspace" onClick={() => setView('acct-org')} />
-        <SheetRow icon="plug" title="Integrations" hint="Apps your Bots can use" onClick={() => setView('tools')} />
+        <SheetRow icon="plug" title="Integrations" hint="Apps your agents can use" onClick={() => setView('tools')} />
         <SheetRow icon="sliders" title="Preferences" hint="Notifications and defaults" onClick={() => setView('acct-prefs')} />
         <SheetRow icon="card" title="Billing" hint="Usage and spend" onClick={() => go('/usage')} />
       </div>

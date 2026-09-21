@@ -1,4 +1,7 @@
+import { useEffect } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { api } from '../api';
+import { applyMode, explicitMode } from '../theme';
 import { ContactsProvider } from '../components/ContactCard';
 import Icon from '../components/Icon';
 import PresenceFeed from '../components/PresenceFeed';
@@ -80,6 +83,13 @@ export default function Shell() {
   // screen and the roster and the conversation trade places on their own.
   const desktop = useMediaQuery('(min-width: 900px)');
   const split = desktop && (home || focused);
+
+  // A theme chosen on another device: adopted here only if this device has never chosen,
+  // so it can fill a gap but never override what someone picked on this screen.
+  useEffect(() => {
+    if (explicitMode()) return;
+    api.settings().then((s) => { if (s?.theme && s.theme !== 'dark') applyMode(s.theme); }).catch(() => {});
+  }, []);
 
   return (
     <ContactsProvider>

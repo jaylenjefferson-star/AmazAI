@@ -5,8 +5,10 @@ import { ARCHETYPES } from '../characters/archetypes';
 import { useAgents } from '../hooks/useAgents';
 import { api } from '../api';
 import { SCHEDULE_PRESETS, describeSchedule } from '../schedules';
-import CreateAgent from '../components/CreateAgent';
 import Icon from '../components/Icon';
+import Problem from '../components/Problem';
+import { RosterSkeleton } from '../components/Skeleton';
+import { friendly } from '../lib/errors';
 
 function Page({ title, sub, children, action }) {
   return (
@@ -23,41 +25,6 @@ function Page({ title, sub, children, action }) {
   );
 }
 
-export function Agents() {
-  const { agents, loading, error, reload } = useAgents();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const [creating, setCreating] = useState(location.pathname === '/agents/new');
-  const close = () => { setCreating(false); navigate('/agents'); };
-  return (
-    <Page title="Agents" sub="Your cast. Each one has its own drive, budget and grants."
-          action={<button className="btn-link primary" onClick={() => setCreating(true)}>New companion</button>}>
-      {creating && <CreateAgent onClose={close} onCreated={() => { close(); reload(); }} />}
-      <div className="row-list">
-        {loading && <div className="empty">Loading your companions…</div>}
-        {error && <div className="empty"><strong>Control plane unavailable</strong><span>{error}</span></div>}
-        {!loading && !error && agents.length === 0 && (
-          <div className="empty"><strong>Your cast is empty</strong><span>Create a companion when you are ready. Agents only appear here after the control plane creates them.</span></div>
-        )}
-        {agents.map((a) => (
-          <Link key={a.agentId} to={`/agents/${a.agentId}`} className="row-card">
-            <Companion archetype={a.archetype} color={a.color} state={a.state}
-                       size={46} name={a.name} />
-            <div className="row-body">
-              <strong>{a.name}</strong>
-              <span>{a.role} · {ARCHETYPES[a.archetype].name}</span>
-            </div>
-            <span className={`state-chip cc-tone-${STATES[a.state].tone}`}>
-              <i className="cc-dot" aria-hidden="true" />
-              {STATES[a.state].label}
-            </span>
-          </Link>
-        ))}
-      </div>
-    </Page>
-  );
-}
-
 function timeAgo(iso) {
   if (!iso) return '';
   const ms = Date.now() - new Date(iso).getTime();
@@ -67,87 +34,6 @@ function timeAgo(iso) {
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.round(hrs / 24)}d ago`;
-}
-
-export function Rooms() {
-  const { agents } = useAgents();
-  const [rooms, setRooms] = useState([]);
-  const [error, setError] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [title, setTitle] = useState('');
-  const [picked, setPicked] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const navigate = useNavigate();
-  const byId = Object.fromEntries(agents.map((a) => [a.agentId, a]));
-
-  function reload() {
-    api.threads().then((r) => setRooms((r.threads || []).filter((t) => t.kind === 'room')))
-      .catch((e) => setError(e.message));
-  }
-  useEffect(reload, []);
-
-  async function createRoom(e) {
-    e.preventDefault();
-    if (!title.trim() || picked.length === 0) return;
-    setBusy(true);
-    try {
-      const room = await api.createThread({ kind: 'room', title: title.trim(), agentIds: picked });
-      navigate(`/rooms/${room.threadId}`);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Page title="Rooms" sub="Task-bound threads with several companions. Handoffs between them show as read-only activity, not chat you can steer here."
-          action={<button className="btn-link primary" onClick={() => setCreating((v) => !v)}>New room</button>}>
-      {creating && (
-        <form className="row-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }} onSubmit={createRoom}>
-          <input placeholder="What is this room for?" value={title}
-                 onChange={(e) => setTitle(e.target.value)} />
-          <div className="picker-grid">
-            {agents.map((a) => (
-              <label key={a.agentId} className={`pick-chip ${picked.includes(a.agentId) ? 'on' : ''}`}>
-                <input type="checkbox" checked={picked.includes(a.agentId)}
-                       onChange={(e) => setPicked((p) => (e.target.checked
-                         ? [...p, a.agentId] : p.filter((id) => id !== a.agentId)))} />
-                {a.name}
-              </label>
-            ))}
-          </div>
-          <button className="primary" disabled={busy || !title.trim() || picked.length === 0}>
-            Create room
-          </button>
-        </form>
-      )}
-      {error && <div className="empty"><strong>Rooms unavailable</strong><span>{error}</span></div>}
-      {!error && rooms.length === 0 && (
-        <div className="empty"><strong>No rooms yet</strong><span>Create one to coordinate several companions on the same task.</span></div>
-      )}
-      <div className="row-list">
-        {rooms.map((r) => (
-          <Link key={r.threadId} to={`/rooms/${r.threadId}`} className="row-card">
-            <div className="participants">
-              {(r.agentIds || []).map((m) => (
-                <Companion key={m} archetype={byId[m]?.archetype} color={byId[m]?.color}
-                           state={byId[m]?.state || 'idle'} size={30} name={byId[m]?.name} />
-              ))}
-            </div>
-            <div className="row-body">
-              <strong>{r.title}</strong>
-              <span>{(r.agentIds || []).map((m) => byId[m]?.name || m).join(', ')} · last activity {timeAgo(r.lastActivity)}</span>
-            </div>
-            <span className={`state-chip cc-tone-${r.status === 'active' ? 'ok' : 'neutral'}`}>
-              <i className="cc-dot" aria-hidden="true" />
-              {r.status || 'active'}
-            </span>
-          </Link>
-        ))}
-      </div>
-    </Page>
-  );
 }
 
 export function Routines() {
@@ -277,10 +163,10 @@ export function Routines() {
                    placeholder="Morning brief" onChange={(e) => setName(e.target.value)} />
           </label>
           <label className="field">
-            <span>Which companion runs it?</span>
+            <span>Which agent runs it?</span>
             <select value={agentId}
                     onChange={(e) => setAgentId(e.target.value)}>
-              <option value="" disabled>Choose a companion</option>
+              <option value="" disabled>Choose an agent</option>
               {agents.map((a) => (
                 <option key={a.agentId} value={a.agentId}>{a.name}</option>
               ))}
@@ -330,14 +216,12 @@ export function Routines() {
         </form>
       )}
 
-      {loading && <div className="empty">Loading your routines…</div>}
-      {listError && (
-        <div className="empty"><strong>Routines unavailable</strong><span>{listError}</span></div>
-      )}
+      {loading && <RosterSkeleton rows={3} />}
+      {listError && <Problem message={friendly(listError, "Couldn't load your routines.")} />}
       {!loading && !listError && visible.length === 0 && (
         <div className="empty">
           <strong>No routines yet</strong>
-          <span>Give a companion work that happens on its own — a morning brief, an overnight sweep.</span>
+          <span>Give an agent work that happens on its own: a morning brief, an overnight sweep.</span>
         </div>
       )}
       <div className="row-list">
@@ -360,8 +244,10 @@ export function Routines() {
                 <span aria-hidden="true" />
                 <span className="sr-only">{r.enabled ? 'Pause' : 'Resume'} {r.name}</span>
               </label>
-              <button type="button" className="ghost sm" disabled={busyId === r.routineId}
-                      onClick={() => archive(r)}>Archive</button>
+              <button type="button" className="pf-x" disabled={busyId === r.routineId}
+                      aria-label={`Archive ${r.name}`} title="Archive" onClick={() => archive(r)}>
+                <Icon name="trash" size={16} />
+              </button>
             </article>
           );
         })}
@@ -392,8 +278,8 @@ export function Artifacts() {
 
   return (
     <Page title="Artifacts" sub="What runs produced. Sealed bundles are never rewritten.">
-      {loading && <div className="empty">Loading what your companions produced…</div>}
-      {error && <div className="empty"><strong>Artifacts unavailable</strong><span>{error}</span></div>}
+      {loading && <RosterSkeleton rows={4} />}
+      {error && <Problem message={friendly(error, "Couldn't load your files.")} />}
       {!loading && !error && artifacts.length === 0 && (
         <div className="empty">
           <strong>Nothing sealed yet</strong>

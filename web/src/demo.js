@@ -323,6 +323,10 @@ const OPTIONS = {
   connectors: [],
 };
 
+// A real account keeps its theme across a reload; the demo's in-memory settings do not, so it
+// remembers the choice the way a server would.
+const demoTheme = () => { try { return localStorage.getItem('amazai.demo.theme'); } catch { return null; } };
+
 export const demoApi = {
   agents: async () => (await wait(120), { agents: AGENTS }),
   agentOptions: async () => (await wait(90), OPTIONS),
@@ -471,7 +475,7 @@ export const demoApi = {
     await wait(80);
     return {
       notifications: { completion: true, inputNeeded: true, failure: true, ...SETTINGS.notifications },
-      theme: SETTINGS.theme ?? 'system',
+      theme: SETTINGS.theme ?? demoTheme() ?? 'dark',
       pinned: SETTINGS.pinned ?? (MODE === 'full' ? ['dm-cos', 'dm-eng'] : []),
       defaultTimezone: SETTINGS.defaultTimezone ?? null,
       workspaceName: SETTINGS.workspaceName ?? null,
@@ -492,7 +496,7 @@ export const demoApi = {
     if (changes.notifications) {
       SETTINGS.notifications = { ...SETTINGS.notifications, ...changes.notifications };
     }
-    if ('theme' in changes) SETTINGS.theme = changes.theme;
+    if ('theme' in changes) { SETTINGS.theme = changes.theme; try { localStorage.setItem('amazai.demo.theme', changes.theme); } catch { /* fine */ } }
     if ('pinned' in changes) {
       if (!Array.isArray(changes.pinned)) throw new Error('pinned must be a list of conversation ids');
       const pins = [...new Set(changes.pinned)];

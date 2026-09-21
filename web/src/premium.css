@@ -505,3 +505,47 @@ button.tl-label:disabled { cursor: default; }
 .chat .approval-always input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--accent); }
 .chat .approval-always span { display: grid; gap: 2px; }
 .chat .approval-always small { font-size: 12.5px; color: var(--dim); }
+
+/* =========================================================== the other pages */
+/* Lists are flat rows on hairlines, like the roster: no boxes around every item. */
+
+.pgf .page { max-width: 720px; padding: 2px 0 48px; }
+.pgf .page-head { padding: 0 16px; margin-bottom: 12px; }
+.pgf .page-head p { color: var(--dim); font-size: 14px; line-height: 1.45; max-width: 46ch; }
+.pgf .row-list, .pgf .card-list { display: grid; gap: 0; }
+.pgf .row-card { padding: 13px 16px; border: 0; border-radius: 0; background: none; box-shadow: inset 0 -1px 0 var(--hairline); min-height: 68px; gap: 14px; }
+.pgf .row-card:last-child { box-shadow: none; }
+.pgf .row-body strong { font-size: 16.5px; font-weight: 600; letter-spacing: -.01em; white-space: normal; }
+.pgf .row-body span { font-size: 14px; color: var(--dim); white-space: normal; line-height: 1.4; }
+.pgf .section-title { margin: 22px 16px 8px; font-size: 12.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+.pgf .empty { margin: 8px 16px; padding: 24px 16px; border: 0; border-radius: 20px; background: var(--raised); text-align: center; color: var(--dim); }
+.pgf .empty strong { display: block; color: var(--text); font-size: 17px; margin-bottom: 4px; }
+.pgf .page > .problem, .pgf .page .problem { margin-left: 16px; margin-right: 16px; }
+.pgf .btn-link.primary, .pgf .page-head .primary { border-radius: 999px; padding: 9px 18px; }
+.pgf .state-chip { border-radius: 999px; }
+.pgf .native-toggle { flex: none; }
+.pgf .pf-x { flex: none; }
+
+/* settings: grouped surfaces, the way the profile sheet groups them */
+.pgf .settings-group { margin: 0 16px 14px; padding: 4px 16px; border: 0; border-radius: 22px; background: var(--raised); }
+.pgf .field { padding: 12px 0; }
+.pgf .setgroup-note, .pgf .setgroup-link { color: var(--dim); font-size: 13.5px; }
+
+/* billing */
+.pgf .usage-hero { margin: 0 16px 16px; padding: 18px; border: 0; border-radius: 24px; background: var(--raised); }
+.pgf .usage-row { padding-left: 16px; padding-right: 16px; }
+
+/* skills / apps */
+.pgf .mk-skill { align-items: flex-start; }
+.pf-more { display: flex; align-items: center; gap: 14px; width: 100%; padding: 13px 16px; border-radius: 20px; background: var(--raised-2); border: 0; text-align: left; color: var(--text); }
+.pf-more > .icon:last-child { color: var(--faint); margin-left: auto; }
+
+/* the old page-head rule right-aligns a trailing paragraph; with the title in the frame's bar, the line under it belongs on the left */
+.pgf .page-head > p:last-child { margin-left: 0; flex: 1 1 auto; }
+.pgf .page > .seg { margin: 0 16px 12px; }
+.pgf .mk-h { padding: 0 16px; margin: 18px 0 8px; }
+.pgf .mk-skill { padding-left: 16px; padding-right: 16px; }
+.pgf .mk-h + .empty, .pgf .mk-h ~ .empty { margin-left: 16px; margin-right: 16px; }
+.pgf .mk-bar { display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+.pgf .mk-bar .mk-h { padding: 0; }
+.pgf .mk-bar .btn-link { border-radius: 999px; padding: 7px 16px; }

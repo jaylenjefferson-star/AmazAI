@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import Companion from '../characters/Companion';
 import { usePins } from '../hooks/usePins';
@@ -58,6 +59,7 @@ function Field({ label, value, onChange, multiline = false, placeholder = '', ma
  * enforces -- none of it is decoration.
  */
 export default function AgentProfile({ agent, agents, threadId, onChange, onClose, onExport }) {
+  const navigate = useNavigate();
   const [open, setOpen] = useState('identity');
   const [form, setForm] = useState({
     name: agent.name || '', title: agent.title || '', role: agent.role || '',
@@ -233,6 +235,12 @@ export default function AgentProfile({ agent, agents, threadId, onChange, onClos
           <h4 className="pf-sub">This month</h4>
           <Usage agent={agent} />
         </Section>
+
+        <button type="button" className="pf-more" onClick={() => { onClose(); navigate(`/agents/${agent.agentId}/settings`); }}>
+          <span className="sx-icon"><Icon name="settings" size={19} /></span>
+          <span className="sx-text"><strong>More settings</strong><small>Spending limits, working hours, pause or archive</small></span>
+          <Icon name="forward" size={16} />
+        </button>
       </div>
     </Sheet>
   );

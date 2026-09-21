@@ -26,7 +26,7 @@ import Onboarding from './screens/Onboarding';
 import { CHECKING, NEEDED, OFFER, useFirstRun } from './hooks/useFirstRun';
 import { DEMO } from './demo';
 import Inbox from './screens/Inbox';
-import { Agents, Artifacts, Rooms, Routines } from './screens/Sections';
+import { Artifacts, Routines } from './screens/Sections';
 import Settings from './screens/Settings';
 import Task from './screens/Task';
 import CompanionSettings from './screens/CompanionSettings';
@@ -150,13 +150,13 @@ function Router() {
       {/* The application */}
       <Route element={<Protected><FirstRunGuard><Shell /></FirstRunGuard></Protected>}>
         <Route path="/" element={<Inbox />} />
-        <Route path="/agents" element={<Agents />} />
+        <Route path="/agents" element={<Navigate to="/" replace />} />
         <Route path="/agents/new" element={<NewAgent />} />
         <Route path="/agents/:agentId" element={<Task />} />
         <Route path="/agents/:agentId/settings" element={<CompanionSettings />} />
         <Route path="/marketplace" element={<Marketplace />} />
         <Route path="/connectors" element={<Connectors />} />
-        <Route path="/rooms" element={<Rooms />} />
+        <Route path="/rooms" element={<Navigate to="/" replace />} />
         <Route path="/rooms/:roomId" element={<Room />} />
         <Route path="/routines" element={<Routines />} />
         <Route path="/routines/new" element={<Routines />} />
