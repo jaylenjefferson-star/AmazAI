@@ -118,3 +118,20 @@ describe('reconcileOptimistic', () => {
     expect(reconcileOptimistic([server('MSG#1', 'Hi team')], next)).toBe(next);
   });
 });
+
+
+describe('which run wrote a message', () => {
+  it('is carried through, so a streamed reply knows when its stored copy landed', () => {
+    const items = threadToItems([
+      { sk: 'MSG#2026-01-01T00:00:00Z#a', role: 'assistant', text: 'Done.', runId: 'run-7' },
+    ]);
+    expect(items[0]).toMatchObject({ type: 'message', runId: 'run-7' });
+  });
+
+  it('is simply absent on a row that has none', () => {
+    const items = threadToItems([
+      { sk: 'MSG#2026-01-01T00:00:00Z#a', role: 'user', text: 'Hello' },
+    ]);
+    expect(items[0].runId).toBeUndefined();
+  });
+});

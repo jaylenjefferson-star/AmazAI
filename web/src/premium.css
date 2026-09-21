@@ -31,6 +31,55 @@
 .app-detail > * { flex: 1; min-height: 0; }
 .split-empty { display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--faint); text-align: center; padding: 24px; }
 
+/* The socket is down (components/ConnectionBar.jsx). Fixed rather than a child
+   of the shell's flex row, which would give a warning a column of its own and
+   push the whole console sideways. It overlays the header on purpose: it is
+   only ever drawn when what is underneath it may be out of date. */
+.conn {
+  position: fixed;
+  top: calc(var(--safe-top) + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(560px, calc(100vw - 24px));
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--warn-wash, rgba(169, 106, 6, .07));
+  border: 1px solid var(--warn-edge, rgba(169, 106, 6, .30));
+  backdrop-filter: blur(10px);
+  box-shadow: var(--pop);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  animation: conn-in .22s var(--ease-out) both;
+}
+.conn > i {
+  flex: none;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  animation: conn-pulse 1.6s ease-in-out infinite;
+}
+.conn > em { flex: none; font-style: normal; color: var(--faint); white-space: nowrap; }
+
+@keyframes conn-in { from { opacity: 0; transform: translate(-50%, -8px); } }
+@keyframes conn-pulse { 50% { opacity: .35; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .conn { animation: none; }
+  .conn > i { animation: none; }
+}
+
+@media (max-width: 520px) {
+  .conn { font-size: 12px; padding: 7px 12px; gap: 8px; }
+  /* The countdown is the least important part of the message; on a narrow
+     screen the sentence that explains the consequence matters more. */
+  .conn > em { display: none; }
+}
+
 /* Everything that is not a conversation gets a floating back control and a quiet title. */
 .pgf { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .pgf-bar { display: flex; align-items: center; gap: 12px; padding: calc(var(--safe-top) + 10px) 14px 6px; flex: none; }

@@ -179,6 +179,13 @@ export default function Room() {
 
       {error && <Problem message={friendly(error, COPY.load)} onRetry={() => { setError(''); loadThread(); }} />}
 
+      {/* No live text in a room, deliberately. `delta` carries a runId but no
+          agentId, and a room now starts every member at once, so several Bots
+          write in parallel with nothing to say which words are whose.
+          Interleaving them under one unattributed bubble would read as one Bot
+          contradicting itself. The steps trail and each member's presence are
+          attributed and do show; the words appear when each turn is stored.
+          Streaming here needs `push.delta` to carry the agent first. */}
       <Timeline items={timelineItems} streaming={null} typing={null} agents={agents}
                 approvals={pendingApprovals} onDecide={decide}
                 mentionIds={mentionables.map((m) => m.id)} />

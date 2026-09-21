@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { api } from '../api';
-import { applyEvent, resetPresence } from '../presence';
+import { applyEvent, resetPresence, setConnection } from '../presence';
 import { connect } from '../ws';
 
 /**
@@ -11,9 +11,11 @@ import { connect } from '../ws';
  * previous socket client lived in a screen that was never mounted, which left
  * the whole console polling per run and no live state anywhere.
  *
- * Failure is quiet by design. A socket that cannot connect means animations
- * stay at rest and the inbox falls back to what the API says; nothing here is
- * allowed to block a screen or report an error about a decoration.
+ * Failure is quiet but no longer silent. A socket that cannot connect still
+ * blocks nothing and still lets the inbox fall back to what the API says, but
+ * its status now reaches the store, so `ConnectionBar` can say the console is
+ * not hearing anything instead of leaving a dead socket looking like an idle
+ * Bot.
  */
 export default function PresenceFeed() {
   useEffect(() => {
@@ -39,7 +41,7 @@ export default function PresenceFeed() {
       nameOf: (id) => names.get(id) || id || 'another Bot',
     };
 
-    const socket = connect((ev) => applyEvent(ev, ctx));
+    const socket = connect((ev) => applyEvent(ev, ctx), setConnection);
     return () => { socket.close(); resetPresence(); };
   }, []);
 

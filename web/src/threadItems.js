@@ -37,6 +37,9 @@ export function threadToItems(messages = []) {
         suggestions: m.suggestions, cards: m.cards,
         // Rows are keyed `MSG#<iso>#<rand>`; the time is in the key.
         at: m.at || String(m.sk || '').split('#')[1],
+        // Which run wrote it. This is how a screen knows the streamed copy of
+        // these words has landed and the live one can stop being drawn.
+        runId: m.runId,
         key: m.sk ?? base,
       });
     }

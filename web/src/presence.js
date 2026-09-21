@@ -60,6 +60,31 @@ export function resetPresence() {
   commit({});
   stepsSnapshot = {};
   stepListeners.forEach((fn) => fn());
+  streamSnapshot = {};
+  streamListeners.forEach((fn) => fn());
+}
+
+/* ------------------------------------------------------ the socket itself */
+
+// Whether the console is hearing anything. `ws.js` already worked this out and
+// computed the wording; nothing read it, so a socket that had silently died
+// looked exactly like a Bot with nothing to say -- frozen animations, a
+// conversation that never updates, and no way to tell which.
+let connection = { status: 'connecting' };
+const connListeners = new Set();
+
+export function setConnection(status) {
+  if (connection.status === status) return;
+  connection = { status };
+  connListeners.forEach((fn) => fn());
+}
+
+/** `{ status }`: 'connecting' | 'connected' | 'disconnected' | 'reconnecting in Ns' | 'unconfigured'. */
+export function useConnection() {
+  return useSyncExternalStore(
+    (fn) => { connListeners.add(fn); return () => connListeners.delete(fn); },
+    () => connection,
+  );
 }
 
 /* ---------------------------------------------------------------- the steps */
@@ -99,6 +124,60 @@ export function useSteps(threadId) {
   return useSyncExternalStore(
     (fn) => { stepListeners.add(fn); return () => stepListeners.delete(fn); },
     () => stepsSnapshot[threadId],
+  );
+}
+
+/* --------------------------------------------------------- the words, live */
+
+// The reply as it is being written, per thread. Live only, for the same reason
+// the steps are: the finished words are on the stored message, and this is that
+// same text before it lands. `delta` text used to be thrown away here -- the
+// event was reduced to "Writing a reply" and the words discarded -- so the
+// console showed an animated dot over a 1.5s poll instead of the reply.
+let streamSnapshot = {};    // threadId -> { runId, text, at }
+const streamListeners = new Set();
+
+function commitStream(threadId, entry) {
+  if (entry) {
+    streamSnapshot = { ...streamSnapshot, [threadId]: entry };
+  } else {
+    if (!(threadId in streamSnapshot)) return;
+    const { [threadId]: _gone, ...rest } = streamSnapshot;
+    streamSnapshot = rest;
+  }
+  streamListeners.forEach((fn) => fn());
+}
+
+function appendDelta(ev) {
+  if (!ev.threadId || !ev.text) return;
+  const cur = streamSnapshot[ev.threadId];
+  // A different run means a different reply: start over rather than appending
+  // this turn's words to the last one's.
+  const sameRun = cur && (!ev.runId || !cur.runId || cur.runId === ev.runId);
+  commitStream(ev.threadId, sameRun
+    ? { ...cur, text: cur.text + ev.text, at: Date.now() }
+    : { runId: ev.runId || null, text: ev.text, at: Date.now() });
+}
+
+/**
+ * Drop a thread's live text, once its stored copy is on screen.
+ *
+ * Deliberately the consumer's call and not something `run.end` does. The server
+ * writes the assistant message and *then* the run ends, so clearing on the
+ * event would blank the reply for as long as the reload takes and then bring it
+ * back. Clearing after the stored message is in hand has no such gap -- and if
+ * that reload fails, the streamed words stay on screen, which is the better of
+ * the two ways to be wrong.
+ */
+export function clearStream(threadId) {
+  commitStream(threadId, null);
+}
+
+/** The reply being written in this thread, or undefined. */
+export function useStreamingText(threadId) {
+  return useSyncExternalStore(
+    (fn) => { streamListeners.add(fn); return () => streamListeners.delete(fn); },
+    () => streamSnapshot[threadId],
   );
 }
 
@@ -163,6 +242,12 @@ export function applyEvent(ev, ctx) {
       break;
     }
     case 'delta':
+      // Kept, not just counted. A room is the exception: `delta` carries a
+      // runId but no agentId, so with several Bots writing at once there is no
+      // way to say whose words these are, and interleaving them unattributed
+      // would be worse than not showing them. A room therefore accumulates
+      // nothing here -- see the note in Room.jsx.
+      if (agents.length === 1) appendDelta(ev);
       agents.forEach((a) => put(a, 'thinking', 'Writing a reply', ev.runId));
       break;
     case 'tool':

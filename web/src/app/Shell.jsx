@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { applyMode, explicitMode } from '../theme';
 import { ContactsProvider } from '../components/ContactCard';
+import ConnectionBar from '../components/ConnectionBar';
 import Icon from '../components/Icon';
 import PresenceFeed from '../components/PresenceFeed';
 import Inbox from '../screens/Inbox';
@@ -96,6 +97,7 @@ export default function Shell() {
     <ContactsProvider>
     <div className="app" data-focused={focused ? 'true' : undefined}>
       <PresenceFeed />
+      <ConnectionBar />
       <main className={`app-main${split ? ' app-main--split' : ''}`}>
         {split ? (
           <div className="app-split">

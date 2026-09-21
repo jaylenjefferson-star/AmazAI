@@ -15,7 +15,7 @@ import { presentAgent, useAgents } from '../hooks/useAgents';
 import { alwaysAllow } from '../lib/approvals';
 import { download } from '../lib/download';
 import { COPY, friendly } from '../lib/errors';
-import { usePresence, useSteps } from '../presence';
+import { clearStream, usePresence, useSteps, useStreamingText } from '../presence';
 import { threadsChanged } from '../threadsBus';
 import { localMessage, reconcileOptimistic, threadToItems } from '../threadItems';
 
@@ -59,6 +59,7 @@ export default function Task() {
   const threadId = `dm-${agentId}`;
   const live = usePresence()[agentId];
   const steps = useSteps(threadId);
+  const streamed = useStreamingText(threadId);
 
   const loadAgent = useCallback(() => {
     api.agent(agentId).then((a) => setAgent(presentAgent(a))).catch((e) => setError(e.message));
@@ -68,6 +69,10 @@ export default function Task() {
     api.thread(threadId).then((thread) => {
       const next = threadToItems(thread.messages);
       setItems((prev) => reconcileOptimistic(prev, next));
+      // The stored words are on screen now, so the live copy of them can go.
+      // After `setItems`, never on the run's end event: the reply would
+      // otherwise blank for the length of this request and then come back.
+      clearStream(threadId);
       // Opening a conversation is reading it. Marked after the messages are
       // in hand rather than on mount, so a thread whose load failed is not
       // recorded as seen. Failure here is silent on purpose.
@@ -232,6 +237,18 @@ export default function Task() {
 
   const cardCtx = useMemo(() => ({ agentId }), [agentId]);
 
+  // The reply as it is being written. Dropped the moment its stored copy is in
+  // `items`: they are the same words, and drawing both would show the reply
+  // twice. Matching on runId rather than on the text itself means a reply that
+  // happens to repeat an earlier one is still handed over correctly.
+  const landed = streamed?.runId && items.some((i) => i.runId === streamed.runId);
+  const streaming = streamed?.text && !landed
+    ? { text: streamed.text, author: agent?.name }
+    : null;
+
+  // The dot is the fallback, not the display: it stands in for the reply only
+  // until the first word of it arrives. `Timeline` already prefers `streaming`
+  // over `typing` when both are set.
   const typing = runState && !TERMINAL_STATES.has(runState) && pendingApprovals.every((a) => a.status !== 'pending')
     ? { name: agent?.name, verb: (STATES.thinking || STATES.working).verb }
     : null;
@@ -287,7 +304,7 @@ export default function Task() {
 
       {error && <Problem message={friendly(error, COPY.load)} onRetry={() => { setError(''); loadThread(); }} />}
 
-      <Timeline items={timelineItems} streaming={null} typing={typing} agents={agents}
+      <Timeline items={timelineItems} streaming={streaming} typing={typing} agents={agents}
                 approvals={pendingApprovals} onDecide={decide} onSuggest={(t) => sendText(t)}
                 cardCtx={cardCtx} showAuthor={false}
                 onSaveSkill={(item) => setSkillDraft({ text: item.text })}
