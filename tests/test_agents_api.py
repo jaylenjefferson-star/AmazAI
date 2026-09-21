@@ -64,6 +64,16 @@ def api_table(table, monkeypatch):
 
 
 class TestCreate:
+    def test_stack_allows_the_agentcore_runtime_creation_action(self):
+        """`create_harness` is authorized by AWS as CreateAgentRuntime.
+
+        Without this exact action a profile passes validation, is rolled back,
+        and the console can only say that creation failed.
+        """
+        from pathlib import Path
+        stack = (Path(__file__).resolve().parents[1] / "infra/lib/amazai-stack.ts").read_text()
+        assert "'bedrock-agentcore:CreateAgentRuntime'" in stack
+
     def test_provisioning_passes_the_restricted_agent_role_to_agentcore(self, monkeypatch):
         calls = []
 

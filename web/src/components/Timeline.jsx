@@ -77,14 +77,27 @@ function speakerFor(items, i, agents) {
 
 /** A message's words, with `@bot` drawn as a mention -- but only for Bots that
  *  exist, so a stray `@word` is never dressed up as an address. */
-function Body({ text, ids, onContact }) {
-  if (!ids?.length || !text || !text.includes('@')) return text;
-  return String(text).split(/(@[\w-]+)/g).map((part, i) => {
-    if (!(part.startsWith('@') && ids.includes(part.slice(1)))) return part;
-    // A mention is a way to a contact card, not just a coloured word.
-    return onContact
-      ? <button type="button" key={i} className="mention" onClick={() => onContact(part.slice(1))}>{part}</button>
-      : <span key={i} className="mention">{part}</span>;
+function Mention({ value, ids, onContact }) {
+  const id = value.slice(1);
+  if (!ids?.includes(id)) return value;
+  // A mention is a way to a contact card, not just a coloured word.
+  return onContact
+    ? <button type="button" className="mention" onClick={() => onContact(id)}>{value}</button>
+    : <span className="mention">{value}</span>;
+}
+
+/** The conversational surface supports the two pieces of Markdown Bots use
+ * most: emphasis and mentions. A deliberately small renderer keeps a Bot's
+ * words as text (never HTML), while making `**important**` read naturally. */
+export function Body({ text, ids, onContact }) {
+  if (!text) return null;
+  return String(text).split(/(\*\*[^*\n]+\*\*|@[\w-]+)/g).map((part, i) => {
+    if (!part) return null;
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith('@')) return <Mention key={i} value={part} ids={ids} onContact={onContact} />;
+    return part;
   });
 }
 
