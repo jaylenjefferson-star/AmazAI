@@ -64,6 +64,32 @@ def api_table(table, monkeypatch):
 
 
 class TestCreate:
+    def test_provisioning_passes_the_restricted_agent_role_to_agentcore(self, monkeypatch):
+        calls = []
+
+        class Core:
+            def create_harness(self, **kwargs):
+                calls.append(kwargs)
+                return "arn:aws:bedrock-agentcore:us-west-2:1:harness/new"
+
+        class StoreStub:
+            def update(self, pk, sk, values):
+                return {"agentId": "tanzie", **values}
+
+        role = "arn:aws:iam::1:role/amazai-agent-dynamic"
+        monkeypatch.setenv("AGENT_ROLE_ARN", role)
+        monkeypatch.setattr(api.agentcore, "AgentCore", Core)
+
+        created = api._provision_harness(StoreStub(), {
+            "agentId": "tanzie",
+            "model": {"tier": "balanced", "modelId": "us.example.model"},
+            "allowedTools": ["shell", "file_operations"],
+        })
+
+        assert calls == [{"name": "amazai_tanzie", "execution_role_arn": role,
+                          "tool_names": ["shell", "file_operations"]}]
+        assert created["executionRoleArn"] == role
+
     def test_new_bot_reuses_an_account_resolved_model(self, api_table):
         status, existing = call("POST", "/agents", NEW_AGENT)
         assert status == 201
