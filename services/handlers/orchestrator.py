@@ -1070,12 +1070,17 @@ def _propose_agent(store, run, agent, ev, push, turn, parsed, seq, args) -> dict
     """A Bot's own idea for a new Bot: shown to the operator to approve, never created."""
     proposal = _agent_creation_proposal(args, parent_agent_id=agent["agentId"])
     try:
-        A.validate_profile(proposal)
+        profile = A.validate_profile(proposal)
     except A.ValidationError as exc:
         ev.error(seq, "terminal", f"create_agent: {exc}")
         _step(push, run, turn, "agent.create", f"not proposed: {exc}",
               review.Review(review.DENIED, "agent", str(exc)))
         return {"pause": False, "toolResult": {"error": str(exc)}}
+    # Carry the *normalized* profile onto the card, not the raw arguments. The
+    # return value used to be discarded, so a name the validator had tidied --
+    # a title lifted out of it, an em dash folded to a hyphen -- was approved
+    # in its original form and the tidying was silently undone.
+    proposal.update({k: profile[k] for k in ("name", "title", "role", "description")})
     # The always-approve floor includes agent.create. Calling the central
     # policy gate here keeps that invariant explicit if the policy evolves.
     decision = policy.evaluate("agent.create", Capability.ADMIN)
