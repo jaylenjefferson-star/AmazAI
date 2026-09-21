@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import Companion from '../characters/Companion';
 import ChatHeader from '../components/ChatHeader';
+import GroupMark from '../components/GroupMark';
 import Composer from '../components/Composer';
 import CoordinationFeed from '../components/CoordinationFeed';
 import Problem from '../components/Problem';
@@ -16,7 +16,7 @@ import { alwaysAllow } from '../lib/approvals';
 import { COPY, friendly } from '../lib/errors';
 import { usePresence } from '../presence';
 import { threadsChanged } from '../threadsBus';
-import { mergeCoordination, threadToItems } from '../threadItems';
+import { localMessage, mergeCoordination, reconcileOptimistic, threadToItems } from '../threadItems';
 
 const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'expired', 'partial']);
 
@@ -53,7 +53,7 @@ export default function Room() {
   const loadThread = useCallback(() => {
     return api.thread(roomId).then((t) => {
       setThread(t);
-      setItems(threadToItems(t.messages));
+      setItems((prev) => reconcileOptimistic(prev, threadToItems(t.messages)));
       // Same rule as a Bot conversation: reading it is what marks it read, and
       // only once the messages actually arrived.
       api.markRead(roomId).then(threadsChanged).catch(() => {});
@@ -93,7 +93,7 @@ export default function Room() {
   }
 
   async function send(text) {
-    setItems((current) => [...current, { type: 'message', role: 'user', author: 'you', text, at: new Date().toISOString() }]);
+    setItems((current) => [...current, localMessage(text)]);
     const result = await api.send(roomId, text);
     (result.runs || [{ runId: result.runId, agentId: null }]).forEach((r) => r.runId && watch(r.runId, r.agentId));
     // The "Woke X and Y" line is written by the API; fetch it.
@@ -124,7 +124,7 @@ export default function Room() {
   // their place; only timestamped rows are compared.
   const timelineItems = useMemo(() => [
     ...mergeCoordination(items, coordination),
-    ...pendingApprovals.map((approval) => ({ type: 'approval', approval })),
+    ...pendingApprovals.map((approval) => ({ type: 'approval', key: `approval:${approval.approvalId}`, approval })),
   ], [items, coordination, pendingApprovals]);
 
   const mentionables = useMemo(
@@ -154,14 +154,8 @@ export default function Room() {
     : Object.keys(running).length ? 'Working…' : '';
 
   const mark = (
-    <span className="rs-stack ch-stack" aria-hidden="true">
-      {members.slice(0, 3).map((a, i) => (
-        <span key={a.agentId} className="rs-stack-item" style={{ zIndex: 3 - i }}>
-          <Companion archetype={a.archetype} color={a.color} state={presence[a.agentId]?.state || a.state} size={28} />
-        </span>
-      ))}
-      {members.length > 3 && <span className="rs-more">+{members.length - 3}</span>}
-    </span>
+    <GroupMark members={members} size={34}
+               states={Object.fromEntries(members.map((m) => [m.agentId, presence[m.agentId]?.state || m.state]))} />
   );
 
   function onAction(kind) {

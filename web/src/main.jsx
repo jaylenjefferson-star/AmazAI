@@ -12,6 +12,7 @@ import { AmazAIAuthProvider, configured, useAuth0 } from './auth0';
 import { syncToPath } from './theme';
 import AuthGate from './components/AuthGate';
 import Shell from './app/Shell';
+import { keyedBy } from './app/keyedRoute';
 import NewAgent from './screens/NewAgent';
 
 import Landing from './screens/Landing';
@@ -113,6 +114,11 @@ function SetupOnly({ children }) {
   return children;
 }
 
+// One screen per thread: see app/keyedRoute.jsx.
+const TaskRoute = keyedBy('agentId', Task);
+const RoomRoute = keyedBy('roomId', Room);
+const SettingsRoute = keyedBy('agentId', CompanionSettings);
+
 function PublicOnly({ children }) {
   const { isAuthenticated, isLoading } = useAuth0();
   if (isLoading) return null;
@@ -152,12 +158,12 @@ function Router() {
         <Route path="/" element={<Inbox />} />
         <Route path="/agents" element={<Navigate to="/" replace />} />
         <Route path="/agents/new" element={<NewAgent />} />
-        <Route path="/agents/:agentId" element={<Task />} />
-        <Route path="/agents/:agentId/settings" element={<CompanionSettings />} />
+        <Route path="/agents/:agentId" element={<TaskRoute />} />
+        <Route path="/agents/:agentId/settings" element={<SettingsRoute />} />
         <Route path="/marketplace" element={<Marketplace />} />
         <Route path="/connectors" element={<Connectors />} />
         <Route path="/rooms" element={<Navigate to="/" replace />} />
-        <Route path="/rooms/:roomId" element={<Room />} />
+        <Route path="/rooms/:roomId" element={<RoomRoute />} />
         <Route path="/routines" element={<Routines />} />
         <Route path="/routines/new" element={<Routines />} />
         <Route path="/artifacts" element={<Artifacts />} />

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ApprovalCard from './ApprovalCard';
 import Icon from './Icon';
 import Card, { EventLine } from './Cards';
@@ -113,16 +113,33 @@ export default function Timeline({
   items, streaming, typing, approvals, agents, onDecide, onSuggest,
   cardCtx, showAuthor = true, onSaveSkill, onRemember, mentionIds,
 }) {
-  const endRef = useRef(null);
+  const listRef = useRef(null);
   const { open: openContact } = useContacts();
   const [stuck, setStuck] = useState(true);
   // Options are an offer to answer the newest thing said. Once anything follows
   // -- a reply, a run -- they are stale, so only the last message carries them.
   const lastMessage = items.reduce((at, item, i) => (item.type === 'message' ? i : at), -1);
 
+  // A row is the same row however many rows come before it: keyed by what it *is*,
+  // not by where it sits. An index key made every row after an insertion a new node
+  // (and re-played its entrance), which read as the whole conversation flipping.
+  const keys = items.map((item, i) => item.key ?? `${item.type}:${i}`);
+  // Only rows that were not here a moment ago animate in. What arrives with the first
+  // load (a history) is not "new", and neither is a row that merely moved.
+  const seen = useRef(null);
+  const fresh = new Set();
+  if (seen.current) for (const k of keys) if (!seen.current.has(k)) fresh.add(k);
   useEffect(() => {
-    if (stuck) endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [items, streaming, typing, stuck]);
+    if (!seen.current) { if (items.length) seen.current = new Set(keys); } else keys.forEach((k) => seen.current.add(k));
+  });
+
+  // Follow the conversation only while you are at the bottom of it, instantly, and only
+  // by moving *this* list. scrollIntoView moves every scrollable ancestor as well, and
+  // an animated scroll re-started on every update is what made it feel like it swayed.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (el && stuck) el.scrollTop = el.scrollHeight;
+  }, [items, streaming, typing]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   function onScroll(e) {
     const el = e.currentTarget;
@@ -130,7 +147,7 @@ export default function Timeline({
   }
 
   return (
-    <div className="timeline" onScroll={onScroll}>
+    <div className="timeline" ref={listRef} onScroll={onScroll}>
       {items.length === 0 && !streaming && !typing && (
         <div className="tl-empty">
           <strong>Say hello</strong>
@@ -168,7 +185,7 @@ export default function Timeline({
           const offer = i === lastMessage && !streaming && !typing
             && !mine && item.suggestions?.length && onSuggest;
           node = (
-            <div className={`msg enter ${mine ? 'user' : ''}`}>
+            <div className={`msg ${mine ? 'user' : ''}`}>
               {speaker && (
                 <button type="button" className="tl-label tl-label--who" disabled={!speaker.who}
                         onClick={() => speaker.who && openContact(speaker.who.agentId)}>
@@ -205,10 +222,10 @@ export default function Timeline({
         }
 
         return (
-          <Fragment key={i}>
+          <div key={keys[i]} className={`tl-row${fresh.has(keys[i]) ? ' is-new' : ''}`}>
             {sep && <div className="time-sep">{sep}</div>}
             {node}
-          </Fragment>
+          </div>
         );
       })}
 
@@ -223,7 +240,6 @@ export default function Timeline({
         <TypingIndicator name={typing.name} verb={typing.verb} />
       )}
 
-      <div ref={endRef} />
     </div>
   );
 }
