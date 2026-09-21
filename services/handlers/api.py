@@ -19,8 +19,8 @@ import urllib.parse
 import boto3
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors as C,
-                    identity, keys as K, memory, models, routines as R,
-                    runs, schedules, settings as S, skills, threads)
+                    directory as D, govern, identity, keys as K, memory, models,
+                    routines as R, runs, schedules, settings as S, skills, threads)
 from amazai import dispatch
 from amazai.policy import Capability
 from amazai.states import PAUSED, RunState, TERMINAL
@@ -795,7 +795,216 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         return _resp(200, {"agentId": agent_id, "month": month,
                            "totalUsd": round(total, 4), "runs": rows})
 
+    # --- admin governance --------------------------------------------------
+    # The Directory, the org kill switch, and the admin audit trail. Every
+    # route re-derives the caller from the verified token via _membership()
+    # and gates on the FEAT-002 capability matrix; the {subject} in a path is
+    # the TARGET being acted on, never the actor. Specific literals are
+    # registered before the parameterized /admin/directory/{subject} so an
+    # /invites POST never resolves as a subject.
+    if path == "/admin/directory" and method == "GET":
+        return _admin_list_members(store, event)
+
+    if path == "/admin/directory/invites" and method == "POST":
+        return _admin_invite(store, body, event)
+
+    if (p := _match(path, "/admin/directory/{subject}/suspend")) and method == "POST":
+        return _admin_suspend(store, p[0], event)
+
+    if (p := _match(path, "/admin/directory/{subject}/reactivate")) and method == "POST":
+        return _admin_reactivate(store, p[0], event)
+
+    if (p := _match(path, "/admin/directory/{subject}")) and method == "PATCH":
+        return _admin_change_role(store, p[0], body, event)
+
+    if path == "/admin/killswitch" and method == "GET":
+        return _admin_killswitch_status(store, event)
+
+    if path == "/admin/killswitch" and method == "POST":
+        return _admin_killswitch_set(store, body, event)
+
+    if path == "/admin/audit" and method == "GET":
+        return _admin_audit(store, event)
+
     return _resp(404, {"error": "no such route", "path": path, "method": method})
+
+
+# --- admin governance helpers ----------------------------------------------
+#
+# The Directory RBAC engine, the kill switch and the admin audit trail from
+# FEAT-002 wired to HTTP. directory.assert_can raises Escalation (403) and the
+# last-Owner floor raises ValidationError (400); both already map in handler().
+
+
+def _membership(store: Store, event: dict) -> "D.Membership":
+    """The acting caller's standing in their org, re-derived from the verified
+    token on every admin request.
+
+    guard_principal is the pull-based offboarding cut: a human suspended a
+    moment ago holds nothing, so their very next admin action fails closed here
+    (403) rather than at some later sync. Never trust a subject from the path
+    or body -- identity.load_membership keys on principal.user_id.
+    """
+    membership = identity.load_membership(store, _principal(event))
+    govern.guard_principal(membership)
+    return membership
+
+
+def _correlation_id(event: dict) -> str | None:
+    """The client's X-Correlation-Id if it supplied one, else None so
+    admin_audit_event generates one. Either way the id is echoed back on a
+    state change so a UI can link the admin action to the run evidence it
+    causes (docs/architecture/10)."""
+    return _header(event, "x-correlation-id") or None
+
+
+def _roster(store: Store, org_id: str) -> list["D.Membership"]:
+    """The org's current members, as Memberships -- passed to the last-Owner
+    floor so suspend/demote can refuse to strip an org of its final Owner."""
+    rows = store.query(K.org_pk(org_id), sk_prefix="MEMBER#", limit=500)
+    return [D.membership_of(r) for r in rows]
+
+
+def _admin_list_members(store: Store, event: dict):
+    """The full roster. Gated on READ_AUDIT_LOG rather than a member-only
+    capability: seeing who else is in the org and their roles is a governance
+    read (Owner/Admin/Security/Auditor), and a plain Member must not enumerate
+    the directory."""
+    D.assert_can(_membership(store, event), D.Capability.READ_AUDIT_LOG)
+    return _resp(200, {"members": store.query(K.org_pk(store.owner_id),
+                                              sk_prefix="MEMBER#", limit=500)})
+
+
+def _admin_invite(store: Store, body: dict, event: dict):
+    """Invite a human. Requires INVITE_USERS (Owner/Admin per the matrix)."""
+    actor = _actor(event)
+    D.assert_can(_membership(store, event), D.Capability.INVITE_USERS)
+    subject = (body.get("subject") or body.get("email") or "").strip()
+    role = D.Role(body.get("role") or D.Role.MEMBER.value)
+    org_id = actor.org_id
+    row = D.invite_member(org_id, subject, role, invited_by=actor.user_id)
+    corr = _correlation_id(event)
+    audit = govern.admin_audit_event(org_id, "member.invited", actor,
+                                     correlation_id=corr,
+                                     after={"subject": subject, "role": role.value},
+                                     detail="member invited")
+    # Atomic: the member row and its audit row land together or neither does,
+    # the same shape as agent create.
+    store.transact_put([row, audit])
+    return _resp(201, {"member": row, "correlationId": audit["correlationId"]})
+
+
+def _admin_suspend(store: Store, subject: str, event: dict):
+    """Offboard a human. Mapped to TERMINATE_COMPUTER: it is the closest
+    offboarding control in the matrix (Owner/Admin/Security), and suspending a
+    seat is the human analogue of terminating a running computer -- both are
+    "stop this actor now". The seat becomes SUSPENDED, never deleted, so the
+    audit trail survives it."""
+    actor = _actor(event)
+    D.assert_can(_membership(store, event), D.Capability.TERMINATE_COMPUTER)
+    org_id = actor.org_id
+    row = store.get(K.org_pk(org_id), K.member_sk(subject))   # 404 if unknown
+    target = D.membership_of(row)
+    patch = D.suspend_patch(target, _roster(store, org_id))   # last-Owner floor
+    updated = store.update(K.org_pk(org_id), K.member_sk(subject), patch)
+    corr = _correlation_id(event)
+    audit = govern.admin_audit_event(org_id, "member.suspended", actor,
+                                     correlation_id=corr,
+                                     before={"state": target.state.value},
+                                     after={"state": patch["state"]},
+                                     detail=f"suspended {subject}")
+    store.put(audit)
+    return _resp(200, {"member": updated, "correlationId": audit["correlationId"]})
+
+
+def _admin_reactivate(store: Store, subject: str, event: dict):
+    """Return an invited or suspended seat to ACTIVE. Requires INVITE_USERS:
+    reactivating is the same "who may seat a human" authority as inviting
+    (Owner/Admin), so it shares that capability rather than the offboarding
+    one."""
+    actor = _actor(event)
+    D.assert_can(_membership(store, event), D.Capability.INVITE_USERS)
+    org_id = actor.org_id
+    row = store.get(K.org_pk(org_id), K.member_sk(subject))   # 404 if unknown
+    target = D.membership_of(row)
+    patch = D.reactivate_patch(target)
+    updated = store.update(K.org_pk(org_id), K.member_sk(subject), patch)
+    corr = _correlation_id(event)
+    audit = govern.admin_audit_event(org_id, "member.reactivated", actor,
+                                     correlation_id=corr,
+                                     before={"state": target.state.value},
+                                     after={"state": patch["state"]},
+                                     detail=f"reactivated {subject}")
+    store.put(audit)
+    return _resp(200, {"member": updated, "correlationId": audit["correlationId"]})
+
+
+def _admin_change_role(store: Store, subject: str, body: dict, event: dict):
+    """Change a seat's role. Requires INVITE_USERS (Owner/Admin): assigning a
+    role is the same seating authority as inviting. The last-Owner floor
+    refuses to demote the final Owner."""
+    actor = _actor(event)
+    D.assert_can(_membership(store, event), D.Capability.INVITE_USERS)
+    new_role = D.Role(body["role"])
+    org_id = actor.org_id
+    row = store.get(K.org_pk(org_id), K.member_sk(subject))   # 404 if unknown
+    target = D.membership_of(row)
+    patch = D.change_role_patch(target, new_role, _roster(store, org_id))
+    updated = store.update(K.org_pk(org_id), K.member_sk(subject), patch)
+    corr = _correlation_id(event)
+    audit = govern.admin_audit_event(org_id, "member.role_changed", actor,
+                                     correlation_id=corr,
+                                     before={"role": target.role.value},
+                                     after={"role": patch["role"]},
+                                     detail=f"role of {subject} -> {new_role.value}")
+    store.put(audit)
+    return _resp(200, {"member": updated, "correlationId": audit["correlationId"]})
+
+
+def _admin_killswitch_status(store: Store, event: dict):
+    """The org's freeze state. Gated on CHANGE_ORG_POLICIES rather than a plain
+    read: whether the org is frozen is an org-policy fact, and the roles that
+    may flip it (Owner/Admin/Security) are the ones that should see it."""
+    D.assert_can(_membership(store, event), D.Capability.CHANGE_ORG_POLICIES)
+    row = store.try_get(K.org_pk(store.owner_id), "KILLSWITCH")
+    return _resp(200, {"frozen": govern.is_frozen(row), "killswitch": row})
+
+
+def _admin_killswitch_set(store: Store, body: dict, event: dict):
+    """Freeze or unfreeze the org. Requires CHANGE_ORG_POLICIES
+    (Owner/Admin/Security). Freezing fails every gated bot action closed on its
+    next run (see orchestrator._drive)."""
+    actor = _actor(event)
+    D.assert_can(_membership(store, event), D.Capability.CHANGE_ORG_POLICIES)
+    frozen = bool(body.get("frozen"))
+    org_id = actor.org_id
+    before = store.try_get(K.org_pk(org_id), "KILLSWITCH")
+    row = govern.killswitch_row(org_id, frozen=frozen, actor=actor,
+                                reason=(body.get("reason") or ""))
+    corr = _correlation_id(event)
+    audit = govern.admin_audit_event(
+        org_id, "org.frozen" if frozen else "org.unfrozen", actor,
+        correlation_id=corr,
+        before={"frozen": govern.is_frozen(before)}, after={"frozen": frozen},
+        detail=(body.get("reason") or ""))
+    # The kill switch is a single overwriteable row (a re-freeze replaces it),
+    # so it is a put rather than a transact_put's create-only write. The audit
+    # row is append-only and written right after; the audit trail is what must
+    # never be lost, and it survives whether or not the flip changed anything.
+    written = store.put(row)
+    store.put(audit)
+    return _resp(200, {"frozen": frozen, "killswitch": written,
+                       "correlationId": audit["correlationId"]})
+
+
+def _admin_audit(store: Store, event: dict):
+    """Read-only, newest-first admin history. Requires READ_AUDIT_LOG so the
+    read-only Auditor can see it (Owner/Admin/Security/Auditor) and a plain
+    Member cannot."""
+    D.assert_can(_membership(store, event), D.Capability.READ_AUDIT_LOG)
+    rows = store.query(K.org_pk(store.owner_id), sk_prefix="ADMINAUDIT#",
+                       ascending=False, limit=500)
+    return _resp(200, {"audit": rows})
 
 
 def _write_memory(store: Store, pk: str, body: dict, *, scope: str, actor: A.Actor) -> dict:

@@ -23,8 +23,8 @@ import boto3
 from dataclasses import dataclass, field
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
-                    continuation, cost, keys as K, memory, onboarding, policy, redact, review,
-                    router, routines, runs, skills, threads)
+                    continuation, cost, govern, keys as K, memory, onboarding, policy,
+                    redact, review, router, routines, runs, skills, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
@@ -127,6 +127,18 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     if agent.get("state") != "active":
         _fail(store, run, f"agent {agent.get('name')} is {agent.get('state')}")
         return {"ok": False, "reason": "agent not active"}
+
+    # The kill switch, threaded through the pre-model chokepoint rather than a
+    # checklist: a frozen org fails every bot action closed on its next run,
+    # including an in-flight routine, because this runs before a single token
+    # is spent. A missing row means not frozen (govern.is_frozen), so the
+    # default state stays open. store.owner_id is the org id today (the seam).
+    kill = store.try_get(K.org_pk(store.owner_id), "KILLSWITCH")
+    try:
+        govern.assert_not_frozen(kill)
+    except govern.Frozen as exc:
+        _fail(store, run, str(exc))
+        return {"ok": False, "reason": "org frozen"}
 
     model_id = (agent.get("model") or {}).get("modelId")
     if not model_id:
