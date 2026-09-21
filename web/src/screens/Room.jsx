@@ -154,7 +154,7 @@ export default function Room() {
     : Object.keys(running).length ? 'Working…' : '';
 
   const mark = (
-    <GroupMark members={members} size={34}
+    <GroupMark members={members} size={38}
                states={Object.fromEntries(members.map((m) => [m.agentId, presence[m.agentId]?.state || m.state]))} />
   );
 

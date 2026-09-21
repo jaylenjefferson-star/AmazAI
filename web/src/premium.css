@@ -544,11 +544,11 @@ button.tl-label:disabled { cursor: default; }
 @media (prefers-reduced-motion: reduce) { .tl-row.is-new { animation: none; } }
 .tl-row > * + * { margin-top: 6px; }
 
-/* ---- a room's face: members inside one round tile, never overlapped */
-.gm { width: var(--gm); height: var(--gm); flex: none; border-radius: 50%; background: var(--raised-2); box-shadow: inset 0 0 0 1px var(--hairline);
-  display: flex; flex-wrap: wrap; align-content: center; justify-content: center; overflow: hidden; padding: calc(var(--gm) * .07); }
-.gm-cell { width: 50%; display: grid; place-items: center; }
-.gm[data-n="1"] .gm-cell, .gm[data-n="0"] { width: 100%; }
-.gm-more { font-size: calc(var(--gm) * .22); font-weight: 650; color: var(--dim); }
+/* ---- a room's face: members inside one round tile, never overlapped (see GroupMark) */
+.gm { position: relative; width: var(--gm); height: var(--gm); flex: none; border-radius: 50%; background: var(--raised-2); box-shadow: inset 0 0 0 1px var(--hairline); }
+.gm-cell { position: absolute; display: grid; place-items: center; }
+.gm-more { font-size: calc(var(--gm) * .2); font-weight: 650; color: var(--dim); }
 .ri-faces { display: flex; justify-content: center; gap: 10px; }
-.rs-row[data-open="true"] .gm { background: var(--raised-2); }
+.chat .timeline { scroll-behavior: auto; overflow-anchor: auto; }
+/* the state dot sits on the tile's rim, not on a face */
+.rs-row[data-kind="room"] .rs-live, .rs-row[data-kind="room"][data-state="approval"] .rs-mark::after { right: -3px; bottom: -3px; }

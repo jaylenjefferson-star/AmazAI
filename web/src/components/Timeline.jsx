@@ -136,9 +136,16 @@ export default function Timeline({
   // Follow the conversation only while you are at the bottom of it, instantly, and only
   // by moving *this* list. scrollIntoView moves every scrollable ancestor as well, and
   // an animated scroll re-started on every update is what made it feel like it swayed.
+  const justSent = [...fresh].some((k) => String(k).startsWith('local:'));
   useLayoutEffect(() => {
     const el = listRef.current;
-    if (el && stuck) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    // What you have just sent always brings you to it, even from up in the history; what
+    // arrives from someone else follows only if you were already at the bottom.
+    if (justSent && !stuck) setStuck(true);
+    // 'instant' overrides any inherited scroll-behavior: an animated scroll started on every
+    // update was what made the list sway (and could be cancelled half-way, stranding it).
+    if (stuck || justSent) el.scrollTo({ top: el.scrollHeight, behavior: 'instant' });
   }, [items, streaming, typing]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   function onScroll(e) {
