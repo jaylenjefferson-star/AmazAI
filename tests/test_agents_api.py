@@ -13,6 +13,7 @@ from amazai import identity, keys as K
 from amazai.store import Store
 
 import handlers.api as api
+from amazai import agentcore
 
 
 def event(method, path, body=None, *, headers=None, qs=None, sub="owner-a"):
@@ -73,6 +74,16 @@ class TestCreate:
         from pathlib import Path
         stack = (Path(__file__).resolve().parents[1] / "infra/lib/amazai-stack.ts").read_text()
         assert "'bedrock-agentcore:CreateAgentRuntime'" in stack
+        assert "'bedrock-agentcore:CreateAgentRuntimeEndpoint'" in stack
+
+    def test_create_harness_accepts_the_current_nested_arn_response(self):
+        class Control:
+            def create_harness(self, **kwargs):
+                return {"harness": {"arn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/new"}}
+
+        arn = agentcore.AgentCore(runtime=object(), control=Control()).create_harness(
+            name="amazai_chief", execution_role_arn="arn:aws:iam::1:role/bot", tool_names=[])
+        assert arn == "arn:aws:bedrock-agentcore:us-west-2:1:harness/new"
 
     def test_provisioning_passes_the_restricted_agent_role_to_agentcore(self, monkeypatch):
         calls = []
