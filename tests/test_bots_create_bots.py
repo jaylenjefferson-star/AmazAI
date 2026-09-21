@@ -265,21 +265,39 @@ class TestBriefingTheNewBot:
         assert run["goal"] == "Summarise the three biggest rivals. Done = one page."
         assert run["trigger"]["fromAgentId"] == world.agent_id
 
-    def test_both_transcripts_say_who_briefed_whom(self, world, woken):  # noqa: F811
-        create(world, firstTask="Summarise the rivals.")
-        lines = [m["text"] for m in world.store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")
-                 if m.get("kind") == "event"]
-        assert any("briefed Scout: Summarise the rivals." in t for t in lines)
+    def test_the_assigned_task_is_the_first_timeline_item_not_a_generic_greeting(self, world, woken):  # noqa: F811
+        task = "Summarise the rivals."
+        create(world, firstTask=task)
+        rows = world.store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")
+        assert len(rows) == 1
+        assert rows[0]["role"] == "user" and rows[0]["kind"] == "briefing"
+        assert rows[0]["text"] == task
+        assert rows[0]["fromAgentId"] == world.agent_id
+        assert rows[0]["toAgentId"] == "scout"
+        assert not rows[0].get("starter")
+        assert "good to meet you" not in rows[0]["text"]
 
-    def test_without_a_first_task_it_waits_and_the_model_is_told(self, world, woken):  # noqa: F811
+    def test_the_briefing_is_the_unread_thread_preview(self, world, woken):  # noqa: F811
+        create(world, firstTask="Summarise the rivals.")
+        thread = world.store.get(K.thread_pk("dm-scout"), "META")
+        assert thread["preview"] == "Summarise the rivals."
+        assert thread["previewRole"] == "briefing"
+        assert thread["previewAuthor"] == world.agent["name"]
+
+    def test_without_a_first_task_it_waits_and_keeps_the_normal_starter(self, world, woken):  # noqa: F811
         out = create(world)["toolResult"]
         assert out["briefed"] is False and "waiting" in out["briefing"] and woken == []
+        rows = world.store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")
+        assert len(rows) == 1 and rows[0].get("starter") is True
+        assert "good to meet you" in rows[0]["text"]
 
-    def test_a_bot_that_cannot_start_yet_is_told_why_instead_of_being_started(self, world, woken, monkeypatch):  # noqa: F811
+    def test_a_bot_that_cannot_start_keeps_the_assignment_visible(self, world, woken, monkeypatch):  # noqa: F811
         monkeypatch.setattr(collab, "may_wake_now", lambda store, agent, limits: (False, "over budget"))
         out = create(world, firstTask="Go.")["toolResult"]
         assert out["created"] is True and out["briefed"] is False and "over budget" in out["briefing"]
         assert woken == []
+        rows = world.store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")
+        assert [(r.get("kind"), r["text"]) for r in rows] == [("briefing", "Go.")]
 
     def test_the_new_bot_is_asked_its_job_as_its_whole_conversation(self, world, woken, monkeypatch):  # noqa: F811
         # A Bot never spoken to has only a greeting, which is not sent to the model.
@@ -291,6 +309,9 @@ class TestBriefingTheNewBot:
         orch._drive(world.store, child_run, {"runId": child_run["runId"]})
 
         assert fake.calls[0]["messages"] == [{"role": "user", "content": [{"text": "Summarise the rivals."}]}]
+        prompt = fake.calls[0]["system_prompt"]
+        assert "good to meet you" not in prompt
+        assert "You already opened this conversation" not in prompt
 
 
 class TestRefiningABotYouMade:
@@ -609,3 +630,92 @@ class TestAProposalCarriesTheTidiedName:
         started_by(world, {"type": "agent"})
         result = create(world, name="Janai Williams \u2014 Chief of Staff, Operations", title="")
         assert result["approval"]["arguments"]["title"] == "Chief of Staff"
+
+
+
+class TestApprovedProposalFirstTask:
+    def test_first_task_is_part_of_the_bound_proposal(self):
+        proposal = orch._agent_creation_proposal(
+            {**SCOUT, "firstTask": "  Summarise the rivals.  "},
+            parent_agent_id="chief",
+        )
+        assert proposal["firstTask"] == "Summarise the rivals."
+
+    def test_approved_creation_persists_then_launches_the_exact_task(self, api_table, monkeypatch):  # noqa: F811
+        from amazai.store import Store
+        import handlers.api as api
+
+        _, parent = call("POST", "/agents", {"name": "Chief", "role": "Runs the day."})
+        store = Store("owner-a", table=api_table)
+        store.update(K.agent_pk(parent["agentId"]), "META",
+                     {"model": {"modelId": "resolved-model", "tier": "balanced"}})
+        proposal = orch._agent_creation_proposal(
+            {**SCOUT, "firstTask": "Summarise the rivals."},
+            parent_agent_id=parent["agentId"],
+        )
+        started = []
+        monkeypatch.setattr(api, "_invoke_orchestrator",
+                            lambda run_id, owner_id, **kw: started.append((run_id, owner_id)))
+
+        created = api._create_approved_agent(
+            store, proposal, A.Actor(user_id="owner-a", org_id="org-1"))
+        launch = api._launch_approved_first_task(store, created, proposal)
+
+        assert launch["status"] == "started" and started == [(launch["runId"], "owner-a")]
+        run = store.get(K.run_pk(launch["runId"]), "META")
+        assert run["goal"] == "Summarise the rivals."
+        rows = store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")
+        assert [(r.get("kind"), r.get("starter"), r["text"]) for r in rows] == [
+            ("briefing", None, "Summarise the rivals.")]
+        assert rows[0]["fromAgentId"] == parent["agentId"]
+
+    def test_approved_first_task_honors_the_same_wake_gate(self, api_table, monkeypatch):  # noqa: F811
+        from amazai.store import Store
+        import handlers.api as api
+
+        _, parent = call("POST", "/agents", {"name": "Chief", "role": "Runs the day."})
+        store = Store("owner-a", table=api_table)
+        store.update(K.agent_pk(parent["agentId"]), "META",
+                     {"model": {"modelId": "resolved-model", "tier": "balanced"}})
+        proposal = orch._agent_creation_proposal(
+            {**SCOUT, "firstTask": "Summarise the rivals."}, parent_agent_id=parent["agentId"])
+        created = api._create_approved_agent(
+            store, proposal, A.Actor(user_id="owner-a", org_id="org-1"))
+        monkeypatch.setattr(api.collab, "may_wake_now",
+                            lambda store, bot, limits: (False, "over budget"))
+        monkeypatch.setattr(api, "_invoke_orchestrator",
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not wake")))
+
+        launch = api._launch_approved_first_task(store, created, proposal)
+
+        assert launch == {"status": "deferred", "reason": "over budget"}
+        assert store.query_index("gsi1", "gsi1pk", "RUNS") == []
+        assert store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")[0]["kind"] == "briefing"
+
+    def test_invoke_failure_leaves_a_recoverable_queued_run(self, api_table, monkeypatch):  # noqa: F811
+        from amazai.store import Store
+        import handlers.api as api
+
+        _, parent = call("POST", "/agents", {"name": "Chief", "role": "Runs the day."})
+        store = Store("owner-a", table=api_table)
+        store.update(K.agent_pk(parent["agentId"]), "META",
+                     {"model": {"modelId": "resolved-model", "tier": "balanced"}})
+        proposal = orch._agent_creation_proposal(
+            {**SCOUT, "firstTask": "Summarise the rivals."}, parent_agent_id=parent["agentId"])
+        created = api._create_approved_agent(
+            store, proposal, A.Actor(user_id="owner-a", org_id="org-1"))
+        monkeypatch.setattr(api, "_invoke_orchestrator",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("Lambda unavailable")))
+
+        launch = api._launch_approved_first_task(store, created, proposal)
+
+        assert launch["status"] == "queued" and launch["runId"]
+        assert store.get(K.run_pk(launch["runId"]), "META")["state"] == "QUEUED"
+
+    def test_oversized_task_is_refused_not_silently_changed(self, world, woken):  # noqa: F811
+        task = "x" * (provisioning.FIRST_TASK_MAX + 1)
+        result = create(world, firstTask=task)
+        assert "at most 4000" in result["toolResult"]["error"]
+        assert "scout" not in all_agents(world)
+        with pytest.raises(A.ValidationError, match="at most 4000"):
+            orch._agent_creation_proposal({**SCOUT, "firstTask": task}, parent_agent_id="chief")

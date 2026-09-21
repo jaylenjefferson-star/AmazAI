@@ -28,21 +28,32 @@ organization (a second is a 409); archiving it frees the place.
 
 Onboarding is a phase, not a kind of agent: after the first win it is just a Bot.
 
-### Every new Bot greets
+### Every new Bot opens honestly
 
-On creation, in the **same transaction** as the thread, a starter `MSG#` row is
-written: *"Hey {name} — good to meet you. What do you mainly want me for?"* The
-first Bot adds *"Pick the closest fit, or type your own."* and stores
-`suggestions` on the row. Consequences worth knowing:
+A human-created Bot with no assignment keeps the conversational starter: in
+the same transaction as the thread, a `starter` assistant row asks what the
+operator mainly wants it for. The first Bot additionally offers closest-fit
+suggestions.
 
-- The greeting is flagged `starter` and **`agentcore.build_messages` drops it**.
-  Sent to the model it would be a conversation that opens on an assistant turn,
-  which Converse refuses. The first Bot's brief lists the same options, so
-  nothing the model needs is lost.
-- The operator's first name arrives as `operatorName` on the create request. It
-  is read for one sentence and stored nowhere; an unusable value drops the name
-  rather than failing the create.
-- A failed harness rolls the greeting back with everything else
+A Bot created with `firstTask` does **not** greet first. The exact assignment is
+stored atomically as a `role: user`, `kind: briefing` protocol row attributed to
+the creating Bot. The console renders it as teammate coordination rather than
+as the operator's own bubble, the inbox previews `Chief: <task>`, and the model
+receives it once as its whole opening conversation. Chronology is therefore
+assignment → response, never generic greeting → unrelated assignment →
+response.
+
+Consequences worth knowing:
+
+- A starter is flagged `starter` and `agentcore.build_messages` drops it; its
+  text reaches the model only as an opening the operator already read.
+- A briefing is not a starter and is sent as the first user-protocol turn. It
+  remains visible and unread even if budget/concurrency prevents an immediate
+  wake.
+- The operator's first name arrives as `operatorName` on a human create request.
+  It is read for one sentence and stored nowhere; an unusable value drops the
+  name rather than failing the create.
+- A failed harness rolls the starter or briefing back with everything else
   (`rollback_keys`).
 
 ### Console

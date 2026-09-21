@@ -27,10 +27,11 @@ PREVIEW_MAX = 140
 def touch(text: str, role: str) -> dict:
     """The thread-META fields a new message updates.
 
-    `role` is who spoke ("user" or "assistant"), so the console can say "You:"
-    without a second lookup. Whitespace is collapsed: a preview is one line,
-    and a message that opens with a blank line or a list must not draw as an
-    empty row.
+    `role` is who spoke ("user", "assistant", or the control-plane
+    "briefing" preview), so the console can say "You:" only for the operator's
+    own words without a second lookup. Whitespace is collapsed: a preview is
+    one line, and a message that opens with a blank line or a list must not draw
+    as an empty row.
     """
     flat = " ".join((text or "").split())
     if len(flat) > PREVIEW_MAX:

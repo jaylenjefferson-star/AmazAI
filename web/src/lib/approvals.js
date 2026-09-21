@@ -16,3 +16,12 @@ export async function alwaysAllow(approval) {
   const preapproved = [...new Set([...(agent.preapproved || []), approval.action])];
   await api.updateAgent(agentId, { preapproved });
 }
+
+
+
+/** Prefer the server's post-execution approval snapshot over a local status.
+ * Agent creation can be created+started, created+deferred, queued, or failed;
+ * reducing every answer to `approved` hides the outcome the server persisted. */
+export function settledApproval(current, result, approved) {
+  return result?.approval || { ...current, status: approved ? 'approved' : 'denied' };
+}

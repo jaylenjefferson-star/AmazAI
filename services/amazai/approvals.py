@@ -184,6 +184,13 @@ def to_card(approval: dict) -> dict:
         "requestedBy": approval.get("requestedBy", {}),
         "expiresAt": approval["expiresAt"],
         "status": approval["status"],
+        # What happened after a settled creation decision. These are written by
+        # server execution, never by model prose, and make deferred/queued/
+        # failed outcomes survive a reload instead of briefly looking approved.
+        "executionStatus": approval.get("executionStatus"),
+        "executionError": approval.get("executionError"),
+        "createdAgentId": approval.get("createdAgentId"),
+        "firstTaskStatus": approval.get("firstTaskStatus"),
         # Which rule stopped the run, for the card. Absent on approvals written
         # before it existed; the console says nothing rather than guessing.
         "policy": approval.get("policy"),

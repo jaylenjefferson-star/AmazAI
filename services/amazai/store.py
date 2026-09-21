@@ -13,7 +13,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -183,15 +183,45 @@ class Store:
 
     def query_index(self, index: str, pk_name: str, pk_value: str, *,
                     sk_name: str | None = None, sk_lt: str | None = None,
-                    limit: int = 100) -> list[dict]:
+                    limit: int = 100,
+                    predicate: Callable[[dict], bool] | None = None) -> list[dict]:
+        """Return up to `limit` owned rows, paging past rows that do not qualify.
+
+        GSI partitions are currently global labels such as `AGENTS`. DynamoDB
+        applies its page Limit before this client can enforce `ownerId` or an
+        active-only projection, so a one-page query lets another owner or old
+        archived rows crowd the current owner's active Bots out of the result.
+        Pagination is therefore part of the ownership/correctness boundary, not
+        an optimization.
+        """
         cond = Key(pk_name).eq(pk_value)
         if sk_name and sk_lt:
             cond = cond & Key(sk_name).lt(sk_lt)
-        resp = self._table.query(
-            IndexName=index, KeyConditionExpression=cond, Limit=limit
-        )
-        return [i for i in _decimals_to_native(resp.get("Items", []))
-                if i.get("ownerId") == self.owner_id]
+        rows: list[dict] = []
+        start = None
+        while len(rows) < limit:
+            request: dict[str, Any] = {
+                "IndexName": index,
+                "KeyConditionExpression": cond,
+                "Limit": max(1, limit),
+            }
+            if start:
+                request["ExclusiveStartKey"] = start
+            resp = self._table.query(**request)
+            for raw in resp.get("Items", []):
+                item = _decimals_to_native(raw)
+                if item.get("ownerId") != self.owner_id:
+                    continue
+                if predicate and not predicate(item):
+                    continue
+                rows.append(item)
+                if len(rows) >= limit:
+                    break
+            next_start = resp.get("LastEvaluatedKey")
+            if not next_start or next_start == start:
+                break
+            start = next_start
+        return rows[:limit]
 
     def delete(self, pk: str, sk: str) -> None:
         self._table.delete_item(

@@ -29,6 +29,7 @@ from amazai.store import Store
 
 #: Optional built-ins a Bot may ask for. The terminal and the Bot's own files are always on.
 OPTIONAL_TOOLS = frozenset({"browser", "code_interpreter"})
+FIRST_TASK_MAX = 4000
 
 
 class ChildCreationError(Exception):
@@ -111,6 +112,19 @@ def provision_harness(store: Store, agent: dict) -> dict:
     return standard_runtime.provision_bot(store, agent)
 
 
+def first_task(value) -> str:
+    """One normalized first assignment, shared by storage and run creation."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if len(text) > FIRST_TASK_MAX:
+        raise A.ValidationError(
+            f"firstTask must be at most {FIRST_TASK_MAX} characters; "
+            f"got {len(text)}. Put durable instructions in description and keep "
+            "the first assignment focused")
+    return text
+
+
 def child_body(store: Store, creator: dict, args: dict) -> dict:
     """What a Bot may nominate for a child, and what it inherits from the nominator.
 
@@ -143,10 +157,17 @@ def create_child(store: Store, creator: dict, args: dict) -> dict:
                     agent_id=creator["agentId"])
     seated = seated_agents(store)
     try:
+        task = first_task(args.get("firstTask"))
+        briefing = ({
+            "text": task,
+            "author": creator.get("name") or creator["agentId"],
+            "fromAgentId": creator["agentId"],
+        } if task else None)
         plan = A.plan_create(child_body(store, creator, args), actor,
                              org_connectors=org_connectors(store),
                              active_count=len(seated), max_agents=max_agents(),
-                             on_owners_request=True)
+                             on_owners_request=True,
+                             initial_briefing=briefing)
     except (A.ValidationError, A.QuotaExceeded, A.Conflict, A.Escalation) as exc:
         raise ChildCreationError(str(exc)) from exc
 

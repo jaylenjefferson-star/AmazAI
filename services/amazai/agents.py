@@ -579,7 +579,8 @@ def plan_create(body: dict, actor: Actor, *,
                 active_count: int = 0,
                 max_agents: int = DEFAULT_MAX_AGENTS,
                 has_entrypoint: bool = False,
-                on_owners_request: bool = False) -> CreatePlan:
+                on_owners_request: bool = False,
+                initial_briefing: dict | None = None) -> CreatePlan:
     """Validate a create request and lay out every row it implies.
 
     Nothing here touches the store. If this returns, the agent is creatable;
@@ -593,9 +594,11 @@ def plan_create(body: dict, actor: Actor, *,
     An agent actor is refused, with one exception: `on_owners_request`, which the
     orchestrator sets from how the *run* started (the operator's own message), never
     from anything the model wrote. That is the operator asking a Bot to make a Bot.
-    Such a Bot is recorded as its creator's, reports to it, and is audited with the
-    creator named. Everything else -- a routine, a teammate, background work -- still
-    reaches this refusal and has to be approved by a person.
+    `initial_briefing` is trusted control-plane context, never read from the
+    profile body. When a creator immediately assigns a first task, that task is
+    the first durable user-protocol turn instead of an invented assistant
+    greeting that contradicts the assignment. It remains part of this plan so
+    provisioning rollback removes the whole attempted Bot, briefing included.
     """
     if actor.is_agent and not on_owners_request:
         raise Escalation("agents do not create agents; a person does")
@@ -705,37 +708,53 @@ def plan_create(body: dict, actor: Actor, *,
         "namespace": agent["memoryNamespace"], "entries": 0,
     })
 
-    # A new Bot speaks first. The greeting is a stored row, in the same
-    # transaction as the thread, so it is the same in every browser and cannot
-    # exist without the agent it came from -- which a console that invented it
-    # on screen could not promise. `starter` keeps it out of the model's
-    # history (`agentcore.build_messages`), where a leading assistant turn
-    # would be an invalid conversation.
-    text, suggestions = onboarding.starter_message(
-        entrypoint=profile["entrypoint"], operator=onboarding.operator_name(body))
+    # A Bot with an immediate assignment does not "speak first". Its creator's
+    # briefing is the first durable user-protocol turn, so the visible timeline,
+    # inbox preview and model history all tell the same story: assignment, then
+    # response. Human/no-task creation keeps the conversational starter below.
+    brief = initial_briefing if isinstance(initial_briefing, dict) else {}
+    brief_text = (brief.get("text") or "").strip()
+    brief_author = (brief.get("author") or "").strip()
+    brief_from = (brief.get("fromAgentId") or "").strip()
 
     thread_id = f"dm-{agent_id}"
+    if brief_text:
+        preview = {
+            **threads.touch(brief_text, "briefing"),
+            **({"previewAuthor": brief_author} if brief_author else {}),
+        }
+        initial_message = {
+            "pk": K.thread_pk(thread_id),
+            "sk": K.message_sk(now_iso(), ordered_suffix()),
+            "entity": "Message", "role": "user", "kind": "briefing",
+            "author": brief_author or "a teammate",
+            "fromAgentId": brief_from or None,
+            "toAgentId": agent_id,
+            "text": brief_text,
+        }
+    else:
+        text, suggestions = onboarding.starter_message(
+            entrypoint=profile["entrypoint"], operator=onboarding.operator_name(body))
+        preview = threads.touch(text, "assistant")
+        initial_message = {
+            "pk": K.thread_pk(thread_id),
+            "sk": K.message_sk(now_iso(), ordered_suffix()),
+            "entity": "Message", "role": "assistant",
+            "author": profile["name"], "agentId": agent_id,
+            "text": text, "starter": True,
+        }
+        if suggestions:
+            initial_message["suggestions"] = suggestions
+
     items.append({
         "pk": K.thread_pk(thread_id), "sk": "META",
         "entity": "Thread", "threadId": thread_id,
         "gsi1pk": "THREADS", "gsi1sk": now_iso(),
         "kind": "dm", "title": profile["name"], "agentIds": [agent_id],
         "sessionId": K.bot_session_id(actor.user_id, agent_id, thread_id),
-        # The greeting is what the thread's row shows until anyone says more,
-        # and its timestamp is what makes a brand-new Bot read as unread.
-        **threads.touch(text, "assistant"),
+        **preview,
     })
-
-    greeting = {
-        "pk": K.thread_pk(thread_id),
-        "sk": K.message_sk(now_iso(), ordered_suffix()),
-        "entity": "Message", "role": "assistant",
-        "author": profile["name"], "agentId": agent_id,
-        "text": text, "starter": True,
-    }
-    if suggestions:
-        greeting["suggestions"] = suggestions
-    items.append(greeting)
+    items.append(initial_message)
 
     items.append(audit_event(agent_id, "agent.created", actor,
                              after={"name": profile["name"],

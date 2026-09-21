@@ -296,6 +296,7 @@
   background: var(--bubble-bot); color: var(--text); font-size: 17px; line-height: 1.42; letter-spacing: -.006em;
   box-shadow: var(--lift); overflow-wrap: anywhere; white-space: pre-wrap;
 }
+.chat .msg .body.body--markdown { white-space: normal; }
 .chat .msg.user .body { border-radius: 24px 24px 8px 24px; background: var(--bubble-user); color: var(--bubble-user-ink); }
 .chat .msg .cards { max-width: min(92%, 640px); }
 .chat .msg-actions { padding-left: 8px; opacity: .8; }
