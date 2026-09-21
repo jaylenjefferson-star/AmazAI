@@ -58,6 +58,16 @@ Anything not in the returned list is **absent from the model's tool schema** —
 not present-and-refused. An absent tool cannot be argued for, injected into, or
 retried into existence.
 
+### Compute-provider selection
+
+Routing also picks *where* the run executes. As part of pre-execution, a pure
+compute router chooses the provider: AgentCore (the default ephemeral runtime)
+unless the run explicitly requires a full computer, in which case the optional
+EC2 Desktop escape hatch. Compute status is tracked as a **field on the run**
+(`run['compute'].status` in `pending` / `acquiring` / `ready` / `released`), not
+a new `RunState` - the state machine below is untouched. See
+[20](20-hybrid-compute.md).
+
 ## The run state machine
 
 ```

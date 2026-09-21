@@ -40,6 +40,13 @@ DURABLE                                  ISOLATED / DISPOSABLE
 cost you nothing but warm caches and re-clone time. If that is ever untrue, the
 sync boundary has drifted and needs fixing.
 
+> The optional EC2 Desktop escape hatch ([20](20-hybrid-compute.md)) reuses this
+> same sync boundary rather than inventing a new persistence story: the durable
+> drive is restored onto the instance on acquire and written back to versioned
+> S3 on release, so the instance holds no system-of-record state and the same
+> invariant holds - destroying it costs nothing but warm caches and re-restore
+> time.
+
 ## The four models compared
 
 | | **A** shared machine | **B** per-agent persistent | **C** fully ephemeral | **D** hybrid ✅ |

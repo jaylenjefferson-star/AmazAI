@@ -178,6 +178,30 @@ surprising later.
 
 ---
 
+### D12 · EC2 Desktop: dedicated machine vs shared pool, and compute-status shape
+The optional EC2 Desktop escape hatch ([20](20-hybrid-compute.md)) is an
+interface-only placeholder this phase; two shapes are left open for DEV-01.
+
+**Default (compute status):** compute status is a **field on the run**
+(`run['compute'].status` in `pending` / `acquiring` / `ready` / `released`),
+written through the Store like `runs.heartbeat`, not a new `RunState`. This kept
+the run state machine ([05](05-run-lifecycle.md)) untouched and AgentCore runs a
+true no-op. Revisit only if a future provider needs the sweeper to reason about
+"acquiring compute" as a first-class, resumable state; adding a `RunState` then
+is a contained change.
+
+**Default (allocation):** a **dedicated** instance per owner/agent, looked up on
+acquire, so a persistent developer environment is genuinely persistent. A shared
+warm pool would cut cold-start cost but reintroduces the cross-agent
+credential-and-file bleed that model D exists to prevent
+([04](04-workspaces.md)). Prefer dedicated; consider a shared pool only for
+stateless heavy-tooling runs where nothing durable is on the box.
+
+**Change if:** dedicated idle cost becomes the dominant line item. The escape
+hatch is opt-in and rare by design, so this is unlikely before DEV-01 ships.
+
+---
+
 ## Summary: what I'd most like your input on
 
 | | Decision | Why it matters now |

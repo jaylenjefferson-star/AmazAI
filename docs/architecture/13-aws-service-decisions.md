@@ -23,6 +23,7 @@
 | **CloudWatch Logs** | Per-agent log groups, 90-day retention | Set retention explicitly or this becomes the surprise line item. |
 | **STS** | Temporary AWS credentials, ≤15 min, session-tagged | The alternative is a standing credential. There isn't one. |
 | **IAM** | Per-agent execution roles, investigate/change split | Revision #1. The boundary that makes seats real. |
+| **EC2 Desktop** (optional escape hatch) | A narrow, opt-in full computer for a run that genuinely needs one | The default is AgentCore. EC2 Desktop exists only for persistent developer environments, OS-level applications, or heavy local tooling the ephemeral microVM cannot host. It is not a browser fleet and not the default. See [20](20-hybrid-compute.md). |
 
 ## Later
 
@@ -51,8 +52,8 @@
 | **OpenSearch** | Evidence search over S3 is an Athena problem, later. | ~$50+/mo |
 | **Bedrock Knowledge Bases** | No RAG requirement. Memory is explicit rows, not a vector index. | — |
 | **Amazon Q** | Overlaps the product. | — |
-| **EC2 browser fleet** | The microVM already has Chromium. A browser fleet is idle cost plus standing sessions. | ~$25–60/mo per agent |
-| **WorkSpaces / DCV streaming** | Full interactive desktop streaming is large work for ~1% of run duration. Screenshot + takeover covers it. | ~$25+/mo |
+| **EC2 browser fleet** | The microVM already has Chromium. A browser fleet is idle cost plus standing sessions. Distinct from the EC2 Desktop escape hatch above, which is not a browser fleet: it never stands up per-agent browsers, it is opt-in per run, and it exists for full-computer workloads the microVM cannot host. | ~$25–60/mo per agent |
+| **WorkSpaces / DCV streaming** | Full interactive desktop *streaming* is large work for ~1% of run duration. Screenshot + takeover covers it. This remains avoided for its own reasons and is not what the EC2 Desktop escape hatch is: that escape hatch runs full-computer *work* (persistent dev env, OS-level apps, heavy tooling), it does not stream a desktop to a human. | ~$25+/mo |
 | **ECS/EKS** | Nothing needs a scheduler. | — |
 | **Multi-region anything** | Single user, single region. | — |
 

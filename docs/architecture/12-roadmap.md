@@ -132,6 +132,11 @@ not redesign.
 - Tauri desktop shell around the same SPA — no rewrite
 - Push notifications
 - Device registry UI, empty (the M5 seam)
+- **DEV-01:** the EC2 Desktop escape hatch made real - dedicated instance
+  lookup/start, SSM readiness, S3 workspace restore/persist, stop; behind the
+  same approvals, evidence, secrets, and audit as AgentCore. See
+  [20](20-hybrid-compute.md). The provider interface already ships; this fills
+  in the placeholder.
 - **Ships:** the incident-503 walkthrough in [09](09-multi-agent.md), end to end.
 
 ### Then M5 — Local companion
