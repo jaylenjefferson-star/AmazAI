@@ -891,8 +891,14 @@ def _provision_harness(store: Store, agent: dict) -> dict:
             "run scripts/resolve_models.py against this account first"
         )
 
-    role_arn = os.environ.get("AGENT_ROLE_ARN_TEMPLATE", "").format(
-        agentId=agent["agentId"]) or None
+    # User-created Bots use the stack's restricted dynamic role. It has model
+    # and harness-state permissions only: no drive, evidence, connector,
+    # computer, or shell permissions. Passing no role makes AgentCore reject
+    # the request before it creates the harness, which previously made every
+    # new Bot and the first-Bot offer fail.
+    role_arn = os.environ.get("AGENT_ROLE_ARN", "").strip()
+    if not role_arn:
+        raise RuntimeError("no AgentCore execution role is configured for new Bots")
     client = agentcore.AgentCore()
     harness_arn = client.create_harness(
         name=f"amazai_{agent['agentId']}",

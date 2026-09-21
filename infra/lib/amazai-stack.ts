@@ -195,6 +195,30 @@ export class AmazaiStack extends cdk.Stack {
       executionRoles[seat.key] = role;
     }
 
+    // People can add Bots after the stack is deployed. Those Bots cannot use a
+    // seat-specific role because their IDs do not exist at synth time. Give
+    // them a separate, deliberately narrow runtime role instead: it can run a
+    // model and use AgentCore's harness state, but has no S3, evidence,
+    // connector, computer, or shell permissions. Files and computers are
+    // enabled only by a later, per-Bot provisioning design.
+    const dynamicAgentRole = new iam.Role(this, 'DynamicAgentExecutionRole', {
+      roleName: 'amazai-agent-dynamic',
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
+        conditions: { StringEquals: { 'aws:SourceAccount': this.account } },
+      }),
+      description: 'Restricted AgentCore execution role for user-created AmazAI Bots',
+    });
+    dynamicAgentRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'InvokeModels',
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: ['*'],
+    }));
+    dynamicAgentRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'HarnessMemoryOnly',
+      actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents'],
+      resources: [`arn:aws:bedrock-agentcore:${this.region}:${this.account}:memory/amazai_*-*`],
+    }));
+
     // ---------------------------------------------------------------------
     // L1/L2 · Compute
     // ---------------------------------------------------------------------
@@ -319,6 +343,7 @@ export class AmazaiStack extends cdk.Stack {
       fn.addToRolePolicy(new iam.PolicyStatement({
         sid: 'AgentCore',
         actions: [
+          'bedrock-agentcore:CreateHarness',
           'bedrock-agentcore:InvokeHarness',
           'bedrock-agentcore:InvokeAgentRuntime',
           'bedrock-agentcore:InvokeAgentRuntimeCommand',
@@ -333,6 +358,18 @@ export class AmazaiStack extends cdk.Stack {
       sid: 'PassSeatExecutionRolesOnly',
       actions: ['iam:PassRole'],
       resources: Object.values(executionRoles).map((r) => r.roleArn),
+      conditions: {
+        StringEquals: { 'iam:PassedToService': 'bedrock-agentcore.amazonaws.com' },
+      },
+    }));
+
+    // Creating a user-selected Bot means the API creates its AgentCore
+    // harness. It may pass only the restricted dynamic role above; it cannot
+    // hand a new Bot one of the existing seat roles.
+    apiFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'PassDynamicAgentExecutionRoleOnly',
+      actions: ['iam:PassRole'],
+      resources: [dynamicAgentRole.roleArn],
       conditions: {
         StringEquals: { 'iam:PassedToService': 'bedrock-agentcore.amazonaws.com' },
       },
@@ -482,6 +519,7 @@ export class AmazaiStack extends cdk.Stack {
     }));
     apiFn.addEnvironment('SCHEDULE_GROUP', scheduleGroup.name!);
     apiFn.addEnvironment('SCHEDULER_ROLE_ARN', schedulerRole.roleArn);
+    apiFn.addEnvironment('AGENT_ROLE_ARN', dynamicAgentRole.roleArn);
     apiFn.addEnvironment('ROUTINE_FN_ARN', routineFn.functionArn);
     apiFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
     wsFn.addEnvironment('ORCHESTRATOR_FN_ARN', orchestratorFn.functionArn);
