@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Companion, { STATES } from '../characters/Companion';
 import CreateMenu from '../components/CreateMenu';
 import FirstBotOffer from '../components/FirstBotOffer';
+import GroupMark from '../components/GroupMark';
 import Icon from '../components/Icon';
 import Problem from '../components/Problem';
 import ProfileSheet from '../components/ProfileSheet';
@@ -12,6 +13,7 @@ import { COPY } from '../lib/errors';
 import { api } from '../api';
 import { useAgents } from '../hooks/useAgents';
 import { OFFER, useFirstRun } from '../hooks/useFirstRun';
+import { useFlipList } from '../hooks/useFlipList';
 import { usePins } from '../hooks/usePins';
 import { usePresence } from '../presence';
 import { onThreadsChanged } from '../threadsBus';
@@ -58,25 +60,6 @@ function previewOf(thread) {
 // activity, and get their own colour instead.
 const LIVE = new Set(['thinking', 'working', 'waiting']);
 
-/** Up to three agents, overlapped, and a +N for the rest. A room is legible by
- *  who is in it before its name is read. */
-function RoomMark({ members }) {
-  const shown = members.slice(0, 3);
-  const extra = members.length - shown.length;
-  return (
-    <span className="rs-stack" aria-hidden="true">
-      {shown.length === 0
-        ? <Companion archetype="pebble" color="#8a8f9c" state="offline" size={34} />
-        : shown.map((m, i) => (
-          <span key={m.agentId} className="rs-stack-item" style={{ zIndex: shown.length - i }}>
-            <Companion archetype={m.archetype} color={m.color} state={m.state} size={34} />
-          </span>
-        ))}
-      {extra > 0 && <span className="rs-more">+{extra}</span>}
-    </span>
-  );
-}
-
 /** One agent (or a room's members), drawn identically in a row and in the pinned
  *  strip. The hover title is the third presence layer -- a line of text for "how
  *  much do I need to know" -- and the accessible name lives on the companion. */
@@ -87,7 +70,7 @@ function Mark({ row, size }) {
   return (
     <span className="rs-mark" title={title}>
       {row.kind === 'room'
-        ? <RoomMark members={row.members} />
+        ? <GroupMark members={row.members} size={size} />
         : <Companion archetype={row.agent.archetype} color={row.agent.color}
                      state={row.state} size={size} name={row.title} />}
       {LIVE.has(row.state) && <i className="rs-live" aria-hidden="true" />}
@@ -231,6 +214,9 @@ export default function Inbox({ variant }) {
     return filtered.sort((a, b) => String(b.at).localeCompare(String(a.at)));
   }, [agents, threads, byId, waiting, query, presence]);
 
+  const listRef = useRef(null);
+  useFlipList(listRef, rows.map((r) => r.key).join('|'));
+
   // In the order they were pinned, not the list's recency order -- a pin is
   // the operator saying where something lives.
   const pinnedRows = pins.map((id) => rows.find((r) => r.threadId === id)).filter(Boolean);
@@ -320,12 +306,12 @@ export default function Inbox({ variant }) {
         </div>
       )}
 
-      <ul className="rs-list">
+      <ul className="rs-list" ref={listRef}>
         {rows.map((row) => {
           const line = subline(row);
           const ask = row.state === 'approval';
           return (
-            <li key={row.key}>
+            <li key={row.key} data-key={row.key}>
               <Link className="rs-row" to={row.to} data-kind={row.kind} data-state={row.state}
                     data-unread={row.unread ? 'true' : undefined}
                     data-open={row.to === location.pathname ? 'true' : undefined}>

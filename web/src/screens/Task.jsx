@@ -17,7 +17,7 @@ import { download } from '../lib/download';
 import { COPY, friendly } from '../lib/errors';
 import { usePresence, useSteps } from '../presence';
 import { threadsChanged } from '../threadsBus';
-import { threadToItems } from '../threadItems';
+import { localMessage, reconcileOptimistic, threadToItems } from '../threadItems';
 
 const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'expired', 'partial']);
 
@@ -67,7 +67,7 @@ export default function Task() {
   const loadThread = useCallback(() => {
     api.thread(threadId).then((thread) => {
       const next = threadToItems(thread.messages);
-      setItems(next);
+      setItems((prev) => reconcileOptimistic(prev, next));
       // Opening a conversation is reading it. Marked after the messages are
       // in hand rather than on mount, so a thread whose load failed is not
       // recorded as seen. Failure here is silent on purpose.
@@ -163,7 +163,7 @@ export default function Task() {
   async function sendText(text, { redirect = false } = {}) {
     if (!text || !agent) return;
     setError('');
-    setItems((current) => [...current, { type: 'message', role: 'user', author: 'you', text, at: new Date().toISOString() }]);
+    setItems((current) => [...current, localMessage(text)]);
     const result = await api.send(threadId, text, redirect && stoppable ? { redirectRunId: stoppable } : {});
     if (result.runId) pollRun(result.runId);
     if (redirect) loadThread();
@@ -226,8 +226,8 @@ export default function Task() {
     const list = [...items];
     // Only a run still going shows the live trail. A finished run's trail is on
     // its message (persisted, above), so showing both would draw it twice.
-    if (steps && !steps.endedAt) list.push({ type: 'steps', steps });
-    return [...list, ...pendingApprovals.map((approval) => ({ type: 'approval', approval }))];
+    if (steps && !steps.endedAt) list.push({ type: 'steps', key: 'live-steps', steps });
+    return [...list, ...pendingApprovals.map((approval) => ({ type: 'approval', key: `approval:${approval.approvalId}`, approval }))];
   }, [items, steps, pendingApprovals]);
 
   const cardCtx = useMemo(() => ({ agentId }), [agentId]);
@@ -276,7 +276,7 @@ export default function Task() {
     <div className="chat">
       <ChatHeader
         back="/"
-        mark={<Companion archetype={agent.archetype} color={agent.color} state={shown} size={30} name={agent.name} />}
+        mark={<Companion archetype={agent.archetype} color={agent.color} state={shown} size={30} decorative />}
         name={agent.name}
         status={status}
         tone={stateInfo.tone}

@@ -35,5 +35,11 @@ find "$TARGET" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$TARGET" -type d -name 'tests' -prune -exec rm -rf {} +
 find "$TARGET" -type d -name '*.dist-info' -prune -exec rm -rf {} +
 
+# The folder was just wiped, including the placeholder that keeps `layer/` in git. Without
+# it a fresh checkout has no `layer/` at all and `cdk synth` fails with CannotFindAsset --
+# and because every build deletes it, `git status` shows it as deleted and a stray
+# `git add -A` quietly commits that deletion (which is how CI broke once).
+touch "$TARGET/.gitkeep"
+
 echo "Layer built at $TARGET"
 du -sh "$TARGET"

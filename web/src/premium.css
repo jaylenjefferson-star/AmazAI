@@ -97,12 +97,6 @@
 .rs-row[data-state="approval"] .rs-mark::after { content: ""; position: absolute; right: 1px; bottom: 1px; width: 12px; height: 12px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px var(--canvas); }
 @keyframes rs-pulse { 50% { transform: scale(1.25); opacity: .7; } }
 
-/* A room reads by who is in it before its name is read. */
-.rs-stack { display: inline-flex; align-items: center; padding-left: 4px; }
-.rs-stack-item { margin-left: -14px; border-radius: 50%; box-shadow: 0 0 0 2.5px var(--canvas); display: grid; transition: transform .2s var(--spring); }
-.rs-stack-item:first-child { margin-left: 0; }
-.rs-more { margin-left: -10px; z-index: 0; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--dim); background: var(--raised-2); box-shadow: 0 0 0 2.5px var(--canvas); }
-.rs-row[data-kind="room"] .rs-mark { width: 64px; }
 
 .rs-pins { list-style: none; margin: 0; padding: 4px 16px 10px; display: flex; gap: 18px; overflow-x: auto; scrollbar-width: none; }
 .rs-pins::-webkit-scrollbar { display: none; }
@@ -471,9 +465,6 @@ button.tl-label:disabled { cursor: default; }
 .cc-block .pf-chips span { background: var(--raised); }
 .cc-load { display: grid; justify-items: center; gap: 14px; padding: 28px 0; }
 
-.ri-stack { display: flex; justify-content: center; }
-.ri-stack > * { margin-left: -12px; border-radius: 50%; box-shadow: 0 0 0 3px var(--raised); }
-.ri-stack > *:first-child { margin-left: 0; }
 .ri-count { text-align: center; color: var(--dim); font-size: 14px; margin: 8px 0 16px; }
 .ri-row { display: flex; align-items: center; padding-right: 8px; }
 .ri-row + .ri-row { box-shadow: inset 0 1px 0 var(--hairline); }
@@ -487,13 +478,8 @@ button.tl-label:disabled { cursor: default; }
 
 .chat .room-closed { position: absolute; left: 12px; right: 12px; bottom: calc(var(--safe-bottom) + 12px); z-index: 12; display: grid; gap: 4px; padding: 14px 16px; border-radius: 22px; background: var(--raised); border: 1px solid var(--line); box-shadow: var(--pop); font-size: 14px; color: var(--dim); }
 .chat .room-closed strong { color: var(--text); font-size: 15.5px; }
-.ch-stack { padding-left: 2px; }
-.ch-pill .rs-stack-item, .ch-pill .rs-more { box-shadow: 0 0 0 2px var(--raised-2); }
 .tl-note { flex-direction: column; gap: 2px; padding: 6px 12px; }
 
-/* room marks: enough room for three overlapped faces, ring matched to the row */
-.rs-row[data-kind="room"] .rs-mark { width: 76px; }
-.rs-row[data-open="true"] .rs-stack-item, .rs-row[data-open="true"] .rs-more { box-shadow: 0 0 0 2.5px var(--raised); }
 
 /* a wide screen keeps a readable column instead of stretching the conversation */
 .chat .timeline > * { width: 100%; max-width: 760px; margin-left: auto; margin-right: auto; }
@@ -549,3 +535,20 @@ button.tl-label:disabled { cursor: default; }
 .pgf .mk-bar { display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
 .pgf .mk-bar .mk-h { padding: 0; }
 .pgf .mk-bar .btn-link { border-radius: 999px; padding: 7px 16px; }
+
+/* ---- a steady conversation: rows animate in once, when they are new, and never again */
+.chat .timeline .enter { animation: none; }
+.tl-row { display: block; }
+.tl-row.is-new { animation: tl-in .26s var(--ease-out) both; }
+@keyframes tl-in { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) { .tl-row.is-new { animation: none; } }
+.tl-row > * + * { margin-top: 6px; }
+
+/* ---- a room's face: members inside one round tile, never overlapped (see GroupMark) */
+.gm { position: relative; width: var(--gm); height: var(--gm); flex: none; border-radius: 50%; background: var(--raised-2); box-shadow: inset 0 0 0 1px var(--hairline); }
+.gm-cell { position: absolute; display: grid; place-items: center; }
+.gm-more { font-size: calc(var(--gm) * .2); font-weight: 650; color: var(--dim); }
+.ri-faces { display: flex; justify-content: center; gap: 10px; }
+.chat .timeline { scroll-behavior: auto; overflow-anchor: auto; }
+/* the state dot sits on the tile's rim, not on a face */
+.rs-row[data-kind="room"] .rs-live, .rs-row[data-kind="room"][data-state="approval"] .rs-mark::after { right: -3px; bottom: -3px; }

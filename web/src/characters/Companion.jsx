@@ -48,6 +48,9 @@ export default function Companion({
   name = '',
   showLabel = false,
   className = '',
+  // Beside its own name, an avatar's spoken description says nothing new -- and its
+  // hidden text lands in the clipboard when someone copies a conversation.
+  decorative = false,
 }) {
   const arch = ARCHETYPES[archetype] || ARCHETYPES.pebble;
   const { Shape } = arch;
@@ -58,8 +61,8 @@ export default function Companion({
   return (
     <span className={`cc cc-${state} ${className}`} data-state={state}>
       <svg className="cc-svg" width={size} height={size} viewBox="0 0 100 100"
-           role="img" aria-label={described}>
-        <title>{described}</title>
+           {...(decorative ? { 'aria-hidden': 'true', focusable: 'false' } : { role: 'img', 'aria-label': described })}>
+        {!decorative && <title>{described}</title>}
 
         <g className="cc-stage">
           <Shape c={color} deep={deep} />
@@ -131,7 +134,7 @@ export default function Companion({
       </svg>
 
       {/* Never animation alone. */}
-      <span className="cc-sr">{described}</span>
+      {!decorative && <span className="cc-sr">{described}</span>}
       {showLabel && (
         <span className={`cc-label cc-tone-${meta.tone}`}>
           <i className="cc-dot" aria-hidden="true" />

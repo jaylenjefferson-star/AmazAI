@@ -41,7 +41,7 @@ export default function RoomInfo({ thread, agents, activityCount = 0, onActivity
   return (
     <Sheet title={thread.title || 'Room'} tall onClose={onClose}>
       <div className="ri-stack" aria-hidden="true">
-        {members.slice(0, 4).map((a) => <Companion key={a.agentId} archetype={a.archetype} color={a.color} state={a.state} size={44} />)}
+        {members.slice(0, 4).map((a) => <Companion key={a.agentId} archetype={a.archetype} color={a.color} state={a.state} size={44} decorative />)}
       </div>
       <p className="ri-count">{ids.length} of {MAX_MEMBERS} agents{closed ? ` · ${thread.status || 'closed'}` : ''}</p>
 
@@ -51,7 +51,7 @@ export default function RoomInfo({ thread, agents, activityCount = 0, onActivity
         {members.map((a) => (
           <div className="ri-row" key={a.agentId}>
             <button type="button" className="ri-who" onClick={() => open(a.agentId)}>
-              <Companion archetype={a.archetype} color={a.color} state={a.state} size={38} name={a.name} />
+              <Companion archetype={a.archetype} color={a.color} state={a.state} size={38} decorative />
               <span className="sx-text"><strong>{a.name}</strong><small>{[a.title, a.role].filter(Boolean).join(' · ') || `@${a.agentId}`}</small></span>
             </button>
             {!closed && (

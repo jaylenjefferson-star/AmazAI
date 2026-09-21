@@ -26,18 +26,39 @@ def mentioned(agent_ids: list[str], text: str) -> list[str]:
     return out
 
 
+#: Unambiguous ways of addressing everyone. Deliberately not a bare "team" or "all":
+#: "our team's roadmap" is not a call to every Bot in the room, and each one woken
+#: costs a run. "everyone" always counts, even where it is only the subject of a
+#: sentence: a room that ignores "thanks everyone" is worse than a few extra runs.
+_EVERYONE = re.compile(
+    r"(?<![\w-])@(?:all|everyone|team|channel|room)(?![\w-])"
+    r"|\b(?:you (?:two|both|three|all|guys)|both of you|all of you|y'?all|everyone|everybody)\b"
+    r"|\b(?:hi|hey|hello|hiya|thanks|thank you|morning|ok(?:ay)?),?\s+(?:team|all|everyone|folks)\b",
+    re.I,
+)
+
+
+def addresses_everyone(text: str) -> bool:
+    """Is this message spoken to the whole room rather than one Bot in it?"""
+    return bool(_EVERYONE.search(text or ""))
+
+
 def targets_for(thread: dict, text: str) -> list[str]:
     """Which of a thread's agents a message wakes.
 
     A room wakes *every* Bot it `@`-mentions, in parallel -- each on its own run
-    and its own harness -- and the lead (the first member) when it mentions no
-    one. A direct thread has one Bot and always wakes it; a mention of another
-    Bot there is a request to hand off, not a wake, and is handled as such by the
-    orchestrator.
+    and its own harness. A message to the whole room ("you two", "everyone",
+    "hi team", `@all`) wakes them all. Anything else that names no one goes to the
+    lead (the first member), who is told who else is here and how to bring them in.
+    A direct thread has one Bot and always wakes it; a mention of another Bot there
+    is a request to hand off, not a wake, and is handled as such by the orchestrator.
     """
     ids = [a for a in (thread.get("agentIds") or []) if a]
     if thread.get("kind") == "room":
-        return mentioned(ids, text) or ids[:1]
+        named = mentioned(ids, text)
+        if named:
+            return named
+        return ids if addresses_everyone(text) else ids[:1]
     return ids[:1]
 
 
