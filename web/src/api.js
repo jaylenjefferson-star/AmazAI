@@ -32,6 +32,11 @@ const live = {
   archiveAgent: (id) => call('DELETE', `/agents/${id}`),
   agent: (id) => call('GET', `/agents/${id}`),
   updateAgent: (id, changes) => call('PATCH', `/agents/${id}`, changes),
+  // A Bot's access to one app: full (default) or read-only. Removing takes it away.
+  setGrant: (agentId, connectorId, body) =>
+    call('PUT', `/agents/${agentId}/grants/${encodeURIComponent(connectorId)}`, body),
+  removeGrant: (agentId, connectorId) =>
+    call('DELETE', `/agents/${agentId}/grants/${encodeURIComponent(connectorId)}`),
   addMemory: (id, entry) => call('POST', `/agents/${id}/memory`, entry),
   deleteMemory: (id, memId) => call('DELETE', `/agents/${id}/memory/${memId}`),
   updateMemory: (id, memId, changes) => call('PATCH', `/agents/${id}/memory/${memId}`, changes),

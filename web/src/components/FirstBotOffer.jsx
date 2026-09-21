@@ -3,6 +3,8 @@ import Companion from '../characters/Companion';
 import { operatorFirstName, useAuth0 } from '../auth0';
 import { api } from '../api';
 import { rememberSetupDone } from '../hooks/useFirstRun';
+import { COPY } from '../lib/errors';
+import Problem from './Problem';
 
 // A colour the API accepts (`agents.AVATAR_COLORS`) and one the Engineering
 // seat's blue does not collide with, so the two read as different Bots at a
@@ -27,7 +29,7 @@ const LOOK = { archetype: 'pebble', color: '#8b5cf6' };
 export default function FirstBotOffer({ onCreated }) {
   const { user } = useAuth0();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(null);
   const idempotencyKey = useMemo(
     () => `first-bot-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
     [],
@@ -36,7 +38,7 @@ export default function FirstBotOffer({ onCreated }) {
   async function meet() {
     if (busy) return;
     setBusy(true);
-    setError('');
+    setError(null);
     try {
       const bot = await api.createAgent({
         name: 'Chief',
@@ -49,26 +51,31 @@ export default function FirstBotOffer({ onCreated }) {
     } catch (err) {
       // Left in place with the reason. An offer that vanishes on failure reads
       // as though it worked.
-      setError(err.message);
+      setError(err);
       setBusy(false);
     }
   }
 
   return (
-    <section className="first-bot" aria-label="Meet your first Bot">
-      <Companion archetype={LOOK.archetype} color={LOOK.color}
-                 state={busy ? 'thinking' : 'idle'} size={52} name="Chief" />
-      <div className="first-bot-text">
-        <strong>Meet Chief, your first Bot</strong>
-        <span>
-          It starts the conversation, finds out what you mainly want it for, and
-          takes the first real task. Setting it up takes a moment.
+    <div className="rs-offer">
+      <button type="button" className="rs-row rs-row--offer" onClick={meet} disabled={busy}
+              aria-label="Meet Chief, your first agent">
+        <span className="rs-mark">
+          <Companion archetype={LOOK.archetype} color={LOOK.color}
+                     state={busy ? 'thinking' : 'idle'} size={48} name="Chief" />
         </span>
-        {error && <span className="first-bot-error" role="alert">{error}</span>}
-      </div>
-      <button type="button" className="primary" disabled={busy} onClick={meet}>
-        {busy ? 'Setting up…' : 'Meet Chief'}
+        <span className="rs-main">
+          <span className="rs-line">
+            <strong className="rs-name">Chief</strong>
+            <span className="rs-chip">Chief of staff</span>
+          </span>
+          <span className="rs-line">
+            <span className="rs-preview">{busy ? 'Setting up…' : 'Your first agent. Tap to meet.'}</span>
+            <span className="rs-pill">{busy ? '…' : 'Meet'}</span>
+          </span>
+        </span>
       </button>
-    </section>
+      {error && <Problem error={error} message={COPY.createAgent('Chief')} onRetry={meet} inline />}
+    </div>
   );
 }

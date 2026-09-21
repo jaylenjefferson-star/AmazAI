@@ -1,8 +1,8 @@
 /*
  * Theme.
  *
- * Light is the default and dark follows the system, with an explicit
- * [data-theme] on <html> overriding both. The dark values appear twice
+ * The signed-in app is dark by default (a near-black charcoal, not pure black);
+ * the public site stays light. An explicit [data-theme] on <html> overrides both. The dark values appear twice
  * because plain CSS has no way to reuse a block across a media query and an
  * attribute selector; they are kept adjacent so they stay in step.
  *
@@ -101,21 +101,21 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
 
-    --canvas:    #0a0c0f;
-    --panel:     #101318;
-    --raised:    #161a21;
-    --raised-2:  #1c222b;
-    --line:      #242b35;
-    --hairline:  #1a1f27;
+    --canvas:    #101011;
+    --panel:     #121213;
+    --raised:    #1b1b1d;
+    --raised-2:  #202022;
+    --line:      rgba(255, 255, 255, .10);
+    --hairline:  rgba(255, 255, 255, .07);
 
-    --text:      #e8ebef;
-    --dim:       #949dac;
-    --faint:     #6b7484;
+    --text:      #f5f5f7;
+    --dim:       #97979f;
+    --faint:     #66666d;
 
-    --accent:     #5b9dff;
-    --accent-ink: #06101f;
+    --accent:     #7b93ff;
+    --accent-ink: #0a0c1c;
     --warn-ink:   #160f02;
-    --accent-dim: #2d4a7a;
+    --accent-dim: #3b4680;
     --ok:         #3dc98a;
     --warn:       #f0a93b;
     --danger:     #f0564b;
@@ -124,42 +124,42 @@
     --warn-edge:   rgba(240, 169, 59, .38);
     --danger-wash: rgba(240, 86, 75, .10);
     --danger-edge: rgba(240, 86, 75, .42);
-    --accent-wash: rgba(91, 157, 255, .12);
+    --accent-wash: rgba(123, 147, 255, .14);
 
-    --hover:     rgba(255, 255, 255, .045);
+    --hover:     rgba(255, 255, 255, .05);
 
-    --bubble-bot:      #1c222b;
-    --bubble-user:     #e8eaf0;
-    --bubble-user-ink: #0c0e12;
-    --scrim:     rgba(0, 0, 0, .55);
-    --track:     rgba(255, 255, 255, .07);
-    --btn:       #1c222b;
-    --btn-hover: #232a35;
-    --btn-line:  #2f3946;
+    --bubble-bot:      #1e1e20;
+    --bubble-user:     #2b2b30;
+    --bubble-user-ink: #f5f5f7;
+    --scrim:     rgba(0, 0, 0, .62);
+    --track:     rgba(255, 255, 255, .08);
+    --btn:       #1b1b1d;
+    --btn-hover: #252528;
+    --btn-line:  rgba(255, 255, 255, .10);
 
-    --lift: inset 0 1px 0 rgba(255, 255, 255, .045);
-    --pop:  0 10px 30px -10px rgba(0, 0, 0, .75);
+    --lift: inset 0 1px 0 rgba(255, 255, 255, .05);
+    --pop:  0 18px 44px -14px rgba(0, 0, 0, .85), inset 0 1px 0 rgba(255, 255, 255, .06);
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --canvas:    #0a0c0f;
-  --panel:     #101318;
-  --raised:    #161a21;
-  --raised-2:  #1c222b;
-  --line:      #242b35;
-  --hairline:  #1a1f27;
+  --canvas:    #101011;
+  --panel:     #121213;
+  --raised:    #1b1b1d;
+  --raised-2:  #202022;
+  --line:      rgba(255, 255, 255, .10);
+  --hairline:  rgba(255, 255, 255, .07);
 
-  --text:      #e8ebef;
-  --dim:       #949dac;
-  --faint:     #6b7484;
+  --text:      #f5f5f7;
+  --dim:       #97979f;
+  --faint:     #66666d;
 
-  --accent:     #5b9dff;
-  --accent-ink: #06101f;
+  --accent:     #7b93ff;
+  --accent-ink: #0a0c1c;
   --warn-ink:   #160f02;
-  --accent-dim: #2d4a7a;
+  --accent-dim: #3b4680;
   --ok:         #3dc98a;
   --warn:       #f0a93b;
   --danger:     #f0564b;
@@ -168,21 +168,21 @@
   --warn-edge:   rgba(240, 169, 59, .38);
   --danger-wash: rgba(240, 86, 75, .10);
   --danger-edge: rgba(240, 86, 75, .42);
-  --accent-wash: rgba(91, 157, 255, .12);
+  --accent-wash: rgba(123, 147, 255, .14);
 
-  --hover:     rgba(255, 255, 255, .045);
+  --hover:     rgba(255, 255, 255, .05);
 
-  --bubble-bot:      #1c222b;
-  --bubble-user:     #e8eaf0;
-  --bubble-user-ink: #0c0e12;
-  --scrim:     rgba(0, 0, 0, .55);
-  --track:     rgba(255, 255, 255, .07);
-  --btn:       #1c222b;
-  --btn-hover: #232a35;
-  --btn-line:  #2f3946;
+  --bubble-bot:      #1e1e20;
+  --bubble-user:     #2b2b30;
+  --bubble-user-ink: #f5f5f7;
+  --scrim:     rgba(0, 0, 0, .62);
+  --track:     rgba(255, 255, 255, .08);
+  --btn:       #1b1b1d;
+  --btn-hover: #252528;
+  --btn-line:  rgba(255, 255, 255, .10);
 
-  --lift: inset 0 1px 0 rgba(255, 255, 255, .045);
-  --pop:  0 10px 30px -10px rgba(0, 0, 0, .75);
+  --lift: inset 0 1px 0 rgba(255, 255, 255, .05);
+  --pop:  0 18px 44px -14px rgba(0, 0, 0, .85), inset 0 1px 0 rgba(255, 255, 255, .06);
 }
 
 * { box-sizing: border-box; }

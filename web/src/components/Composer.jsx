@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Companion from '../characters/Companion';
 import Icon from './Icon';
+import Sheet, { SheetRow } from './Sheet';
 
 /**
  * The composer.
@@ -48,10 +49,13 @@ function tokenAt(text, caret) {
   return null;
 }
 
-export default function Composer({
+const ALL_ACTIONS = ['upload', 'photo', 'camera', 'tools', 'task', 'artifact', 'computer', 'routine'];
+
+const Composer = forwardRef(function Composer({
   name = 'this Bot', mentionables = [], skills = [], commands = [],
   busy = false, canRedirect = true, disabled = false, onSend, onStop, onCommand,
-}) {
+  placeholder: idlePlaceholder, actions = ALL_ACTIONS, onAction,
+}, ref) {
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
   const [menuIndex, setMenuIndex] = useState(0);
@@ -65,6 +69,16 @@ export default function Composer({
   const fileInput = useRef(null);
   const recognition = useRef(null);
   const voiceBase = useRef('');
+
+  // The action sheet can put words in the box (a task, a document) without
+  // sending anything: the person still reads it and presses send.
+  useImperativeHandle(ref, () => ({
+    insert(value) {
+      setText((t) => `${t}${t && !/\s$/.test(t) ? ' ' : ''}${value}`);
+      setMenuShut(true);
+      requestAnimationFrame(() => box.current?.focus());
+    },
+  }), []);
 
   // --- the menu under the caret ---------------------------------------------
 
@@ -206,7 +220,7 @@ export default function Composer({
 
   const hasText = Boolean(text.trim() || files.length);
   // "Stop now" is drawn right beside it, so the placeholder need not say so too.
-  const placeholder = busy && canRedirect ? `Redirect ${name}…` : `Message ${name}`;
+  const placeholder = busy && canRedirect ? `Redirect ${name}…` : (idlePlaceholder || `Message ${name}`);
   const grouped = items.reduce((acc, it, i) => {
     const g = it.group || '';
     if (!acc.length || acc[acc.length - 1].group !== g) acc.push({ group: g, rows: [] });
@@ -252,32 +266,54 @@ export default function Composer({
       )}
 
       {plusOpen && (
-        <>
-          <div className="cmp-scrim" onClick={() => setPlusOpen(false)} />
-          <div className="cmp-plus" role="menu">
-            <button type="button" role="menuitem"
-                    onClick={() => { setPlusOpen(false); fileInput.current?.click(); }}>
-              <Icon name="paperclip" size={18} />
-              <span><strong>Attach a text file</strong><small>Notes, CSV, JSON, code — up to {kb(MAX_FILE)} each</small></span>
-            </button>
-            <button type="button" role="menuitem" disabled>
-              <Icon name="file" size={18} />
-              <span><strong>Photo or PDF</strong><small>Needs upload storage, which is not set up yet</small></span>
-            </button>
-            <button type="button" role="menuitem"
-                    onClick={() => { setPlusOpen(false); setText((t) => `${t}${t && !/\s$/.test(t) ? ' ' : ''}/`); setMenuShut(false); box.current?.focus(); }}>
-              <Icon name="layers" size={18} />
-              <span><strong>Use a skill</strong><small>Type / for skills and commands</small></span>
-            </button>
-            {mentionables.length > 0 && (
-              <button type="button" role="menuitem"
-                      onClick={() => { setPlusOpen(false); setText((t) => `${t}${t && !/\s$/.test(t) ? ' ' : ''}@`); setMenuShut(false); box.current?.focus(); }}>
-                <Icon name="inbox" size={18} />
-                <span><strong>Mention a Bot</strong><small>Type @ to address one directly</small></span>
-              </button>
+        <Sheet title="Add" onClose={() => setPlusOpen(false)}>
+          <div className="sx-group">
+            {actions.includes('upload') && (
+              <SheetRow icon="upload" title="Upload" hint={`Text files, notes, CSV, code. Up to ${kb(MAX_FILE)} each`}
+                        onClick={() => { setPlusOpen(false); fileInput.current?.click(); }} />
+            )}
+            {actions.includes('photo') && (
+              <SheetRow icon="image" title="Photo" hint="Not available yet. It needs upload storage" disabled />
+            )}
+            {actions.includes('camera') && (
+              <SheetRow icon="camera" title="Camera" hint="Not available yet" disabled />
             )}
           </div>
-        </>
+          <div className="sx-group">
+            {actions.includes('tools') && (
+              <SheetRow icon="plug" title="Connect tool" hint="Give an agent an app to use"
+                        onClick={() => { setPlusOpen(false); onAction?.('tools'); }} />
+            )}
+            {actions.includes('task') && (
+              <SheetRow icon="task" title="Assign task" hint="Hand it a job to finish"
+                        onClick={() => { setPlusOpen(false); onAction ? onAction('task') : ref?.current?.insert('Task: '); }} />
+            )}
+            {actions.includes('artifact') && (
+              <SheetRow icon="file" title="Create artifact" hint="A document, plan or report"
+                        onClick={() => { setPlusOpen(false); onAction?.('artifact'); }} />
+            )}
+            {actions.includes('computer') && onAction && (
+              <SheetRow icon="computer" title="Computer" hint="Its workspace, files and activity"
+                        onClick={() => { setPlusOpen(false); onAction('computer'); }} />
+            )}
+            {actions.includes('routine') && onAction && (
+              <SheetRow icon="clock" title="Routine" hint="Make this happen on a schedule"
+                        onClick={() => { setPlusOpen(false); onAction('routine'); }} />
+            )}
+          </div>
+          {(skills.length > 0 || mentionables.length > 0) && (
+            <div className="sx-group">
+              {skills.length > 0 && (
+                <SheetRow icon="spark" title="Use a skill" hint="Type / for skills and commands"
+                          onClick={() => { setPlusOpen(false); setText((t) => `${t}${t && !/\s$/.test(t) ? ' ' : ''}/`); setMenuShut(false); requestAnimationFrame(() => box.current?.focus()); }} />
+              )}
+              {mentionables.length > 0 && (
+                <SheetRow icon="users" title="Mention an agent" hint="Type @ to address one directly"
+                          onClick={() => { setPlusOpen(false); setText((t) => `${t}${t && !/\s$/.test(t) ? ' ' : ''}@`); setMenuShut(false); requestAnimationFrame(() => box.current?.focus()); }} />
+              )}
+            </div>
+          )}
+        </Sheet>
       )}
 
       <input ref={fileInput} type="file" multiple hidden
@@ -292,14 +328,15 @@ export default function Composer({
         </p>
       )}
 
-      <div className={`cmp-box${busy ? ' is-busy' : ''}${voice === 'listening' ? ' is-listening' : ''}`}>
-        <button type="button" className="cmp-btn" aria-label="Attach or add" aria-haspopup="menu"
-                aria-expanded={plusOpen} onClick={() => setPlusOpen((o) => !o)}>
-          <Icon name="plus" size={20} />
+      <div className="cmp-row">
+        <button type="button" className="cmp-plus-btn" aria-label="Add" aria-haspopup="dialog"
+                aria-expanded={plusOpen} onClick={() => setPlusOpen(true)}>
+          <Icon name="plus" size={22} />
         </button>
 
+      <div className={`cmp-box${busy ? ' is-busy' : ''}${voice === 'listening' ? ' is-listening' : ''}`}>
         <textarea ref={box} rows={1} value={text} disabled={disabled}
-                  placeholder={voice === 'listening' ? 'Listening…' : placeholder}
+                  placeholder={voice === 'listening' ? 'Listening…' : (busy && canRedirect ? 'Redirect…' : placeholder)}
                   aria-label={placeholder} aria-autocomplete="list"
                   aria-expanded={menuOpen}
                   aria-activedescendant={menuOpen ? `cmp-opt-${menuIndex}` : undefined}
@@ -329,7 +366,10 @@ export default function Composer({
           </button>
         )}
       </div>
+      </div>
       <span className="sr-only" aria-live="polite">{voice === 'listening' ? 'Listening' : ''}</span>
     </form>
   );
-}
+});
+
+export default Composer;

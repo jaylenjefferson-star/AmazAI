@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { friendly } from '../lib/errors';
+import Problem from '../components/Problem';
 
 /**
  * Connect an app, then it is usable. There is no catalog to pick from: every app
@@ -13,14 +15,7 @@ import { api } from '../api';
  * is, install it. There is no separate "install" step for a person to find.
  */
 const idFor = (slug) => `composio:${slug}`;
-
-function friendly(err, fallback) {
-  const text = String(err?.message || '');
-  // A transport failure ("Load failed", "Failed to fetch") is not something a
-  // person can act on; say what they can do.
-  if (!text || /load failed|failed to fetch|networkerror|network request/i.test(text)) return fallback;
-  return text;
-}
+const fail = (error, fallback) => ({ message: friendly(error, fallback), error });
 
 export function AppLogo({ app, size = 40 }) {
   const [broken, setBroken] = useState(false);
@@ -39,14 +34,14 @@ export default function Connectors({ embedded = false }) {
   const [pending, setPending] = useState({});     // slug -> true while a sign-in tab is open
   const [busy, setBusy] = useState('');
   const [loading, setLoading] = useState(true);
-  const [problem, setProblem] = useState('');
+  const [problem, setProblem] = useState(null);
   const [notice, setNotice] = useState('');
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
 
   const load = useCallback(async (q) => {
     setLoading(true);
-    setProblem('');
+    setProblem(null);
     // Settled apart: our own installed list needs no third party, so a slow
     // Composio call must not hide it.
     const [page, current] = await Promise.allSettled([api.connectorApps(q), api.connectors()]);
@@ -57,7 +52,7 @@ export default function Connectors({ embedded = false }) {
       setApps(page.value.apps || []);
       setCursor(page.value.pageInfo?.end_cursor || '');
     } else {
-      setProblem(friendly(page.reason, 'Having trouble loading apps.'));
+      setProblem(fail(page.reason, "Couldn't load apps."));
     }
     setLoading(false);
   }, []);
@@ -70,7 +65,7 @@ export default function Connectors({ embedded = false }) {
   const finish = useCallback(async (slug) => {
     // Composio is the authority on whether the person finished signing in.
     setBusy(slug);
-    setProblem('');
+    setProblem(null);
     try {
       const row = await api.installConnector(idFor(slug));
       setPending((p) => ({ ...p, [slug]: false }));
@@ -80,7 +75,7 @@ export default function Connectors({ embedded = false }) {
       if (/not_connected|not connected yet/i.test(String(err?.message))) {
         setNotice('');   // still signing in; try again when they return
       } else {
-        setProblem(friendly(err, "Couldn't finish connecting. Try again."));
+        setProblem(fail(err, "Couldn't finish connecting. Try again."));
       }
     } finally {
       setBusy('');
@@ -106,14 +101,14 @@ export default function Connectors({ embedded = false }) {
 
   async function connect(app) {
     setBusy(app.slug);
-    setProblem('');
+    setProblem(null);
     try {
       const link = await api.connectToken(idFor(app.slug));
       if (!link.connectLinkUrl) throw new Error('');
       window.open(link.connectLinkUrl, '_blank', 'noopener,noreferrer');
       setPending((p) => ({ ...p, [app.slug]: true }));
     } catch (err) {
-      setProblem(friendly(err, `Couldn't start connecting ${app.name}. Try again.`));
+      setProblem(fail(err, `Couldn't start connecting ${app.name}. Try again.`));
     } finally {
       setBusy('');
     }
@@ -130,7 +125,7 @@ export default function Connectors({ embedded = false }) {
       });
       setNotice(`${app.name} was removed from your Bots.`);
     } catch (err) {
-      setProblem(friendly(err, `Couldn't remove ${app.name}. Try again.`));
+      setProblem(fail(err, `Couldn't remove ${app.name}. Try again.`));
     } finally {
       setBusy('');
     }
@@ -144,7 +139,7 @@ export default function Connectors({ embedded = false }) {
       setApps((cur) => [...cur, ...(page.apps || [])]);
       setCursor(page.pageInfo?.end_cursor || '');
     } catch (err) {
-      setProblem(friendly(err, "Couldn't load more apps."));
+      setProblem(fail(err, "Couldn't load more apps."));
     } finally {
       setBusy('');
     }
@@ -172,12 +167,7 @@ export default function Connectors({ embedded = false }) {
              aria-label="Search apps" value={query} onChange={(e) => setQuery(e.target.value)} />
 
       {notice && <div className="tools-note" role="status">{notice}</div>}
-      {problem && (
-        <div className="tools-problem" role="alert">
-          <span>{problem}</span>
-          <button type="button" className="ghost sm" onClick={() => load(query)}>Retry</button>
-        </div>
-      )}
+      {problem && <Problem message={problem.message} error={problem.error} onRetry={() => load(query)} />}
 
       {loading && !shown.length ? (
         <div className="tools-list" aria-busy="true" aria-label="Loading apps">

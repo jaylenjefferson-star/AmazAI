@@ -41,7 +41,11 @@ function Row({ title, note, children }) {
   );
 }
 
-export default function AccountSettings({ onNavigate }) {
+export default function AccountSettings({ onNavigate, anchor }) {
+  useEffect(() => {
+    if (anchor) document.getElementById(anchor)?.scrollIntoView({ block: 'start' });
+  }, [anchor]);
+
   const { user, logout } = useAuth0();
   const [mode, setMode] = useState(storedMode);
   const [settings, setSettings] = useState(null);
@@ -89,7 +93,7 @@ export default function AccountSettings({ onNavigate }) {
   return (
     <>
       <section className="settings-group">
-        <h2 className="section-title">Signed in</h2>
+        <h2 className="section-title" id="acct-account">Signed in</h2>
         {/* Never "Signed in / Signed in": the group already says that, so the
             row falls back to naming the thing rather than repeating it. */}
         <Row title={user?.name || user?.email || 'This account'}
@@ -100,7 +104,7 @@ export default function AccountSettings({ onNavigate }) {
       </section>
 
       <section className="settings-group">
-        <h2 className="section-title">Workspace</h2>
+        <h2 className="section-title" id="acct-org">Workspace</h2>
         {/* Named during setup, and changeable here. It is stored on the
             account rather than in this browser, which is the whole reason
             signing in somewhere new no longer looks like a new account. */}
@@ -118,7 +122,7 @@ export default function AccountSettings({ onNavigate }) {
       </section>
 
       <section className="settings-group">
-        <h2 className="section-title">Notifications</h2>
+        <h2 className="section-title" id="acct-prefs">Notifications</h2>
         {!settings && <div className="empty">Loading…</div>}
         {settings && NOTIFY.map(([key, title, note]) => (
           <Row key={key} title={title} note={note}>
@@ -139,7 +143,7 @@ export default function AccountSettings({ onNavigate }) {
       </section>
 
       <section className="settings-group">
-        <h2 className="section-title">Appearance</h2>
+        <h2 className="section-title" id="acct-look">Appearance</h2>
         <Row title="Theme" note="AmazAI is a light product; dark is available.">
           <div className="seg">
             {MODES.map((m) => (

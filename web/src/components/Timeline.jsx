@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import ApprovalCard from './ApprovalCard';
 import Card, { EventLine } from './Cards';
-import Handoff from './Handoff';
+import Companion from '../characters/Companion';
+import Delegation from './Delegation';
 import StepsGroup from './StepsGroup';
 import TypingIndicator from './TypingIndicator';
 
@@ -41,6 +42,17 @@ function separatorFor(items, i) {
   const prev = items.slice(0, i).reverse().find((x) => x.type === 'message' && x.at);
   if (!prev) return stamp(at);
   return new Date(at) - new Date(prev.at) > GAP_MS ? stamp(at) : null;
+}
+
+/** In a room, a small label above the first message of each agent's burst. Not an
+ *  identity card on every bubble: just enough to know who is speaking. */
+function speakerFor(items, i, agents) {
+  const it = items[i];
+  if (it.type !== 'message' || it.role === 'user' || !it.author) return null;
+  const prev = items[i - 1];
+  if (prev && prev.type === 'message' && prev.role !== 'user' && prev.author === it.author) return null;
+  const who = agents?.find((a) => a.agentId === it.author || a.name === it.author);
+  return { name: who?.name || it.author, who };
 }
 
 /** A message's words, with `@bot` drawn as a mention -- but only for Bots that
@@ -83,9 +95,9 @@ export default function Timeline({
   return (
     <div className="timeline" onScroll={onScroll}>
       {items.length === 0 && !streaming && !typing && (
-        <div className="empty">
-          <span className="title">Nothing here yet</span>
-          <span>Describe a task below. You will be asked before anything risky runs.</span>
+        <div className="tl-empty">
+          <strong>Say hello</strong>
+          <span>Describe a job below. You will be asked before anything risky runs.</span>
         </div>
       )}
 
@@ -100,21 +112,30 @@ export default function Timeline({
         } else if (item.type === 'event') {
           node = <EventLine event={item} />;
         } else if (item.type === 'handoff') {
-          node = <Handoff handoff={item.handoff} agents={agents} />;
+          node = <Delegation handoff={item.handoff} agents={agents} />;
         } else if (item.type === 'approval') {
           const live = approvals.find((a) => a.approvalId === item.approval.approvalId)
             || item.approval;
           node = (
-            <ApprovalCard approval={live}
-                          onDecide={(ok, note) => onDecide(live, ok, note)} />
+            <>
+              {live.status === 'pending' && <div className="tl-label tl-label--ask"><i aria-hidden="true" />Waiting on you</div>}
+              <ApprovalCard approval={live}
+                            onDecide={(ok, note) => onDecide(live, ok, note)} />
+            </>
           );
         } else {
           const mine = item.role === 'user';
+          const speaker = showAuthor ? speakerFor(items, i, agents) : null;
           const offer = i === lastMessage && !streaming && !typing
             && !mine && item.suggestions?.length && onSuggest;
           node = (
             <div className={`msg enter ${mine ? 'user' : ''}`}>
-              {showAuthor && <div className="who">{item.author || (mine ? 'you' : 'agent')}</div>}
+              {speaker && (
+                <div className="tl-label tl-label--who">
+                  {speaker.who && <Companion archetype={speaker.who.archetype} color={speaker.who.color} state="idle" size={18} name={speaker.name} />}
+                  {speaker.name}
+                </div>
+              )}
               {item.text && <div className="body"><Body text={item.text} ids={mentionIds} /></div>}
               {!mine && item.cards?.length > 0 && (
                 <div className="cards">

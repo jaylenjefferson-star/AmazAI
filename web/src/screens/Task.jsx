@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import Companion, { STATES } from '../characters/Companion';
+import AgentProfile from '../components/AgentProfile';
+import ChatHeader from '../components/ChatHeader';
 import Composer from '../components/Composer';
-import Icon from '../components/Icon';
-import RightPanel from '../components/RightPanel';
+import Problem from '../components/Problem';
+import { ChatSkeleton } from '../components/Skeleton';
 import SkillDialog from '../components/SkillDialog';
 import Timeline from '../components/Timeline';
+import ToolsSheet from '../components/ToolsSheet';
+import WorkspaceSheet from '../components/WorkspaceSheet';
 import { api } from '../api';
 import { presentAgent, useAgents } from '../hooks/useAgents';
-import { usePins } from '../hooks/usePins';
+import { download } from '../lib/download';
+import { COPY, friendly } from '../lib/errors';
 import { usePresence, useSteps } from '../presence';
 import { threadsChanged } from '../threadsBus';
 import { threadToItems } from '../threadItems';
@@ -41,14 +46,16 @@ export default function Task() {
   const [runId, setRunId] = useState(null);
   const [runState, setRunState] = useState(null);
   const [error, setError] = useState('');
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [deskOpen, setDeskOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const composer = useRef(null);
+  const sentTask = useRef(false);
+  const location = useLocation();
   const [skillDraft, setSkillDraft] = useState(null);
   const [skillCatalog, setSkillCatalog] = useState([]);
   const pollRef = useRef(null);
   const threadId = `dm-${agentId}`;
-  const { pins, toggle: togglePin } = usePins();
-  const pinned = pins.includes(threadId);
   const live = usePresence()[agentId];
   const steps = useSteps(threadId);
 
@@ -72,6 +79,17 @@ export default function Task() {
   }, [threadId]);
 
   useEffect(() => { loadAgent(); loadThread(); }, [loadAgent, loadThread]);
+
+  // "New task" hands the goal over in navigation state; it is sent once, as a
+  // normal message, and the state is cleared so a refresh cannot send it again.
+  useEffect(() => {
+    const task = location.state?.task;
+    if (!agent || !task || sentTask.current) return;
+    sentTask.current = true;
+    navigate(location.pathname, { replace: true, state: null });
+    sendText(task).catch((e) => setError(e.message));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent]);
   useEffect(() => { api.skills().then((r) => setSkillCatalog(r.skills || [])).catch(() => {}); }, []);
 
   // Runs that are still in flight, so a run left mid-approval from an
@@ -164,6 +182,14 @@ export default function Task() {
     }
   }
 
+  function onAction(kind) {
+    if (kind === 'tools') setToolsOpen(true);
+    else if (kind === 'computer') setDeskOpen(true);
+    else if (kind === 'routine') navigate('/routines/new', { state: { prefill: { agentId } } });
+    else if (kind === 'task') composer.current?.insert('Task: ');
+    else if (kind === 'artifact') composer.current?.insert('Create a document: ');
+  }
+
   async function decide(approval, approve, note) {
     await api.decide(approval.runId, approval.approvalId, approve, note);
     setPendingApprovals((current) => current.map((a) => (
@@ -226,106 +252,55 @@ export default function Task() {
     return lines.join('\n');
   }, [items, agent]);
 
-  if (!agent) return <div className="page"><div className="empty">{error || 'Loading Bot…'}</div></div>;
+  if (!agent) {
+    return error
+      ? <div className="chat"><Problem message={friendly(error, COPY.load)} onRetry={() => { setError(''); loadAgent(); loadThread(); }} /></div>
+      : <div className="chat"><ChatSkeleton /></div>;
+  }
+
+  const stateInfo = STATES[shown] || STATES.idle;
+  const status = shown && !['idle', 'complete'].includes(shown) ? (live?.action || stateInfo.label) : '';
 
   return (
-    <div className="task">
-      <div className="task-main">
-      {/* Back goes to the inbox, which is where this conversation was opened
-          from now that the inbox is home -- `/agents` was the old section
-          list and returning there loses the thread you came in on.
+    <div className="chat">
+      <ChatHeader
+        back="/"
+        mark={<Companion archetype={agent.archetype} color={agent.color} state={shown} size={30} name={agent.name} />}
+        name={agent.name}
+        status={status}
+        tone={stateInfo.tone}
+        onOpen={() => setProfileOpen(true)}
+        action={{ icon: 'computer', label: `Open ${agent.name}'s workspace`, onClick: () => setDeskOpen(true),
+                  badge: Boolean(status) }}
+      />
 
-          The identity sits centred between two equal-width controls rather
-          than left-aligned beside them, so it stays centred whatever the
-          name's length, and the status reads as the companion's own rather
-          than as a chip parked at the end of a row. */}
-      <header className="chat-head">
-        <Link to="/" className="chat-icon" aria-label="Back to inbox">
-          <Icon name="chevronLeft" size={20} />
-        </Link>
+      {error && <Problem message={friendly(error, COPY.load)} onRetry={() => { setError(''); loadThread(); }} />}
 
-        <div className="chat-identity">
-          <Companion archetype={agent.archetype} color={agent.color}
-                     state={shown} size={30} name={agent.name} />
-          <span className="chat-who">
-            <strong>{agent.name}</strong>
-            {/* The same word the inbox row uses, from the same store, so the
-                header and the list can never disagree about what a Bot is
-                doing -- plus the line of detail the list shows on hover. */}
-            <small className={`cc-tone-${(STATES[shown] || STATES.idle).tone}`}>
-              {(STATES[shown] || STATES.idle).label}
-              {live?.action ? ` — ${live.action}` : ''}
-            </small>
-          </span>
-        </div>
-
-        <button type="button" className="chat-icon" onClick={() => setMenuOpen(true)}
-                aria-label={`More about ${agent.name}`} aria-haspopup="menu">
-          <Icon name="more" size={20} />
-        </button>
-      </header>
-
-      {error && <div className="empty"><strong>Something went wrong</strong><span>{error}</span></div>}
       <Timeline items={timelineItems} streaming={null} typing={typing} agents={agents}
                 approvals={pendingApprovals} onDecide={decide} onSuggest={(t) => sendText(t)}
                 cardCtx={cardCtx} showAuthor={false}
                 onSaveSkill={(item) => setSkillDraft({ text: item.text })}
                 onRemember={rememberMessage} mentionIds={mentionables.map((m) => m.id)} />
 
-      <Composer name={agent.name} mentionables={mentionables} skills={skills}
-                commands={COMMANDS} busy={busy} onSend={sendText} onStop={stop}
-                onCommand={command} />
-      </div>
+      <Composer ref={composer} name={agent.name} mentionables={mentionables} skills={skills}
+                commands={COMMANDS} busy={busy} onSend={sendText} onStop={stop} onCommand={command}
+                placeholder={agent.entrypoint ? `Ask ${agent.name}` : `Message ${agent.name}`}
+                onAction={onAction} />
 
-      {/* The overflow: the things a conversation leads to. Settings is a screen
-          because it is long; the pane stays a panel because it is read beside
-          the conversation, not instead of it. */}
-      {menuOpen && (
-        <>
-          <div className="scrim" onClick={() => setMenuOpen(false)} />
-          <div className="sheet" role="menu" aria-label={`${agent.name} options`}>
-            <h2 className="sheet-title">{agent.name}</h2>
-            <Link className="sheet-row" role="menuitem" to={`/agents/${agentId}/settings`}>
-              <Companion archetype={agent.archetype} color={agent.color} state="idle" size={30} />
-              <span>
-                <strong>Bot settings</strong>
-                <small>Identity, instructions, model, budget and hours.</small>
-              </span>
-            </Link>
-            <button type="button" className="sheet-row" role="menuitem"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      // Optimistic in the hook; a refusal (the twelve-pin
-                      // ceiling) is worth saying, so it lands in the same
-                      // banner a failed send uses.
-                      togglePin(threadId).catch((e) => setError(e.message));
-                    }}>
-              <Icon name="pin" size={26} />
-              <span>
-                <strong>{pinned ? 'Unpin from top' : 'Pin to top'}</strong>
-                <small>{pinned
-                  ? 'Remove it from the strip above your inbox.'
-                  : 'Keep it one tap away, above your inbox.'}</small>
-              </span>
-            </button>
-            <button type="button" className="sheet-row" role="menuitem"
-                    onClick={() => { setMenuOpen(false); setPanelOpen(true); }}>
-              <Icon name="layers" size={26} />
-              <span>
-                <strong>Routines, memory and activity</strong>
-                <small>What it does on its own, what it knows, what it has spent.</small>
-              </span>
-            </button>
-          </div>
-        </>
+      {profileOpen && (
+        <AgentProfile agent={agent} agents={agents} threadId={threadId}
+                      // A change writes a history line into this conversation; refresh both
+                      // or the line exists on the server and is missing from the screen.
+                      onChange={() => { loadAgent(); loadThread(); }}
+                      onExport={() => download(exportTranscript(), `${agent.name}.md`)}
+                      onClose={() => setProfileOpen(false)} />
       )}
-
-      <RightPanel threadId={threadId} agent={agent} agents={agents}
-                  // A pane action (a memory saved or corrected, a routine run) writes a
-                  // history line into this conversation; refresh both, or the line
-                  // exists on the server and is missing from the screen.
-                  onRefreshAgent={() => { loadAgent(); loadThread(); }} open={panelOpen}
-                  onClose={() => setPanelOpen(false)} onExport={exportTranscript} />
+      {deskOpen && (
+        <WorkspaceSheet agent={agent} threadId={threadId} agents={agents} live={live}
+                        steps={steps || items.filter((i) => i.type === 'steps').slice(-1)[0]?.steps}
+                        approvals={pendingApprovals} onClose={() => setDeskOpen(false)} />
+      )}
+      {toolsOpen && <ToolsSheet onClose={() => { setToolsOpen(false); loadAgent(); }} />}
 
       {skillDraft && (
         <SkillDialog draft={skillDraft} threadId={threadId} agentId={agentId}

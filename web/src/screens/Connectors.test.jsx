@@ -41,9 +41,9 @@ describe('Connectors', () => {
     api.connectorApps.mockRejectedValue(new Error('Load failed'));
     render(<Connectors embedded />);
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('Having trouble loading apps.');
+    expect(alert.textContent).toContain('Having trouble connecting.');
     expect(alert.textContent).not.toMatch(/load failed/i);
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('opens the sign-in page, then installs when the person comes back', async () => {

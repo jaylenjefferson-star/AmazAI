@@ -13,13 +13,12 @@
 const KEY = 'amazai.theme';
 export const MODES = ['light', 'dark', 'system'];
 
-/** Light unless the viewer has chosen otherwise.
+/** What the signed-in app shows until its owner chooses otherwise: dark.
  *
- *  Deliberately not 'system': AmazAI is a light product, and a visitor
- *  arriving on a dark-mode laptop should see the brand as designed rather
- *  than a dark variant they never asked for. 'system' remains available,
- *  it is just no longer the default. */
-export const DEFAULT_MODE = 'light';
+ *  The public site is a different case and stays light (see `modeForPath`): a
+ *  visitor on a dark-mode laptop should see the brand as designed rather than a
+ *  dark variant they never asked for. 'system' remains available in both. */
+export const DEFAULT_MODE = 'dark';
 
 export function storedMode() {
   try {
@@ -46,4 +45,47 @@ export function effectiveMode(mode) {
 
 export function nextMode(mode) {
   return MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+}
+
+/** The marketing and legal pages. Everything else is the signed-in app. */
+const PUBLIC = /^\/(welcome-to-amazai|about|how-it-works|product|pricing|integrations|use-cases|security|for-teams|enterprise|faq|contact|legal|terms|privacy|cookie-policy|acceptable-use|security-disclosure|security-responsible-disclosure)(\/|$)/;
+export const isPublicPath = (pathname) => PUBLIC.test(pathname || '/');
+
+/** A preference the person actually set, or null. Distinct from the default. */
+export function explicitMode() {
+  try {
+    const v = localStorage.getItem(KEY);
+    return MODES.includes(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Auth0 caches its session in localStorage, so a signed-in visitor can be told
+ *  from a signed-out one before the SDK has finished loading. */
+export function hasSessionHint() {
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      if ((localStorage.key(i) || '').indexOf('@@auth0spajs@@') === 0) return true;
+    }
+  } catch { /* blocked storage: treat as signed out */ }
+  return false;
+}
+
+/** The mode a path should show. The signed-in app is dark unless they chose;
+ *  anything a signed-out visitor can see is light unless they chose dark/system. */
+export function modeForPath(pathname, signedIn = hasSessionHint()) {
+  const chosen = explicitMode();
+  if (isPublicPath(pathname) || !signedIn) {
+    return chosen === 'dark' || chosen === 'system' ? chosen : 'light';
+  }
+  return chosen ?? 'dark';
+}
+
+/** Show that mode without persisting it: navigating is not a preference. */
+export function syncToPath(pathname, signedIn) {
+  const mode = modeForPath(pathname, signedIn);
+  const root = document.documentElement;
+  if (mode === 'system') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', mode);
 }

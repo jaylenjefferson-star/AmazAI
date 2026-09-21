@@ -377,6 +377,20 @@ export const demoApi = {
     if (modelTier) agent.model = { ...(agent.model || {}), tier: modelTier };
     return { ...agent };
   },
+  setGrant: async (agentId, connectorId, body) => {
+    await wait(120);
+    const agent = AGENTS.find((a) => a.agentId === agentId);
+    if (!agent) throw new Error('No such agent');
+    const row = { connectorId, capability: body.capability || 'admin', allowedTools: body.allowedTools || ['*'] };
+    agent.grants = [...(agent.grants || []).filter((g) => g.connectorId !== connectorId), row];
+    return row;
+  },
+  removeGrant: async (agentId, connectorId) => {
+    await wait(120);
+    const agent = AGENTS.find((a) => a.agentId === agentId);
+    if (agent) agent.grants = (agent.grants || []).filter((g) => g.connectorId !== connectorId);
+    return { agentId, connectorId, removed: true };
+  },
   addMemory: async () => ({}),
   deleteMemory: async () => ({}),
 
@@ -1019,10 +1033,18 @@ if (import.meta.env.DEV) {
       const row = { connectorId: `composio:${slug}`, app: slug, name: app.name, status: 'installed',
                     capability: 'admin', allowedTools: ['*'], accountId: 'ca_demo' };
       installedApps.set(row.connectorId, row);
-      return { ...row, grantedTo: [] };
+      // Mirrors the API: connecting grants it to every active Bot that does not already hold it.
+      const grantedTo = [];
+      for (const a of AGENTS) {
+        if ((a.status || 'active') !== 'active' || (a.grants || []).some((g) => g.connectorId === row.connectorId)) continue;
+        a.grants = [...(a.grants || []), { connectorId: row.connectorId, capability: 'admin', allowedTools: ['*'] }];
+        grantedTo.push(a.agentId);
+      }
+      return { ...row, grantedTo };
     },
     revokeConnector: async (connectorId) => {
       installedApps.delete(connectorId);
+      for (const a of AGENTS) a.grants = (a.grants || []).filter((g) => g.connectorId !== connectorId);
       return { connectorId, revokedFrom: [] };
     },
   });
