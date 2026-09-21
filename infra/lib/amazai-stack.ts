@@ -369,6 +369,10 @@ export class AmazaiStack extends cdk.Stack {
         allowMethods: [apigwv2.CorsHttpMethod.ANY],
         allowOrigins: [
           'https://amazai.co',
+          // Amplify's stable production branch URL is still a supported way to
+          // open the console (and invaluable when diagnosing a custom-domain
+          // cache). Keep it in lockstep with the custom domain.
+          'https://main.d2qtxrhp46u9pz.amplifyapp.com',
           'https://claude-modest-rubin-rtpea6.d2qtxrhp46u9pz.amplifyapp.com',
           'http://localhost:4173',
           'http://localhost:5173',
