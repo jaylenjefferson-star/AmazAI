@@ -114,6 +114,8 @@ def _fail(store: Store, run: dict, message: str) -> None:
         )
         runs.advance(store, fresh, RunState.FAILED, evidenceKey=ev.key,
                      summary=message, sealSha256=manifest.get("sealSha256"))
+        # Release compute on terminal failure too (no-op for AgentCore).
+        _release_compute_quietly(store, fresh)
         Push(store).run_end(fresh["runId"], fresh["threadId"],
                             RunState.FAILED.value, message, fresh.get("costUsd", 0.0))
     except Exception:  # noqa: BLE001
@@ -213,6 +215,16 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # the illegal RETRYING -> RETRYING transition.
     run = runs.advance(store, run, RunState.EXECUTING) if run["state"] == RunState.RETRYING.value else run
     push.state(run["runId"], run["threadId"], run["state"], run.get("costUsd", 0.0))
+
+    # --- compute: acquire and wait until ready before executing ------------
+    # A NO-OP for the default AgentCore substrate (its provider acquires an
+    # immediately-ready handle and never touches AWS), so an AgentCore run's
+    # behaviour is unchanged. A run that resolves to EC2 Desktop hits the
+    # placeholder provider, which raises NotImplementedError this phase (no EC2
+    # is provisioned); that surfaces through the handler's terminal path, which
+    # still releases compute. See docs/architecture/05-run-lifecycle.md.
+    run, _compute_provider, _compute_handle = runs.acquire_compute(store, run, agent)
+    run = runs.wait_until_ready(store, run, _compute_provider, _compute_handle)
 
     # --- stream ------------------------------------------------------------
     core = agentcore.AgentCore()
@@ -1039,8 +1051,26 @@ def _finish(store: Store, run: dict, state: RunState, summary: str, push: Push,
     )
     runs.advance(store, fresh, state, evidenceKey=ev.key, summary=summary[:2000],
                  sealSha256=manifest.get("sealSha256"))
+    # Release compute on the terminal path -- success, failure, and
+    # cancellation all reach here, matching the "sync runs on failure and
+    # cancellation too" rule in docs/architecture/04-workspaces.md. A NO-OP for
+    # AgentCore; best-effort so a release hiccup never masks the real outcome.
+    _release_compute_quietly(store, fresh)
     push.run_end(fresh["runId"], fresh["threadId"], state.value, summary[:2000],
                  fresh.get("costUsd", 0.0))
+
+
+def _release_compute_quietly(store: Store, run: dict) -> None:
+    """Release compute without letting a release error mask the run's outcome.
+
+    The terminal path has already sealed evidence and advanced the run; an
+    exception from compute release here must not turn a COMPLETED run into a
+    crash. For AgentCore this is a pure no-op.
+    """
+    try:
+        runs.release_compute(store, run)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
 
 
 def _reinvoke(run_id: str, owner_id: str, *, delay_note: str = "") -> None:

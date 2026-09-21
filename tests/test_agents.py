@@ -254,6 +254,36 @@ class TestAudit:
         assert ev["orgId"] == "org-1"
 
 
+# --- compute requirements (additive, backward compatible) -------------------
+
+class TestComputeRequirements:
+    def test_a_created_agent_defaults_all_compute_flags_to_false(self):
+        plan = A.plan_create(a_body(), PERSON, org_connectors=ORG)
+        assert plan.agent["compute"] == {"requirements": {
+            "full_desktop": False, "persistent_dev_env": False,
+            "os_level_app": False, "heavy_local_tooling": False,
+        }}
+
+    def test_a_declared_full_computer_flag_is_stored(self):
+        plan = A.plan_create(
+            a_body(compute={"requirements": {"full_desktop": True}}),
+            PERSON, org_connectors=ORG)
+        assert plan.agent["compute"]["requirements"]["full_desktop"] is True
+        assert plan.agent["compute"]["requirements"]["os_level_app"] is False
+
+    def test_a_non_bool_compute_flag_is_refused(self):
+        with pytest.raises(A.ValidationError):
+            A.plan_create(a_body(compute={"requirements": {"full_desktop": "yes"}}),
+                          PERSON, org_connectors=ORG)
+
+    def test_an_agent_without_the_field_resolves_to_agentcore(self):
+        # An existing agent record predates the compute field; absence must mean
+        # all-False, so it stays on AgentCore.
+        from amazai.compute import ComputeProvider, select_for_run
+        legacy_agent = {"agentId": "legacy", "role": "engineer"}
+        assert select_for_run(agent=legacy_agent).provider is ComputeProvider.AGENTCORE
+
+
 # --- tenant isolation -------------------------------------------------------
 
 class TestTenantIsolation:

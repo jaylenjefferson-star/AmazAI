@@ -257,6 +257,43 @@ def validate_schedule(body: dict) -> dict:
 
     return out
 
+#: The full-computer requirement flags an agent may declare. Kept in step with
+#: `amazai.compute.ComputeRequirements`: absence of any flag (an existing agent
+#: with no `compute` block) means all-False, which routes to AgentCore. Naming
+#: them here rather than importing keeps this validator free of an AWS-adjacent
+#: import and mirrors how the compute package treats absence as all-False.
+COMPUTE_FLAGS: tuple[str, ...] = (
+    "full_desktop",
+    "persistent_dev_env",
+    "os_level_app",
+    "heavy_local_tooling",
+)
+
+
+def validate_compute(body: dict) -> dict:
+    """Normalize the OPTIONAL compute-requirement block into a stored shape.
+
+    Additive and backward-compatible: an agent with no `compute` key resolves to
+    all-False, so existing agents keep running on AgentCore untouched. Each flag,
+    if supplied, must be a bool; absent flags default to False. The returned
+    shape (`{"requirements": {...}}`) is what `compute.ComputeRequirements`
+    reads off `agent["compute"]`.
+    """
+    compute = body.get("compute") or {}
+    _require(isinstance(compute, dict), "compute must be an object")
+    requirements = compute.get("requirements") or {}
+    _require(isinstance(requirements, dict),
+             "compute.requirements must be an object")
+
+    flags: dict = {}
+    for name in COMPUTE_FLAGS:
+        value = requirements.get(name, False)
+        _require(isinstance(value, bool),
+                 f"compute.requirements.{name} must be true or false")
+        flags[name] = value
+    return {"requirements": flags}
+
+
 def validate_limits(body: dict) -> dict:
     """Seat, concurrency and budget limits, clamped to their ceilings.
 
@@ -494,6 +531,7 @@ def plan_create(body: dict, actor: Actor, *,
     if profile["entrypoint"] and has_entrypoint:
         raise Conflict("this organization already has a first Bot")
     budget = validate_limits(body)
+    compute = validate_compute(body)
     grants = validate_grants(body.get("grants") or [], org_connectors or {})
 
     agent_id = normalize_agent_id(profile["name"], explicit=body.get("agentId"))
@@ -545,6 +583,14 @@ def plan_create(body: dict, actor: Actor, *,
             "lastSyncAt": None, "sessionBytes": 0,
         },
         "memoryNamespace": f"agents/{agent_id}/memory",
+
+        # Which compute substrate a run for this agent needs. Additive and
+        # backward-compatible: all-False (the default for an agent that predates
+        # this field) routes to the default ephemeral AgentCore runtime. A
+        # full-computer flag here is OR-ed with the run's own flags by
+        # `compute.select_for_run`, so a persistently-desktop agent routes to
+        # the EC2 Desktop escape hatch. No AWS call is made here.
+        "compute": compute,
 
         # An agent is not runnable until the harness exists. Nothing hands
         # work to a `provisioning` row.
