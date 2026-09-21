@@ -255,6 +255,36 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
             store.put(ev)
         return _resp(200, updated)
 
+    # --- a Bot's access to one app --------------------------------------------
+    # A person narrows or removes it here; an agent has no route to this. The
+    # ceiling comes from the org install, so a Bot can never be given more than the
+    # organization holds, and "read" makes it read-only in that app whatever a
+    # tool is called (connectors.authorize).
+    if (p := _match(path, "/agents/{id}/grants/{connectorId}")) and method == "PUT":
+        actor = _actor(event)
+        store.get(K.agent_pk(p[0]), "META")   # 404 if it is not this owner's Bot
+        [grant] = A.validate_grants(
+            [{"connectorId": p[1], "capability": body.get("capability"),
+              "allowedTools": body.get("allowedTools") or [C.WILDCARD]}],
+            _org_connectors(store))
+        before = store.try_get(K.agent_pk(p[0]), K.grant_sk(p[1]))
+        row = store.put({"pk": K.agent_pk(p[0]), "sk": K.grant_sk(p[1]), "entity": "Grant",
+                         "agentId": p[0], "grantedBy": actor.user_id, "grantedAt": now_iso(), **grant})
+        store.put(A.audit_event(p[0], "agent.grants_changed", actor,
+                                before={"grant": before and {k: before.get(k) for k in ("capability", "allowedTools")}},
+                                after={"grant": grant}))
+        return _resp(200, row)
+
+    if (p := _match(path, "/agents/{id}/grants/{connectorId}")) and method == "DELETE":
+        actor = _actor(event)
+        store.get(K.agent_pk(p[0]), "META")
+        before = store.get(K.agent_pk(p[0]), K.grant_sk(p[1]))   # 404 if this Bot never had it
+        store.delete(K.agent_pk(p[0]), K.grant_sk(p[1]))
+        store.put(A.audit_event(p[0], "agent.grants_changed", actor,
+                                before={"grant": {k: before.get(k) for k in ("capability", "allowedTools")}},
+                                after={"grant": None}))
+        return _resp(200, {"agentId": p[0], "connectorId": p[1], "removed": True})
+
     # --- connectors --------------------------------------------------------
     # Ordered before /connectors/{id} so these never resolve as an id.
     if path == "/connectors/apps" and method == "GET":

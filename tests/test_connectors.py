@@ -314,3 +314,47 @@ class TestConnectorRoutes:
         monkeypatch.setattr(api, "_composio", lambda: Down())
         status, body = call("GET", "/connectors/apps")
         assert status == 502 and body["error"] == "connector_unavailable"
+
+
+class TestPerBotAccess:
+    """The profile's Tools section: narrow or remove one app for one Bot."""
+
+    def _bot_with_slack(self, api_table, monkeypatch):
+        wire(monkeypatch, FakeTransport(connected={"slack"}))
+        _, agent = call("POST", "/agents", NEW_AGENT)
+        call("POST", f"/connectors/{SLACK}/install", {})
+        return agent["agentId"]
+
+    def test_a_person_can_make_one_bot_read_only_in_one_app(self, api_table, monkeypatch):
+        bot = self._bot_with_slack(api_table, monkeypatch)
+        status, row = call("PUT", f"/agents/{bot}/grants/{SLACK}", {"capability": "read"})
+        assert status == 200 and row["capability"] == "read"
+        from amazai.store import Store
+        [g] = C.granted_apps(Store("owner-a", table=api_table), bot)
+        assert g.capability is Capability.READ
+
+    def test_the_change_is_audited_with_before_and_after(self, api_table, monkeypatch):
+        bot = self._bot_with_slack(api_table, monkeypatch)
+        call("PUT", f"/agents/{bot}/grants/{SLACK}", {"capability": "read"})
+        from amazai.store import Store
+        audit = [r for r in Store("owner-a", table=api_table).query(K.agent_pk(bot))
+                 if r.get("action") == "agent.grants_changed"]
+        assert audit and audit[-1]["after"]["grant"]["capability"] == "read"
+
+    def test_a_bot_cannot_be_given_more_than_the_organization_holds(self, api_table, monkeypatch):
+        bot = self._bot_with_slack(api_table, monkeypatch)
+        status, err = call("PUT", f"/agents/{bot}/grants/composio:gmail", {"capability": "read"})
+        assert status == 403 and "not installed" in err["detail"]
+
+    def test_removing_an_app_from_one_bot_leaves_the_org_install(self, api_table, monkeypatch):
+        bot = self._bot_with_slack(api_table, monkeypatch)
+        assert call("DELETE", f"/agents/{bot}/grants/{SLACK}")[0] == 200
+        from amazai.store import Store
+        store = Store("owner-a", table=api_table)
+        assert C.granted_apps(store, bot) == [] and SLACK in C.installed(store)
+        assert call("DELETE", f"/agents/{bot}/grants/{SLACK}")[0] == 404   # already gone
+
+    def test_another_tenant_cannot_touch_it(self, api_table, monkeypatch):
+        bot = self._bot_with_slack(api_table, monkeypatch)
+        assert call("PUT", f"/agents/{bot}/grants/{SLACK}", {"capability": "read"}, sub="owner-b")[0] == 404
+        assert call("DELETE", f"/agents/{bot}/grants/{SLACK}", sub="owner-b")[0] == 404
