@@ -22,6 +22,25 @@ class Verdict(str, Enum):
     STOP = "stop"
 
 
+def model_usd(model_id: str, *, input_tokens: int = 0, output_tokens: int = 0,
+              cached_tokens: int | None = None) -> float:
+    """What one model call cost, in dollars.
+
+    Deliberately delegates to `usage.PRICING`. There is one price table in
+    this codebase and this is the seam to it: a second table here would drift
+    from that one, and the first symptom of drift is a budget that stops runs
+    at the wrong number.
+
+    `usage` works in micro-dollar integers to keep a month's arithmetic exact;
+    this ledger is floats because it predates that decision. The conversion
+    happens here, once, rather than at every call site.
+    """
+    from amazai.usage import MICRO, TokenCounts, cost_micros
+    micros = cost_micros(model_id, TokenCounts(
+        input=input_tokens, output=output_tokens, cached=cached_tokens))
+    return micros / MICRO
+
+
 @dataclass
 class RunCost:
     model_usd: float = 0.0
@@ -29,6 +48,8 @@ class RunCost:
     connector_usd: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_tokens: int = 0
+    model_calls: int = 0
     runtime_seconds: float = 0.0
     connector_calls: dict[str, int] = field(default_factory=dict)
 
@@ -36,10 +57,13 @@ class RunCost:
     def total_usd(self) -> float:
         return round(self.model_usd + self.runtime_usd + self.connector_usd, 6)
 
-    def add_model(self, usd: float, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+    def add_model(self, usd: float, *, input_tokens: int = 0, output_tokens: int = 0,
+                  cached_tokens: int = 0) -> None:
         self.model_usd += usd
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
+        self.cached_tokens += cached_tokens
+        self.model_calls += 1
 
     def add_runtime(self, usd: float, *, seconds: float = 0.0) -> None:
         self.runtime_usd += usd
@@ -57,6 +81,8 @@ class RunCost:
             "totalUsd": self.total_usd,
             "inputTokens": self.input_tokens,
             "outputTokens": self.output_tokens,
+            "cachedTokens": self.cached_tokens,
+            "modelCalls": self.model_calls,
             "runtimeSeconds": round(self.runtime_seconds, 3),
             "connectorCalls": dict(self.connector_calls),
         }
