@@ -17,7 +17,7 @@ import pytest
 
 import handlers.api as api
 import handlers.orchestrator as orch
-from amazai import approvals, keys as K, runs
+from amazai import approvals, keys as K, memory, runs
 from amazai.states import RunState
 
 from tests.test_agents_api import api_table, call  # noqa: F401
@@ -244,3 +244,71 @@ class TestRequestNotes:
         fake = world.script([text("ok")])
         world.drive()
         assert "use the handoff tool" in fake.calls[0]["system_prompt"]
+
+
+
+class TestABotReadsBackWhatItSaved:
+    """The loop half of tests/test_memory_reaches_the_prompt.py.
+
+    `remember` wrote a row, the row was re-read on every later run, and the
+    prompt builder dropped it because `validate` defaults kind to `note` and
+    only foundational rows were injected. A Bot's own memory was a no-op it
+    had no way to notice.
+    """
+
+    def test_a_fact_a_bot_saved_is_in_its_next_prompt(self, world):
+        world.script([*tool_use("remember", {"scope": "agent",
+                                            "title": "Deploys",
+                                            "body": "staging is eu-west-1"}),
+                      text("Noted.")])
+        world.drive()
+
+        # A second run, after the first has settled.
+        second = runs.create(world.store, agent_id=world.agent_id,
+                             thread_id=world.run["threadId"], goal="where is staging?")
+        fake = world.script([text("eu-west-1.")])
+        orch._drive(world.store, second, {"runId": second["runId"]})
+        assert "staging is eu-west-1" in fake.calls[0]["system_prompt"], \
+            "the Bot saved a fact and could not see it on the next run"
+
+    def test_an_expiry_a_bot_set_is_stored_rather_than_discarded(self, world):
+        world.script([*tool_use("remember", {"scope": "agent", "body": "sprint ends Tuesday",
+                                            "expires_at": "2026-03-01T00:00:00Z"}),
+                      text("Noted.")])
+        world.drive()
+        rows = [r for r in world.store.query(K.agent_pk(world.agent_id), sk_prefix="MEM#")
+                if r.get("entity") == "Memory"]
+        assert rows and rows[0]["expiresAt"] == "2026-03-01T00:00:00Z"
+
+    def test_a_log_a_bot_wrote_stays_out_of_its_next_prompt(self, world):
+        world.script([*tool_use("remember", {"scope": "agent", "kind": "log",
+                                             "body": "ran the nightly export"}),
+                      text("Done.")])
+        world.drive()
+        second = runs.create(world.store, agent_id=world.agent_id,
+                             thread_id=world.run["threadId"], goal="anything else?")
+        fake = world.script([text("No.")])
+        orch._drive(world.store, second, {"runId": second["runId"]})
+        assert "ran the nightly export" not in fake.calls[0]["system_prompt"]
+
+    def test_the_newest_facts_are_the_ones_read_back(self, world):
+        # `mem_` ids are time-ordered, so an ascending limit returned the
+        # *oldest* rows. A Bot past the read ceiling stopped seeing anything it
+        # had recently learned.
+        for i in range(6):
+            world.store.put(memory.plan_write(
+                {"body": f"fact-{i:03d}-end", "kind": "foundational"},
+                K.agent_pk(world.agent_id), scope="agent",
+                source="agent", author=world.agent_id))
+
+        original = orch.MAX_MEMORY
+        orch.MAX_MEMORY = 3
+        try:
+            fake = world.script([text("ok")])
+            world.drive()
+            prompt = fake.calls[0]["system_prompt"]
+        finally:
+            orch.MAX_MEMORY = original
+
+        assert "fact-005-end" in prompt, "the newest fact was not read back"
+        assert "fact-000-end" not in prompt, "the oldest facts crowded out the newest"
