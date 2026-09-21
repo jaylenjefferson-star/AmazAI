@@ -343,7 +343,16 @@ class AgentCore:
         if execution_role_arn:
             kwargs["executionRoleArn"] = execution_role_arn
         resp = self._control.create_harness(**kwargs)
-        return resp.get("harnessArn") or resp.get("arn") or resp["harness"]["harnessArn"]
+        # The control plane returns `arn` in the nested harness record. Earlier
+        # SDK previews used `harnessArn`, so accept both shapes; treating the
+        # successful create as a failure leaves an orphaned harness behind and
+        # makes every retry collide with its name.
+        harness = resp.get("harness") or {}
+        arn = (resp.get("harnessArn") or resp.get("arn") or
+               harness.get("harnessArn") or harness.get("arn"))
+        if not arn:
+            raise RuntimeError(f"CreateHarness returned no harness ARN (keys: {sorted(resp)})")
+        return arn
 
     def get_harness(self, harness_arn: str) -> dict:
         # The runtime accepts the harness ARN, while the control plane's

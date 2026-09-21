@@ -349,6 +349,10 @@ export class AmazaiStack extends cdk.Stack {
           // Keep both names: the former documents the SDK boundary and the
           // latter is the action AWS evaluates for a new Bot harness.
           'bedrock-agentcore:CreateAgentRuntime',
+          // A harness also provisions its runtime endpoint. Without this the
+          // harness record is created but ends CREATE_FAILED, so retries only
+          // see a name collision instead of a usable Bot.
+          'bedrock-agentcore:CreateAgentRuntimeEndpoint',
           'bedrock-agentcore:InvokeHarness',
           'bedrock-agentcore:InvokeAgentRuntime',
           'bedrock-agentcore:InvokeAgentRuntimeCommand',
