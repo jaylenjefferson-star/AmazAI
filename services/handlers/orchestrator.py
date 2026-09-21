@@ -296,6 +296,20 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     def answer(parsed, at_seq: int) -> bool:
         """Handle one tool call. True when the run has to pause for a decision."""
         nonlocal pending_approval, tool_errors, consecutive_errors
+        required = ((agentcore.INLINE_TOOLS.get(parsed.tool_name) or {})
+                    .get("inputSchema", {}).get("required") or [])
+        if required and not getattr(parsed, "tool_input_observed", True):
+            # Structural diagnostics only. Never log argument values: creation
+            # briefs, messages and connector inputs can contain private data.
+            # This is enough to identify an unrecognised provider event shape.
+            print(json.dumps({
+                "event": "agentcore.tool_input_missing",
+                "runId": run["runId"],
+                "tool": parsed.tool_name,
+                "toolUseId": parsed.tool_use_id,
+                "blockIndex": getattr(parsed, "block_index", -1),
+                "requiredFieldCount": len(required),
+            }))
         result = _handle_tool(store, run, agent, ev, push, resolution,
                               parsed, at_seq, spend, turn)
         if result.get("pause"):

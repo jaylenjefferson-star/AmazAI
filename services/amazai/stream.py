@@ -4,10 +4,12 @@ BUILD_PLAN Phase 3: "Parse tool-use events defensively -- check
 contentBlockStart, toolUse, and contentBlockDelta, and tolerate `input`
 arriving as a JSON string."
 
-Tool-use arguments can arrive in three shapes across the stream: complete on
-contentBlockStart, accumulated across partial_json deltas, or as an already-
-encoded JSON string. All three are normalised to a dict here so the
-orchestrator never has to care.
+Tool-use arguments arrive from current AgentCore as JSON-string fragments under
+`contentBlockDelta.delta.toolUse.input`; older previews and test doubles have
+also put a complete document on `contentBlockStart`, a complete dict on a
+delta, or fragments under `partial_json`. All accepted shapes are accumulated
+and normalised to a dict here so the orchestrator never has to care. An empty
+start placeholder never overrides fragments that arrive later.
 
 The same defensiveness applies to the token counts. A turn's usage arrives
 once per model call, in a trailing `metadata` event, and it is the only place
@@ -49,6 +51,11 @@ class StreamEvent:
     cached_tokens: int | None = None
     reasoning_tokens: int | None = None
     latency_ms: int | None = None
+    #: Structural diagnostics only: no argument values. A named tool with
+    #: required input and `False` here means a provider event shape was missed
+    #: or the stream ended before any input arrived.
+    tool_input_observed: bool = False
+    block_index: int = -1
 
 
 #: Spellings seen across providers and SDK previews for the same four counts.
@@ -110,6 +117,56 @@ def _coerce_input(raw) -> dict:
     return {"_value": raw}
 
 
+def _new_tool_slot(tool: dict | None = None) -> dict:
+    """State for one block, preserving strings as accumulable fragments."""
+    tool = tool or {}
+    raw = tool.get("input")
+    return {
+        "name": tool.get("name", ""),
+        "id": tool.get("toolUseId") or tool.get("id", ""),
+        "buf": raw if isinstance(raw, str) else "",
+        "input": None if isinstance(raw, str) else raw,
+        "observed": "input" in tool,
+    }
+
+
+def _meaningful(raw) -> bool:
+    if raw is None:
+        return False
+    if isinstance(raw, str):
+        return bool(raw.strip())
+    if isinstance(raw, (dict, list)):
+        return bool(raw)
+    return True
+
+
+def _raw_tool_input(slot: dict):
+    """Prefer a complete non-empty document, then accumulated JSON text.
+
+    Some streams put `{}` or `""` on start as a placeholder and send the real
+    JSON in deltas. Treating any non-None start value as authoritative silently
+    discarded those later fragments.
+    """
+    explicit = slot.get("input")
+    buffered = slot.get("buf", "")
+    if _meaningful(explicit):
+        return explicit
+    if _meaningful(buffered):
+        return buffered
+    return explicit if explicit is not None else buffered
+
+
+def _tool_event(slot: dict, index: int) -> StreamEvent:
+    return StreamEvent(
+        EventKind.TOOL_USE,
+        tool_name=slot.get("name", ""),
+        tool_use_id=slot.get("id", ""),
+        tool_input=_coerce_input(_raw_tool_input(slot)),
+        tool_input_observed=bool(slot.get("observed")),
+        block_index=index,
+    )
+
+
 class StreamParser:
     """Feeds on raw stream events and yields normalised StreamEvents.
 
@@ -133,12 +190,7 @@ class StreamParser:
             idx = start.get("contentBlockIndex", 0)
             tool = (start.get("start") or {}).get("toolUse") or start.get("toolUse")
             if tool:
-                self._blocks[idx] = {
-                    "name": tool.get("name", ""),
-                    "id": tool.get("toolUseId") or tool.get("id", ""),
-                    "buf": "",
-                    "input": tool.get("input"),
-                }
+                self._blocks[idx] = _new_tool_slot(tool)
             return out
 
         if "contentBlockDelta" in event:
@@ -151,28 +203,38 @@ class StreamParser:
 
             tool_delta = delta.get("toolUse")
             if tool_delta:
-                slot = self._blocks.setdefault(idx, {"name": "", "id": "", "buf": "", "input": None})
+                slot = self._blocks.setdefault(idx, _new_tool_slot())
                 if tool_delta.get("name"):
                     slot["name"] = tool_delta["name"]
-                if tool_delta.get("toolUseId"):
-                    slot["id"] = tool_delta["toolUseId"]
-                if "input" in tool_delta and isinstance(tool_delta["input"], dict):
-                    slot["input"] = tool_delta["input"]
-                if tool_delta.get("partial_json"):
-                    slot["buf"] += tool_delta["partial_json"]
+                if tool_delta.get("toolUseId") or tool_delta.get("id"):
+                    slot["id"] = tool_delta.get("toolUseId") or tool_delta.get("id")
+
+                # Current InvokeHarness contract: `input` is a partial JSON
+                # *string*. Older previews returned a complete dict here, and
+                # local fixtures used partial_json. Accept all three without
+                # appending the same fragment twice if a test double sends
+                # more than one spelling.
+                if "input" in tool_delta:
+                    value = tool_delta["input"]
+                    slot["observed"] = True
+                    if isinstance(value, str):
+                        slot["buf"] += value
+                    else:
+                        slot["input"] = value
+                else:
+                    fragment = (tool_delta.get("partial_json")
+                                if "partial_json" in tool_delta
+                                else tool_delta.get("partialJson"))
+                    if fragment is not None:
+                        slot["observed"] = True
+                        slot["buf"] += str(fragment)
             return out
 
         if "contentBlockStop" in event:
             idx = (event["contentBlockStop"] or {}).get("contentBlockIndex", 0)
             slot = self._blocks.pop(idx, None)
             if slot and slot["name"]:
-                raw = slot["input"] if slot["input"] is not None else slot["buf"]
-                out.append(StreamEvent(
-                    EventKind.TOOL_USE,
-                    tool_name=slot["name"],
-                    tool_use_id=slot["id"],
-                    tool_input=_coerce_input(raw),
-                ))
+                out.append(_tool_event(slot, idx))
             return out
 
         usage = self._usage(event)
@@ -221,14 +283,8 @@ class StreamParser:
     def flush(self) -> list[StreamEvent]:
         """Emit any tool blocks left open when the stream ended."""
         out: list[StreamEvent] = []
-        for slot in self._blocks.values():
+        for index, slot in self._blocks.items():
             if slot["name"]:
-                raw = slot["input"] if slot["input"] is not None else slot["buf"]
-                out.append(StreamEvent(
-                    EventKind.TOOL_USE,
-                    tool_name=slot["name"],
-                    tool_use_id=slot["id"],
-                    tool_input=_coerce_input(raw),
-                ))
+                out.append(_tool_event(slot, index))
         self._blocks.clear()
         return out
