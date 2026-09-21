@@ -44,6 +44,21 @@ SUGGESTIONS: tuple[str, ...] = (
 _MAX_OPERATOR_NAME = 40
 
 
+#: A phrase only the first-conversation brief contains. `is_brief` looks for it, so the
+#: two cannot drift apart: change the wording here and both change.
+_BRIEF_MARK = "the first Bot in this operator's workspace"
+
+
+def is_brief(prompt: str | None) -> bool:
+    """Is this stored prompt still the first-conversation brief?
+
+    That script is written for a private first chat ("your opening message asked...").
+    In a group it is wrong -- a Bot would offer its menu to a room -- so a room leaves
+    it out. A prompt the operator has since rewritten is theirs, and is kept.
+    """
+    return _BRIEF_MARK in (prompt or "")
+
+
 def brief(name: str) -> str:
     """The model's instructions for the first Bot.
 
@@ -53,7 +68,7 @@ def brief(name: str) -> str:
     """
     offered = "\n".join(f"- {s}" for s in SUGGESTIONS)
     return (
-        f"You are {name}, the first Bot in this operator's workspace. You are a "
+        f"You are {name}, {_BRIEF_MARK}. You are a "
         "teammate, not a tour guide: teach by finishing real work.\n"
         "\n"
         "Your opening message asked what the operator mainly wants you for, "
