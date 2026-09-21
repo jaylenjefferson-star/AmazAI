@@ -137,3 +137,43 @@ reports to and who reports to it, and that this changes nothing about what anyon
 **Console.** `/org` draws it (a chart from 720px, an indented list below, because a wide
 chart is the wrong thing to pinch around on a phone); a contact card's "Reports to" row and
 New Bot's "Reports to" field change it; the picker never offers a Bot's own team.
+
+## What the model is sent, and what a retry must not send it
+
+A conversation the model is asked to continue must end on a user turn. Current models refuse one
+that ends on an assistant turn ("does not support assistant message prefill"), and a request
+that will always be refused is not worth retrying. Three things could put an assistant turn last,
+and each is handled where the history is built (`agentcore.build_messages` / `end_on_user`):
+
+- **A retry after a partial reply.** A run that fails part-way saves what it had said, and its retry
+  rebuilds the conversation from storage. The run's own saved rows are left out of what it is sent
+  (`skip_runs`); they stay in the transcript. A run *resuming after an approval* keeps them: what it
+  said before it paused is context it needs (`continuation.is_approval_resume` tells the two apart,
+  because a retry is also sent as a "resume").
+- **A redirect.** The new message is stored before the stopped run's partial reply, so the stopped run's
+  rows are left out the same way.
+- **No user turn at all** (a Bot woken by a teammate, a routine). The run's own goal is the request it
+  was created for, so it is sent as that turn. With no goal nothing is invented.
+
+The history read is the *newest* `MAX_HISTORY` rows. It used to ask DynamoDB for `limit=40` in ascending
+order, which is the first 40 ever written, so from the 41st message on the model never saw the one it was
+being asked to answer.
+
+`errors.classify` treats the conversation-shape errors as terminal. They matched "validation", which is
+re-planned, and re-planning an identical request only spends the attempts. The error that *starts* a retry
+is kept on the run as `lastError`: only the final attempt's evidence is sealed, so it was otherwise gone.
+
+## A Bot's tools
+
+A harness is created bare (the call that is known to work in this account) and its inline tools --
+`propose_agent`, `request_approval`, `message_agent`, `remember`, `connector_search`, `connector_call`
+-- arrive by an update. Nothing did that for a Bot made through the console, so it could talk but not
+propose a Bot, ask for an approval, bring in a teammate, or use a connected app. Before a Bot's first run
+`orchestrator._ensure_harness_tools` adds what is missing, waits for the harness to be READY, and records
+`harnessToolsVersion` on the Bot (a fingerprint of the tool names, so adding a tool re-syncs every Bot). It
+never fails a run: a refused update is logged, the Bot goes on with the tools it has, and the next run tries
+again. `scripts/sync_harness_tools.py` does the same ahead of time.
+
+`propose_agent` still produces an approval card, not a Bot: an agent cannot create authority, including for
+the next agent, and a card is what stops an instruction planted in something a Bot read from doing it.
+

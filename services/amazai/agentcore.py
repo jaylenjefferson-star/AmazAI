@@ -10,6 +10,7 @@ that section; do not improvise these signatures.
 from __future__ import annotations
 
 import os
+import time
 
 import boto3
 
@@ -281,6 +282,18 @@ def harness_tools(tool_names: list[str]) -> list[dict]:
     return tools
 
 
+def tools_version() -> str:
+    """A short fingerprint of which inline tools a harness should carry.
+
+    Recorded on a Bot once its harness has been checked, so the check is a one-off
+    per Bot and per set of tools: adding a tool to `INLINE_TOOLS` changes this, and
+    every Bot's harness is brought up to date the next time it runs. Names only: a
+    tool already on a harness is not rewritten when its description changes.
+    """
+    import hashlib
+    return hashlib.sha256(",".join(sorted(INLINE_TOOLS)).encode()).hexdigest()[:12]
+
+
 def _harness_id(harness_arn: str) -> str:
     """Return the control-plane identifier from an ARN or an id.
 
@@ -382,12 +395,12 @@ class AgentCore:
     def add_inline_tools(self, harness_arn: str) -> dict:
         """Add the missing inline tools to an existing harness.
 
-        **The update shape is unverified.** BUILD_PLAN verifies `create_harness`'s
-        tool config and warns that `update_harness` *replaces* what it is given, so
-        this reads the harness, merges, and sends the whole list -- but the exact
-        parameters of `update_harness` have not been confirmed in an account. It is
-        therefore only reachable through `scripts/sync_harness_tools.py --apply`,
-        after a `--check`.
+        `update_harness` *replaces* what it is given, so this reads the harness,
+        merges, and sends the whole list. Engineering's harness in this account
+        carries inline tools that creation never declared, so an update of this
+        shape has worked here before; the first sync of any other harness is still
+        that harness's first, which is why `ensure_inline_tools` is written so a
+        failure is reported and never stops a run.
         """
         resp = self.get_harness(harness_arn)
         body = resp.get("harness", resp)
@@ -399,6 +412,31 @@ class AgentCore:
         self._control.update_harness(harnessId=_harness_id(harness_arn), tools=current + added)
         return {"changed": True, "added": [t["name"] for t in added]}
 
+    def ensure_inline_tools(self, harness_arn: str, *, wait_seconds: int = 60,
+                            poll_seconds: float = 3.0, sleep=time.sleep) -> dict:
+        """Add any missing inline tools, and return only once the harness can be invoked.
+
+        An update leaves a harness UPDATING for a while, and invoking it then fails
+        for a reason that looks like anything but "wait". So a change waits for
+        READY, and a harness that goes FAILED or DELETING is an error here rather
+        than a mystery at the next invoke.
+        """
+        result = self.add_inline_tools(harness_arn)
+        if not result["changed"]:
+            return result
+        waited = 0.0
+        while True:
+            resp = self.get_harness(harness_arn)
+            status = (resp.get("harness", resp) or {}).get("status")
+            if status == "READY":
+                return result
+            if status in ("FAILED", "DELETING", "UPDATE_FAILED"):
+                raise RuntimeError(f"harness went {status} after its tools were updated")
+            if waited >= wait_seconds:
+                raise TimeoutError(f"harness still {status} {wait_seconds}s after its tools were updated")
+            sleep(poll_seconds)
+            waited += poll_seconds
+
     def update_filesystem(self, harness_arn: str, mounts: list[dict]) -> dict:
         """Filesystem mounts are not enabled in this deployment."""
         raise NotImplementedError(
@@ -406,17 +444,27 @@ class AgentCore:
         )
 
 
-def build_messages(history: list[dict], *, room: bool = False) -> list[dict]:
+def build_messages(history: list[dict], *, room: bool = False,
+                   skip_runs: frozenset[str] | set[str] = frozenset()) -> list[dict]:
     """Turn stored MSG rows into the invoke_harness messages array.
 
     In a room, each agent message is prefixed with `[Name]` so the model can
     follow a multi-participant conversation.
+
+    `skip_runs` leaves out the assistant rows those runs wrote. A run that failed
+    part-way saves what it had said, and its retry rebuilds the conversation from
+    storage: with that partial reply still in it, the conversation ends on an
+    assistant turn, which current models refuse outright ("does not support
+    assistant message prefill"). The reply stays in the transcript for the person
+    reading; it is only not fed back to the model as though it were the prompt.
     """
     out: list[dict] = []
     for m in history:
         role = m.get("role", "user")
         text = m.get("text", "")
         if not text:
+            continue
+        if role == "assistant" and m.get("runId") in skip_runs:
             continue
         # A first Bot's greeting is for the operator. Sent to the model it
         # would be a conversation that opens on an assistant turn, which
@@ -434,6 +482,24 @@ def build_messages(history: list[dict], *, room: bool = False) -> list[dict]:
             text = f"[{m['author']}] {text}"
         out.append({"role": role, "content": [{"text": text}]})
     return out
+
+
+def end_on_user(messages: list[dict], goal: str = "") -> list[dict]:
+    """A conversation the model is asked to continue must end on the person's turn.
+
+    Whatever ended up last, the model answers *that*; an assistant turn at the
+    end is a request to keep talking over itself, which current models reject.
+    When the history does not end on a user turn (a Bot woken by a teammate, a
+    routine), the run's own goal is the request it was created for, so it is
+    said as that turn. With no goal there is nothing honest to say on anyone's
+    behalf, so the list is returned as it is and the service's own error shows.
+    """
+    if not messages or messages[-1].get("role") == "user":
+        return messages
+    goal = (goal or "").strip()
+    if not goal:
+        return messages
+    return [*messages, {"role": "user", "content": [{"text": goal}]}]
 
 
 def identity_block(agent: dict, opening: str = "") -> str:
