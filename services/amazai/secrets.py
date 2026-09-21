@@ -78,11 +78,15 @@ def get_json(secret_id: str, *, required: tuple[str, ...] = ()) -> dict:
     return value
 
 
-def pipedream_credentials() -> dict:
-    """The Pipedream OAuth client. Secrets Manager only — never source, never
-    an environment variable, never chat."""
-    secret_id = os.environ.get("PIPEDREAM_SECRET_ID", "amazai/pipedream")
-    return get_json(secret_id, required=("client_id", "client_secret"))
+def composio_api_key() -> str:
+    """The Composio project key. Secrets Manager only -- never source, never an
+    environment variable, never chat.
+
+    The secret is JSON, `{"api_key": "..."}`, so a half-filled one fails here
+    naming the missing field rather than later as a 401 from a third party.
+    """
+    secret_id = os.environ.get("COMPOSIO_SECRET_ID", "amazai/composio")
+    return get_json(secret_id, required=("api_key",))["api_key"]
 
 
 def reset_cache() -> None:

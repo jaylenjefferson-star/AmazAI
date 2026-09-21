@@ -323,6 +323,10 @@ const OPTIONS = {
   connectors: [],
 };
 
+// A real account keeps its theme across a reload; the demo's in-memory settings do not, so it
+// remembers the choice the way a server would.
+const demoTheme = () => { try { return localStorage.getItem('amazai.demo.theme'); } catch { return null; } };
+
 export const demoApi = {
   agents: async () => (await wait(120), { agents: AGENTS }),
   agentOptions: async () => (await wait(90), OPTIONS),
@@ -376,6 +380,20 @@ export const demoApi = {
     if (budget) agent.budget = { ...agent.budget, ...budget };
     if (modelTier) agent.model = { ...(agent.model || {}), tier: modelTier };
     return { ...agent };
+  },
+  setGrant: async (agentId, connectorId, body) => {
+    await wait(120);
+    const agent = AGENTS.find((a) => a.agentId === agentId);
+    if (!agent) throw new Error('No such agent');
+    const row = { connectorId, capability: body.capability || 'admin', allowedTools: body.allowedTools || ['*'] };
+    agent.grants = [...(agent.grants || []).filter((g) => g.connectorId !== connectorId), row];
+    return row;
+  },
+  removeGrant: async (agentId, connectorId) => {
+    await wait(120);
+    const agent = AGENTS.find((a) => a.agentId === agentId);
+    if (agent) agent.grants = (agent.grants || []).filter((g) => g.connectorId !== connectorId);
+    return { agentId, connectorId, removed: true };
   },
   addMemory: async () => ({}),
   deleteMemory: async () => ({}),
@@ -457,7 +475,7 @@ export const demoApi = {
     await wait(80);
     return {
       notifications: { completion: true, inputNeeded: true, failure: true, ...SETTINGS.notifications },
-      theme: SETTINGS.theme ?? 'system',
+      theme: SETTINGS.theme ?? demoTheme() ?? 'dark',
       pinned: SETTINGS.pinned ?? (MODE === 'full' ? ['dm-cos', 'dm-eng'] : []),
       defaultTimezone: SETTINGS.defaultTimezone ?? null,
       workspaceName: SETTINGS.workspaceName ?? null,
@@ -478,7 +496,7 @@ export const demoApi = {
     if (changes.notifications) {
       SETTINGS.notifications = { ...SETTINGS.notifications, ...changes.notifications };
     }
-    if ('theme' in changes) SETTINGS.theme = changes.theme;
+    if ('theme' in changes) { SETTINGS.theme = changes.theme; try { localStorage.setItem('amazai.demo.theme', changes.theme); } catch { /* fine */ } }
     if ('pinned' in changes) {
       if (!Array.isArray(changes.pinned)) throw new Error('pinned must be a list of conversation ids');
       const pins = [...new Set(changes.pinned)];
@@ -990,19 +1008,49 @@ if (import.meta.env.DEV) {
     },
   });
 
-  // Connectors, enough for the Marketplace's Plugins tab to be reviewed. Nothing
-  // here connects to anything.
+  // Connectors, shaped like the real API (Composio). Nothing here reaches a real
+  // service: "connecting" just marks the app installed, so the flow can be reviewed.
+  const APPS = [
+    ['gmail', 'Gmail', 'Read, search and draft email.'],
+    ['googlecalendar', 'Google Calendar', 'See your schedule and find time.'],
+    ['slack', 'Slack', 'Read channels and post messages.'],
+    ['github', 'GitHub', 'Repositories, issues and pull requests.'],
+    ['notion', 'Notion', 'Pages and databases.'],
+    ['linear', 'Linear', 'Issues and projects.'],
+    ['googledrive', 'Google Drive', 'Find and read files.'],
+    ['hubspot', 'HubSpot', 'Contacts and deals.'],
+  ].map(([slug, name, description]) => ({ slug, name, description, logo: '', categories: [], toolsCount: null, noAuth: false }));
+  const installedApps = new Map();
   Object.assign(demoApi, {
-    connectorCatalog: async () => ({ catalog: [{
-      connectorId: 'pipedream:slack', app: 'slack', name: 'Slack',
-      description: 'Read channel history, and post messages with approval.', capability: 'write',
-      actions: [{ tool: 'slack.read', capability: 'read', summary: 'Read recent channel history' },
-                { tool: 'slack.post', capability: 'write', summary: 'Post a message' }] }] }),
-    connectorApps: async () => ({ apps: [], pageInfo: {} }),
-    connectors: async () => ({ connectors: [] }),
+    connectorApps: async (q) => {
+      const term = (q || '').toLowerCase();
+      return { apps: APPS.filter((a) => !term || a.name.toLowerCase().includes(term) || a.slug.includes(term)),
+               pageInfo: { end_cursor: '' } };
+    },
+    connectors: async () => ({ connectors: [...installedApps.values()] }),
     connectorAccounts: async () => ({ accounts: [] }),
-    connectToken: async () => { throw new Error('Demo mode does not connect real accounts.'); },
-    installConnector: async () => { throw new Error('Demo mode does not connect real accounts.'); },
+    connectToken: async () => ({ connectLinkUrl: 'about:blank', accountId: 'ca_demo' }),
+    installConnector: async (connectorId) => {
+      const slug = connectorId.replace(/^composio:/, '');
+      const app = APPS.find((a) => a.slug === slug);
+      if (!app) throw new Error('That app is not available.');
+      const row = { connectorId: `composio:${slug}`, app: slug, name: app.name, status: 'installed',
+                    capability: 'admin', allowedTools: ['*'], accountId: 'ca_demo' };
+      installedApps.set(row.connectorId, row);
+      // Mirrors the API: connecting grants it to every active Bot that does not already hold it.
+      const grantedTo = [];
+      for (const a of AGENTS) {
+        if ((a.status || 'active') !== 'active' || (a.grants || []).some((g) => g.connectorId === row.connectorId)) continue;
+        a.grants = [...(a.grants || []), { connectorId: row.connectorId, capability: 'admin', allowedTools: ['*'] }];
+        grantedTo.push(a.agentId);
+      }
+      return { ...row, grantedTo };
+    },
+    revokeConnector: async (connectorId) => {
+      installedApps.delete(connectorId);
+      for (const a of AGENTS) a.grants = (a.grants || []).filter((g) => g.connectorId !== connectorId);
+      return { connectorId, revokedFrom: [] };
+    },
   });
 
   // A routine created in the console says so in that Bot's conversation.

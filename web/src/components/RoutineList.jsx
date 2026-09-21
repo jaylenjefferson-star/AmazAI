@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { friendly } from '../lib/errors';
+import Problem from './Problem';
+import { RosterSkeleton } from './Skeleton';
 import { describeSchedule } from '../schedules';
 import Icon from './Icon';
 
@@ -55,12 +58,12 @@ export default function RoutineList({ agent }) {
     }
   }
 
-  if (error && !routines) return <div className="err"><span className="msg-text">{error}</span></div>;
-  if (!routines) return <div className="empty">Loading…</div>;
+  if (error && !routines) return <Problem message={friendly(error, "Couldn't load routines.")} inline />;
+  if (!routines) return <RosterSkeleton rows={2} />;
 
   return (
     <>
-      {error && <div className="err" style={{ marginBottom: 10 }}><span className="msg-text">{error}</span></div>}
+      {error && <Problem message={friendly(error, "Couldn't complete that.")} inline />}
       {routines.length === 0 && (
         <div className="empty" style={{ padding: '8px 0 14px' }}>
           <span className="title">No routines yet</span>

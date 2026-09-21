@@ -4,20 +4,27 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AmazAI</title>
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="theme-color" content="#101011" />
     <meta name="description" content="A private agent operator platform." />
     <script>
-      // Before first paint: a dark-mode machine must not flash a white page.
+      // Before first paint, so no route flashes the wrong theme. The signed-in app
+      // is dark unless its owner chose otherwise; the public site is light unless
+      // they chose dark or system. Keep in step with modeForPath in src/theme.js.
       try {
+        var pub = /^\/(welcome-to-amazai|about|how-it-works|product|pricing|integrations|use-cases|security|for-teams|enterprise|faq|contact|legal|terms|privacy|cookie-policy|acceptable-use|security-disclosure|security-responsible-disclosure)(\/|$)/;
         var m = localStorage.getItem('amazai.theme');
-        // Light is the default, so an unset preference is pinned to light
-        // rather than left to prefers-color-scheme.
-        if (m !== 'system') {
-          document.documentElement.setAttribute('data-theme',
-            m === 'dark' ? 'dark' : 'light');
+        var chosen = (m === 'light' || m === 'dark' || m === 'system') ? m : null;
+        var signedIn = false;
+        for (var i = 0; i < localStorage.length; i++) {
+          if ((localStorage.key(i) || '').indexOf('@@auth0spajs@@') === 0) { signedIn = true; break; }
         }
+        if (/[?&]demo=1/.test(location.search)) signedIn = true;
+        var mode = (pub.test(location.pathname) || !signedIn)
+          ? ((chosen === 'dark' || chosen === 'system') ? chosen : 'light')
+          : (chosen || 'dark');
+        if (mode !== 'system') document.documentElement.setAttribute('data-theme', mode);
       } catch (e) {
-        document.documentElement.setAttribute('data-theme', 'light');
+        document.documentElement.setAttribute('data-theme', 'dark');
       }
     </script>
   </head>

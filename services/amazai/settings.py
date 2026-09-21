@@ -30,9 +30,12 @@ NOTIFY_KINDS: tuple[str, ...] = ("completion", "inputNeeded", "failure")
 
 DEFAULTS: dict = {
     "notifications": {kind: True for kind in NOTIFY_KINDS},
-    # The console follows the system unless told otherwise. Stored so the
-    # choice survives a new device, where localStorage does not.
-    "theme": "system",
+    # The signed-in console is dark until its owner says otherwise (the public site is
+    # a separate, light thing). "system" is a real choice -- follow the device -- and
+    # not the default: a default of "system" was indistinguishable from someone who
+    # had picked it, and opening Settings copied it over a Light they had chosen
+    # locally. Stored so the choice survives a new device, where localStorage does not.
+    "theme": "dark",
     #: Applied to a new agent when the caller does not name one, so a person
     #: sets their zone once rather than on every companion.
     "defaultTimezone": None,

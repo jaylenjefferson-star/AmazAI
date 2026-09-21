@@ -1,15 +1,18 @@
-import { StrictMode, useRef } from 'react';
+import { StrictMode, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   BrowserRouter, Navigate, Route, Routes, useLocation,
 } from 'react-router-dom';
 
 import './styles.css';
+import './premium.css';
 import './characters/characters.css';
 
 import { AmazAIAuthProvider, configured, useAuth0 } from './auth0';
+import { syncToPath } from './theme';
 import AuthGate from './components/AuthGate';
 import Shell from './app/Shell';
+import NewAgent from './screens/NewAgent';
 
 import Landing from './screens/Landing';
 import About from './screens/About';
@@ -23,7 +26,7 @@ import Onboarding from './screens/Onboarding';
 import { CHECKING, NEEDED, OFFER, useFirstRun } from './hooks/useFirstRun';
 import { DEMO } from './demo';
 import Inbox from './screens/Inbox';
-import { Agents, Artifacts, Rooms, Routines } from './screens/Sections';
+import { Artifacts, Routines } from './screens/Sections';
 import Settings from './screens/Settings';
 import Task from './screens/Task';
 import CompanionSettings from './screens/CompanionSettings';
@@ -147,13 +150,13 @@ function Router() {
       {/* The application */}
       <Route element={<Protected><FirstRunGuard><Shell /></FirstRunGuard></Protected>}>
         <Route path="/" element={<Inbox />} />
-        <Route path="/agents" element={<Agents />} />
-        <Route path="/agents/new" element={<Agents />} />
+        <Route path="/agents" element={<Navigate to="/" replace />} />
+        <Route path="/agents/new" element={<NewAgent />} />
         <Route path="/agents/:agentId" element={<Task />} />
         <Route path="/agents/:agentId/settings" element={<CompanionSettings />} />
         <Route path="/marketplace" element={<Marketplace />} />
         <Route path="/connectors" element={<Connectors />} />
-        <Route path="/rooms" element={<Rooms />} />
+        <Route path="/rooms" element={<Navigate to="/" replace />} />
         <Route path="/rooms/:roomId" element={<Room />} />
         <Route path="/routines" element={<Routines />} />
         <Route path="/routines/new" element={<Routines />} />
@@ -172,6 +175,12 @@ function Router() {
 function Entry() {
   const { isAuthenticated, isLoading } = useAuth0();
   const location = useLocation();
+
+  // The signed-in app is dark, the public site light. Navigating between them (sign
+  // in, sign out) changes which one is on screen without anyone choosing a theme.
+  useEffect(() => {
+    syncToPath(location.pathname, isAuthenticated || DEMO || !configured);
+  }, [location.pathname, isAuthenticated]);
 
   // Demo has no session to wait for; see `AuthGate`.
   if (!configured || DEMO) return <Router />;

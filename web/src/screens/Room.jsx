@@ -1,79 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import Companion from '../characters/Companion';
+import ChatHeader from '../components/ChatHeader';
 import Composer from '../components/Composer';
-import Timeline from '../components/Timeline';
 import CoordinationFeed from '../components/CoordinationFeed';
-import Icon from '../components/Icon';
+import Problem from '../components/Problem';
+import RoomInfo from '../components/RoomInfo';
+import Sheet from '../components/Sheet';
+import { ChatSkeleton } from '../components/Skeleton';
+import Timeline from '../components/Timeline';
+import ToolsSheet from '../components/ToolsSheet';
 import { api } from '../api';
 import { useAgents } from '../hooks/useAgents';
+import { alwaysAllow } from '../lib/approvals';
+import { COPY, friendly } from '../lib/errors';
+import { usePresence } from '../presence';
 import { threadsChanged } from '../threadsBus';
-import { threadToItems } from '../threadItems';
+import { mergeCoordination, threadToItems } from '../threadItems';
 
 const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'expired', 'partial']);
-
-// Mirrors `collab.MAX_ROOM_MEMBERS`; the API is the authority.
-const MAX_MEMBERS = 6;
-
-/**
- * Who is in a channel, and who can be added.
- *
- * Every change is a real `PATCH /threads/{id}` -- the API applies the same cap
- * and the same "must be a real, seated Bot" check creating a channel does, and
- * writes a "joined" or "left" line into the conversation.
- */
-function Members({ thread, agents, onClose, onChanged }) {
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const ids = thread.agentIds || [];
-  const members = ids.map((id) => agents.find((a) => a.agentId === id)).filter(Boolean);
-  const addable = agents.filter((a) => !ids.includes(a.agentId) && !['offline'].includes(a.state));
-
-  async function change(next) {
-    setBusy(true);
-    setError('');
-    try {
-      await api.patchThread(thread.threadId, { agentIds: next });
-      await onChanged();
-    } catch (err) { setError(err.message); } finally { setBusy(false); }
-  }
-
-  return (
-    <>
-      <div className="scrim" onClick={onClose} />
-      <div className="sheet" role="dialog" aria-modal="true" aria-label="Members">
-        <h2 className="sheet-title">Members <small className="sheet-count">{ids.length} of {MAX_MEMBERS}</small></h2>
-        <ul className="member-list">
-          {members.map((a) => (
-            <li key={a.agentId}>
-              <Companion archetype={a.archetype} color={a.color} state="idle" size={30} name={a.name} />
-              <span className="member-text"><strong>{a.name}</strong><small>@{a.agentId}</small></span>
-              <button type="button" className="ghost sm" disabled={busy || ids.length <= 1}
-                      title={ids.length <= 1 ? 'A channel needs at least one Bot' : undefined}
-                      onClick={() => change(ids.filter((x) => x !== a.agentId))}>
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-        {ids.length < MAX_MEMBERS ? (
-          <label className="sheet-field">
-            <span>Add a Bot</span>
-            <select id="add-member" value="" disabled={busy || addable.length === 0}
-                    onChange={(e) => e.target.value && change([...ids, e.target.value])}>
-              <option value="">{addable.length ? 'Choose a Bot…' : 'Every Bot is already here'}</option>
-              {addable.map((a) => <option key={a.agentId} value={a.agentId}>{a.name}</option>)}
-            </select>
-          </label>
-        ) : (
-          <p className="sheet-note">A channel holds at most {MAX_MEMBERS} Bots.</p>
-        )}
-        {error && <div className="err"><span className="msg-text">{error}</span></div>}
-        <div className="sheet-actions"><button className="primary" onClick={onClose}>Done</button></div>
-      </div>
-    </>
-  );
-}
 
 /**
  * A task-bound channel: several Bots, one thread, an owner of record.
@@ -96,9 +41,13 @@ export default function Room() {
   const [coordination, setCoordination] = useState([]);
   const [pendingApprovals, setPendingApprovals] = useState([]);
   const [running, setRunning] = useState({});            // runId -> agentId
-  const [tab, setTab] = useState('room');
   const [error, setError] = useState('');
-  const [membersOpen, setMembersOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const composer = useRef(null);
+  const navigate = useNavigate();
+  const presence = usePresence();
   const pollers = useRef({});
 
   const loadThread = useCallback(() => {
@@ -158,8 +107,9 @@ export default function Room() {
     } catch (err) { setError(err.message); }
   }
 
-  async function decide(approval, approve, note) {
+  async function decide(approval, approve, note, opts) {
     await api.decide(approval.runId, approval.approvalId, approve, note);
+    if (approve && opts?.always) await alwaysAllow(approval).catch((e) => setError(e.message));
     setPendingApprovals((cur) => cur.map((a) => (
       a.approvalId === approval.approvalId ? { ...a, status: approve ? 'approved' : 'denied' } : a
     )));
@@ -167,10 +117,15 @@ export default function Room() {
     loadThread();
   }
 
+  // The work between agents belongs in the conversation, in the order it happened:
+  // a handoff is a delegation object, a message between agents is a quiet line.
+  // Neither is addressed to you, and neither is a chat bubble, so the owner is
+  // never made to look like a party to it. Events carry no time, so they keep
+  // their place; only timestamped rows are compared.
   const timelineItems = useMemo(() => [
-    ...items,
+    ...mergeCoordination(items, coordination),
     ...pendingApprovals.map((approval) => ({ type: 'approval', approval })),
-  ], [items, pendingApprovals]);
+  ], [items, coordination, pendingApprovals]);
 
   const mentionables = useMemo(
     () => members.map((a) => ({ id: a.agentId, name: a.name, archetype: a.archetype, color: a.color })),
@@ -183,96 +138,80 @@ export default function Room() {
   const statusLabel = thread?.status && thread.status !== 'active' ? thread.status : 'active';
   const readOnly = Boolean(thread?.readOnly) || statusLabel !== 'active';
 
-  if (!thread) return <div className="page"><div className="empty">{error || 'Loading channel…'}</div></div>;
+  if (!thread) {
+    return error
+      ? <div className="chat"><Problem message={friendly(error, COPY.load)} onRetry={() => { setError(''); loadThread(); }} /></div>
+      : <div className="chat"><ChatSkeleton /></div>;
+  }
+
+  // Who is doing what, said in one line under the room's name.
+  const active = members.filter((m) => ['thinking', 'working', 'waiting'].includes(presence[m.agentId]?.state));
+  const askingYou = pendingApprovals.some((a) => a.status === 'pending');
+  const status = readOnly ? `${statusLabel} · read-only`
+    : askingYou ? 'Waiting on you'
+    : active.length === 1 ? `${active[0].name} is working`
+    : active.length > 1 ? `${active.length} agents working`
+    : Object.keys(running).length ? 'Working…' : '';
+
+  const mark = (
+    <span className="rs-stack ch-stack" aria-hidden="true">
+      {members.slice(0, 3).map((a, i) => (
+        <span key={a.agentId} className="rs-stack-item" style={{ zIndex: 3 - i }}>
+          <Companion archetype={a.archetype} color={a.color} state={presence[a.agentId]?.state || a.state} size={28} />
+        </span>
+      ))}
+      {members.length > 3 && <span className="rs-more">+{members.length - 3}</span>}
+    </span>
+  );
+
+  function onAction(kind) {
+    if (kind === 'tools') setToolsOpen(true);
+    else if (kind === 'task') composer.current?.insert('@');
+    else if (kind === 'artifact') composer.current?.insert('Create a document: ');
+  }
 
   return (
-    <div className="task">
-      <div className="task-main">
-      {/* The same header a Bot conversation uses. Back goes to the inbox, which
-          is where the channel was opened from. The participants are the identity
-          here: a channel is recognised by who is in it before its name is read. */}
-      <header className="chat-head">
-        <Link to="/" className="chat-icon" aria-label="Back to inbox">
-          <Icon name="chevronLeft" size={20} />
-        </Link>
+    <div className="chat">
+      <ChatHeader
+        back="/"
+        mark={mark}
+        name={thread.title || 'Room'}
+        status={status || members.map((a) => a.name).join(', ')}
+        tone={askingYou ? 'warn' : active.length ? 'accent' : 'neutral'}
+        onOpen={() => setInfoOpen(true)}
+        action={{ icon: 'layers', label: 'Coordination between agents', onClick: () => setActivityOpen(true),
+                  badge: active.length > 1 }}
+      />
 
-        <div className="chat-identity">
-          <span className="chat-stack" aria-hidden="true">
-            {members.slice(0, 3).map((a, i) => (
-              <span key={a.agentId} className="chat-stack-item" style={{ zIndex: 3 - i }}>
-                <Companion archetype={a.archetype} color={a.color} state={a.state} size={26} />
-              </span>
-            ))}
-          </span>
-          <span className="chat-who">
-            <strong>{thread.title}</strong>
-            <small>{readOnly
-              ? `${statusLabel} · read-only`
-              : members.map((a) => a.name).join(', ') || 'No Bots yet'}</small>
-          </span>
+      {error && <Problem message={friendly(error, COPY.load)} onRetry={() => { setError(''); loadThread(); }} />}
+
+      <Timeline items={timelineItems} streaming={null} typing={null} agents={agents}
+                approvals={pendingApprovals} onDecide={decide}
+                mentionIds={mentionables.map((m) => m.id)} />
+
+      {readOnly ? (
+        <div className="room-closed" role="status">
+          <strong>This room is {statusLabel}</strong>
+          <span>Its history stays readable, and the runs it produced keep their sealed
+            evidence. Start a new room to carry the work on.</span>
         </div>
-
-        {readOnly ? <span className="chat-icon" aria-hidden="true" /> : (
-          <button type="button" className="chat-icon" onClick={() => setMembersOpen(true)}
-                  aria-label={`Members (${members.length})`} aria-haspopup="dialog">
-            <Icon name="users" size={20} />
-          </button>
-        )}
-      </header>
-
-      <div className="tabs" style={{ margin: '0 16px' }}>
-        <button className={tab === 'room' ? 'active' : ''} onClick={() => setTab('room')}>Channel</button>
-        <button className={tab === 'coordination' ? 'active' : ''} onClick={() => setTab('coordination')}>
-          Activity{coordination.length ? ` (${coordination.length})` : ''}
-        </button>
-      </div>
-
-      {tab === 'room' ? (
-        <>
-          {error && <div className="empty"><strong>Something went wrong</strong><span>{error}</span></div>}
-          <Timeline items={timelineItems} streaming={null} typing={null} agents={agents}
-                    approvals={pendingApprovals} onDecide={decide}
-                    mentionIds={mentionables.map((m) => m.id)} />
-
-          {/* Collapsed on purpose. The owner should be able to see that the
-              Bots coordinated without the hop counts and priority wakes
-              being rendered as messages addressed to them -- which is the
-              whole reason Activity is a separate feed. This is the count and
-              a way in, not the traffic itself. */}
-          {coordination.length > 0 && (
-            <button type="button" className="activity-summary"
-                    onClick={() => setTab('coordination')}>
-              <Icon name="layers" size={18} />
-              <span>
-                {coordination.length} coordination {coordination.length === 1 ? 'event' : 'events'}
-                {' '}between {members.length} Bots
-              </span>
-              <em>Open</em>
-            </button>
-          )}
-          {readOnly ? (
-            <div className="room-closed" role="status">
-              <strong>This channel is {statusLabel}</strong>
-              <span>Its history stays readable, and the runs it produced keep their
-                sealed evidence. Start a new channel to carry the work on.</span>
-            </div>
-          ) : (
-            <Composer name={thread.title} mentionables={mentionables}
-                      busy={Object.keys(running).length > 0} canRedirect={false}
-                      onSend={send} onStop={stopAll} />
-          )}
-        </>
       ) : (
-        <div className="page" style={{ paddingTop: 8 }}>
-          <CoordinationFeed items={coordination} agents={agents} />
-        </div>
+        <Composer ref={composer} name={thread.title || 'the room'} mentionables={mentionables}
+                  busy={Object.keys(running).length > 0} canRedirect={false}
+                  placeholder="Message the room" actions={['upload', 'photo', 'camera', 'tools', 'task', 'artifact']}
+                  onAction={onAction} onSend={send} onStop={stopAll} />
       )}
-      </div>
 
-      {membersOpen && (
-        <Members thread={thread} agents={agents}
-                 onClose={() => setMembersOpen(false)} onChanged={loadThread} />
+      {infoOpen && (
+        <RoomInfo thread={thread} agents={agents} activityCount={coordination.length}
+                  onActivity={() => setActivityOpen(true)} onClose={() => setInfoOpen(false)} onChanged={loadThread} />
       )}
+      {activityOpen && (
+        <Sheet title="Between agents" tall onClose={() => setActivityOpen(false)}>
+          <CoordinationFeed items={coordination} agents={agents} />
+        </Sheet>
+      )}
+      {toolsOpen && <ToolsSheet onClose={() => setToolsOpen(false)} />}
     </div>
   );
 }

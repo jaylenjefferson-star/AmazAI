@@ -40,3 +40,23 @@ export function threadToItems(messages = []) {
   }
   return out;
 }
+
+/**
+ * Put the work between agents into the conversation, in the order it happened.
+ *
+ * A handoff becomes a delegation object and a message between agents a quiet
+ * line. Only timestamped rows are compared: an event line carries no time, so it
+ * keeps its place. A coordination item with no later message to sit before goes at
+ * the end, where "just happened" belongs.
+ */
+export function mergeCoordination(items, coordination = []) {
+  const list = [...items];
+  for (const c of coordination) {
+    const node = c.kind === 'handoff'
+      ? { type: 'handoff', handoff: { fromAgentId: c.fromAgentId, toAgentId: c.toAgentId, status: c.status, goal: c.summary, constraints: [] } }
+      : { type: 'agentnote', note: c };
+    const at = list.findIndex((x) => x.type === 'message' && x.at && c.at && x.at > c.at);
+    if (at === -1) list.push(node); else list.splice(at, 0, node);
+  }
+  return list;
+}

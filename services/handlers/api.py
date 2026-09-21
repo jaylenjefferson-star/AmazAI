@@ -14,11 +14,12 @@ import json
 import os
 import re
 import traceback
+import urllib.parse
 
 import boto3
 
-from amazai import (agentcore, agents as A, approvals, collab, connectors as C,
-                    identity, keys as K, memory, models, pipedream, routines as R,
+from amazai import (agentcore, agents as A, approvals, collab, composio, connectors as C,
+                    identity, keys as K, memory, models, routines as R,
                     runs, schedules, settings as S, skills, threads)
 from amazai import dispatch
 from amazai.policy import Capability
@@ -75,16 +76,26 @@ def _header(event, name: str) -> str:
     return headers.get(name.lower(), "")
 
 
-_pd_client = None
+_composio_client = None
 
 
-def _pipedream():
+def _composio():
     """One client per container. Built on first use so a request that never
     touches a connector never reads the secret."""
-    global _pd_client
-    if _pd_client is None:
-        _pd_client = pipedream.Pipedream()
-    return _pd_client
+    global _composio_client
+    if _composio_client is None:
+        _composio_client = composio.Composio()
+    return _composio_client
+
+
+#: Where a person may be sent back to after signing in to an app. The same
+#: origins the gateway's CORS allows; anything else gets no callback at all.
+_CONSOLE_ORIGINS = ("https://amazai.co", "http://localhost:5173", "http://localhost:4173")
+
+
+def _return_url(event, slug: str) -> str | None:
+    origin = ((event.get("headers") or {}).get("origin") or "").rstrip("/")
+    return f"{origin}/marketplace?connected={slug}" if origin in _CONSOLE_ORIGINS else None
 
 
 def _org_connectors(store: Store) -> dict[str, A.OrgConnector]:
@@ -137,11 +148,11 @@ def handler(event, context):  # noqa: ARG001
         return _resp(400, {"error": "invalid_request", "detail": str(exc)})
     except A.Escalation as exc:
         return _resp(403, {"error": "forbidden", "detail": str(exc)})
-    except (C.NotInstalled, C.NotGranted, pipedream.TargetNotAllowed) as exc:
+    except (C.NotInstalled, C.NotGranted) as exc:
         return _resp(403, {"error": "forbidden", "detail": str(exc)})
     except C.UnknownConnector as exc:
         return _resp(404, {"error": "not_found", "detail": str(exc)})
-    except pipedream.PipedreamError as exc:
+    except composio.ComposioError as exc:
         # The connector is reachable or it is not; either way this is not a
         # fault in the caller's request.
         return _resp(502, {"error": "connector_unavailable", "detail": str(exc)})
@@ -161,7 +172,8 @@ def handler(event, context):  # noqa: ARG001
 def _match(path: str, pattern: str) -> list[str] | None:
     rx = "^" + re.sub(r"\{(\w+)\}", r"([^/]+)", pattern) + "$"
     m = re.match(rx, path)
-    return list(m.groups()) if m else None
+    # Decoded: connector ids contain a colon and browsers send it as %3A.
+    return [urllib.parse.unquote(g) for g in m.groups()] if m else None
 
 
 def _route(store: Store, method: str, path: str, body: dict, event: dict):
@@ -243,41 +255,66 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
             store.put(ev)
         return _resp(200, updated)
 
+    # --- a Bot's access to one app --------------------------------------------
+    # A person narrows or removes it here; an agent has no route to this. The
+    # ceiling comes from the org install, so a Bot can never be given more than the
+    # organization holds, and "read" makes it read-only in that app whatever a
+    # tool is called (connectors.authorize).
+    if (p := _match(path, "/agents/{id}/grants/{connectorId}")) and method == "PUT":
+        actor = _actor(event)
+        store.get(K.agent_pk(p[0]), "META")   # 404 if it is not this owner's Bot
+        [grant] = A.validate_grants(
+            [{"connectorId": p[1], "capability": body.get("capability"),
+              "allowedTools": body.get("allowedTools") or [C.WILDCARD]}],
+            _org_connectors(store))
+        before = store.try_get(K.agent_pk(p[0]), K.grant_sk(p[1]))
+        row = store.put({"pk": K.agent_pk(p[0]), "sk": K.grant_sk(p[1]), "entity": "Grant",
+                         "agentId": p[0], "grantedBy": actor.user_id, "grantedAt": now_iso(), **grant})
+        store.put(A.audit_event(p[0], "agent.grants_changed", actor,
+                                before={"grant": before and {k: before.get(k) for k in ("capability", "allowedTools")}},
+                                after={"grant": grant}))
+        return _resp(200, row)
+
+    if (p := _match(path, "/agents/{id}/grants/{connectorId}")) and method == "DELETE":
+        actor = _actor(event)
+        store.get(K.agent_pk(p[0]), "META")
+        before = store.get(K.agent_pk(p[0]), K.grant_sk(p[1]))   # 404 if this Bot never had it
+        store.delete(K.agent_pk(p[0]), K.grant_sk(p[1]))
+        store.put(A.audit_event(p[0], "agent.grants_changed", actor,
+                                before={"grant": {k: before.get(k) for k in ("capability", "allowedTools")}},
+                                after={"grant": None}))
+        return _resp(200, {"agentId": p[0], "connectorId": p[1], "removed": True})
+
     # --- connectors --------------------------------------------------------
     # Ordered before /connectors/{id} so these never resolve as an id.
-    if path == "/connectors/catalog" and method == "GET":
-        return _resp(200, {"catalog": C.catalog_for_console()})
-
     if path == "/connectors/apps" and method == "GET":
         qs = event.get("queryStringParameters") or {}
         try:
             limit = int(qs.get("limit", "48"))
         except (TypeError, ValueError):
             return _resp(400, {"error": "invalid_request", "detail": "limit must be an integer"})
-        return _resp(200, _pipedream().apps(
-            after=qs.get("after"), q=qs.get("q"), limit=limit))
+        return _resp(200, _composio().toolkits(
+            search=qs.get("q"), cursor=qs.get("after"), limit=limit))
 
     if path == "/connectors" and method == "GET":
         return _resp(200, {"connectors": list(C.installed(store).values())})
 
     if path == "/connectors/connect-token" and method == "POST":
-        # Mints a short-lived token for Pipedream's own authorization UI. The
-        # owner authorizes the third party there; the resulting credential
-        # lives on Pipedream's side and is referenced here only by account id.
+        # A hosted sign-in page for one app. The person authorizes the third
+        # party there; the credential lives with Composio and is referenced here
+        # only by account id.
         actor = _actor(event)
-        token = _pipedream().connect_token(actor.user_id)
-        store.put(C.connector_event(
-            body.get("connectorId") or "pipedream:unknown",
-            "connector.authorization_started",
-            actor_user_id=actor.user_id,
-            detail="connect token issued"))
-        return _resp(201, token)
+        slug = C.slug_of(body.get("connectorId") or "")
+        link = _composio().connect_link(actor.user_id, slug,
+                                        callback_url=_return_url(event, slug))
+        store.put(C.connector_event(C.connector_id(slug), "connector.authorization_started",
+                                    actor_user_id=actor.user_id, detail="connect link issued"))
+        return _resp(201, link)
 
     if path == "/connectors/accounts" and method == "GET":
         actor = _actor(event)
         qs = event.get("queryStringParameters") or {}
-        return _resp(200, {"accounts": _pipedream().accounts(
-            actor.user_id, app=qs.get("app"))})
+        return _resp(200, {"accounts": _composio().accounts(actor.user_id, toolkit=qs.get("app"))})
 
     if (p := _match(path, "/connectors/{id}")) and method == "GET":
         row = store.get(K.connector_pk(p[0]), "META")
@@ -286,20 +323,26 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         return _resp(200, row)
 
     if (p := _match(path, "/connectors/{id}/install")) and method == "POST":
+        # Called once the person has finished signing in to the app. Nothing is
+        # taken on trust from the browser: the connection is looked up with
+        # Composio, and only an ACTIVE one is installed.
         actor = _actor(event)
-        account_id = (body.get("accountId") or "").strip()
-        if not account_id:
-            return _resp(400, {"error": "invalid_request",
-                               "detail": "accountId is required "
-                                         "(authorize the app first)"})
-        row = C.install(store, p[0], account_id=account_id,
-                        external_user_id=actor.user_id,
-                        actor_user_id=actor.user_id,
-                        allowed_tools=body.get("allowedTools"))
-        store.put(C.connector_event(p[0], "connector.installed",
-                                    actor_user_id=actor.user_id,
-                                    detail=f"tools: {row['allowedTools']}"))
-        return _resp(201, row)
+        slug = C.slug_of(p[0])
+        cid = C.connector_id(slug)
+        client = _composio()
+        accounts = client.accounts(actor.user_id, toolkit=slug)
+        wanted = (body.get("accountId") or "").strip()
+        account = next((a for a in accounts if not wanted or a["id"] == wanted), None)
+        if account is None:
+            return _resp(409, {"error": "not_connected",
+                               "detail": f"{slug} is not connected yet. Finish signing in "
+                                         "on the connect page, then try again."})
+        row = C.install(store, cid, name=client.toolkit(slug)["name"], account_id=account["id"],
+                        external_user_id=actor.user_id, actor_user_id=actor.user_id)
+        granted = C.grant_to_active_agents(store, cid, actor_user_id=actor.user_id)
+        store.put(C.connector_event(cid, "connector.installed", actor_user_id=actor.user_id,
+                                    detail=f"granted to: {granted or 'no new agents'}"))
+        return _resp(201, {**row, "grantedTo": granted})
 
     if (p := _match(path, "/connectors/{id}")) and method == "DELETE":
         actor = _actor(event)
@@ -767,6 +810,13 @@ def _create_agent(store: Store, body: dict, event: dict):
     active = [r for r in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
               if r.get("status", r.get("state")) in A.SEATED]
 
+    # A Bot the owner creates starts with every app already connected: connecting
+    # means their Bots can use it, and one made afterwards should not be the
+    # exception. A request that names grants (even an empty list) is taken as
+    # written, and a Bot that another Bot proposes never comes through here.
+    if "grants" not in body:
+        body = {**body, "grants": C.default_grants(store)}
+
     plan = A.plan_create(
         body, actor,
         org_connectors=_org_connectors(store),
@@ -1193,9 +1243,17 @@ def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict
     browser payload. It was normalized in the orchestrator, so it carries no
     grants or optional tools. This closes the approval-to-execution
     substitution gap for agent creation as well as connector actions.
+
+    What the new agent starts with is decided *here*, not by the proposal: the
+    apps its owner has connected. Approving is the owner's own act, so the agent
+    is usable straight away instead of being an empty seat that needs a second
+    round of setup. It inherits nothing from the agent that proposed it -- a
+    parent limited to read-only does not pass that on, and does not pass on more
+    than the owner holds either -- and writes still ask.
     """
     active = [row for row in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
               if row.get("status", row.get("state")) in A.SEATED]
+    proposal = {**proposal, "grants": C.default_grants(store)}
     plan = A.plan_create(
         proposal, actor,
         org_connectors=_org_connectors(store),

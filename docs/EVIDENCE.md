@@ -1,3 +1,5 @@
+> **Superseded (2026-09-20):** the connector provider described below was Pipedream. It was replaced by Composio and removed; see [connectors.md](connectors.md). This file is kept as the record of what was verified at the time.
+
 # Evidence pack
 
 Branch `claude/modest-rubin-rtpea6`. Nothing here has been merged or deployed.

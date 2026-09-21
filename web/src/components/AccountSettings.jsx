@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { applyMode, MODES, storedMode } from '../theme';
 import { config, startLogout, useAuth0 } from '../auth0';
 import { api } from '../api';
+import { RosterSkeleton } from './Skeleton';
 
 /**
  * The account's own settings: what reaches you, and how the console looks.
@@ -23,7 +24,7 @@ import { api } from '../api';
 
 const NOTIFY = [
   ['completion', 'Finished work', 'A run ends, successfully or not.'],
-  ['inputNeeded', 'Needs your input', 'A companion is waiting on an answer.'],
+  ['inputNeeded', 'Needs your input', 'An agent is waiting on an answer.'],
   ['failure', 'Failures', 'A run stopped on an error rather than finishing.'],
 ];
 
@@ -41,7 +42,11 @@ function Row({ title, note, children }) {
   );
 }
 
-export default function AccountSettings({ onNavigate }) {
+export default function AccountSettings({ onNavigate, anchor }) {
+  useEffect(() => {
+    if (anchor) document.getElementById(anchor)?.scrollIntoView({ block: 'start' });
+  }, [anchor]);
+
   const { user, logout } = useAuth0();
   const [mode, setMode] = useState(storedMode);
   const [settings, setSettings] = useState(null);
@@ -89,7 +94,7 @@ export default function AccountSettings({ onNavigate }) {
   return (
     <>
       <section className="settings-group">
-        <h2 className="section-title">Signed in</h2>
+        <h2 className="section-title" id="acct-account">Signed in</h2>
         {/* Never "Signed in / Signed in": the group already says that, so the
             row falls back to naming the thing rather than repeating it. */}
         <Row title={user?.name || user?.email || 'This account'}
@@ -100,7 +105,7 @@ export default function AccountSettings({ onNavigate }) {
       </section>
 
       <section className="settings-group">
-        <h2 className="section-title">Workspace</h2>
+        <h2 className="section-title" id="acct-org">Workspace</h2>
         {/* Named during setup, and changeable here. It is stored on the
             account rather than in this browser, which is the whole reason
             signing in somewhere new no longer looks like a new account. */}
@@ -118,8 +123,8 @@ export default function AccountSettings({ onNavigate }) {
       </section>
 
       <section className="settings-group">
-        <h2 className="section-title">Notifications</h2>
-        {!settings && <div className="empty">Loading…</div>}
+        <h2 className="section-title" id="acct-prefs">Notifications</h2>
+        {!settings && <RosterSkeleton rows={2} />}
         {settings && NOTIFY.map(([key, title, note]) => (
           <Row key={key} title={title} note={note}>
             <label className="native-toggle">
@@ -139,8 +144,8 @@ export default function AccountSettings({ onNavigate }) {
       </section>
 
       <section className="settings-group">
-        <h2 className="section-title">Appearance</h2>
-        <Row title="Theme" note="AmazAI is a light product; dark is available.">
+        <h2 className="section-title" id="acct-look">Appearance</h2>
+        <Row title="Theme" note="Dark by default. Light and match-system are here if you prefer them.">
           <div className="seg">
             {MODES.map((m) => (
               <button key={m} type="button" className={mode === m ? 'on' : ''}
@@ -155,7 +160,7 @@ export default function AccountSettings({ onNavigate }) {
       <section className="settings-group">
         <h2 className="section-title">Defaults</h2>
         <Row title="Timezone"
-             note="Given to a new companion when you do not name one, so a schedule means the hour where you are.">
+             note="Given to a new agent when you do not name one, so a schedule means the hour where you are.">
           <input className="inline-input" value={zoneDraft} placeholder="America/Los_Angeles"
                  aria-label="Default timezone"
                  onChange={(e) => setZoneDraft(e.target.value)}
@@ -176,7 +181,7 @@ export default function AccountSettings({ onNavigate }) {
             <i className="cc-dot" aria-hidden="true" />Live
           </span>
         </Row>
-        <Row title="Companion gallery" note="Every character and state on one screen.">
+        <Row title="Character gallery" note="Every character and state on one screen.">
           <Link className="btn-link" to="/characters" onClick={onNavigate}>Open</Link>
         </Row>
       </section>

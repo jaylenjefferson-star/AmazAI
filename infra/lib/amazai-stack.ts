@@ -37,16 +37,6 @@ export interface AmazaiStackProps extends cdk.StackProps {
    * identifiers, not credentials; the SPA client id stays in Amplify. */
   readonly auth0Domain: string;
   readonly auth0Audience: string;
-
-  /** Pipedream Connect project, e.g. proj_xxxxxxx. An identifier, not a
-   *  credential -- it appears in every Connect URL. The OAuth client secret
-   *  lives in Secrets Manager and never passes through here. */
-  readonly pipedreamProjectId?: string;
-
-  /** Pipedream's own environment switch: 'development' or 'production'.
-   *  Defaults to development, so a half-configured stack talks to test
-   *  accounts rather than real ones. */
-  readonly pipedreamEnvironment?: string;
 }
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
@@ -221,17 +211,20 @@ export class AmazaiStack extends cdk.Stack {
 
     const servicesCode = lambda.Code.fromAsset(path.join(REPO_ROOT, 'services'));
 
-    // The Pipedream OAuth client. CDK creates it with a generated placeholder
-    // value, which is then replaced out of band -- putting the real client
-    // secret in a CDK property would put it in the synthesized template, in
+    // The Composio project key. CDK creates the secret with a generated
+    // placeholder, which is then replaced out of band -- putting the real key in
+    // a CDK property would put it in the synthesized template, in
     // CloudFormation's stored state and in this repository's history, three
     // places a credential should never be. Replace the placeholder with:
     //
-    //   aws secretsmanager put-secret-value --secret-id amazai/pipedream \
-    //     --secret-string '{"client_id":"...","client_secret":"..."}'
-    const pipedreamSecret = new secretsmanager.Secret(this, 'PipedreamSecret', {
-      secretName: 'amazai/pipedream',
-      description: 'Pipedream Connect OAuth client (client_id, client_secret)',
+    //   aws secretsmanager put-secret-value --secret-id amazai/composio \
+    //     --secret-string '{"api_key":"..."}'
+    //
+    // Until then a connector call fails naming this secret, which is the intended
+    // shape: a stack that is deployed but not yet configured says so.
+    const composioSecret = new secretsmanager.Secret(this, 'ComposioSecret', {
+      secretName: 'amazai/composio',
+      description: 'Composio project key ({"api_key": "..."})',
       encryptionKey: key,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
@@ -245,11 +238,7 @@ export class AmazaiStack extends cdk.Stack {
       AUTH0_AUDIENCE: props.auth0Audience,
       POWERTOOLS_SERVICE_NAME: 'amazai',
 
-      // A Pipedream project id is an identifier, not a credential -- it
-      // appears in every Connect URL. The secret above is the credential.
-      PIPEDREAM_PROJECT_ID: props?.pipedreamProjectId ?? '',
-      PIPEDREAM_ENVIRONMENT: props?.pipedreamEnvironment ?? 'development',
-      PIPEDREAM_SECRET_ID: pipedreamSecret.secretName,
+      COMPOSIO_SECRET_ID: composioSecret.secretName,
     };
 
     const makeFn = (
@@ -319,10 +308,10 @@ export class AmazaiStack extends cdk.Stack {
 
     // Only the paths that actually call a connector may read its credential:
     // the API installs and lists, the orchestrator and routine workers invoke.
-    // The websocket and sweeper functions never touch Pipedream and are left
+    // The websocket and sweeper functions never touch Composio and are left
     // without the grant rather than given one they do not use.
     for (const fn of [apiFn, orchestratorFn, routineFn]) {
-      pipedreamSecret.grantRead(fn);
+      composioSecret.grantRead(fn);
     }
 
     // Only the orchestrator and routine workers talk to AgentCore.
@@ -372,7 +361,11 @@ export class AmazaiStack extends cdk.Stack {
     const httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
       apiName: 'amazai',
       corsPreflight: {
-        allowHeaders: ['authorization', 'content-type'],
+        // Every header the console sets on a request must be listed here, or the
+        // browser's preflight fails and it reports a bare "Load failed" without
+        // the request ever reaching the API. tests/test_cors_contract.py compares
+        // this list with web/src/api.js.
+        allowHeaders: ['authorization', 'content-type', 'idempotency-key'],
         allowMethods: [apigwv2.CorsHttpMethod.ANY],
         allowOrigins: [
           'https://amazai.co',

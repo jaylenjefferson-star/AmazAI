@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Companion, { STATES } from '../characters/Companion';
-import CreateAgent from '../components/CreateAgent';
+import CreateMenu from '../components/CreateMenu';
 import FirstBotOffer from '../components/FirstBotOffer';
 import Icon from '../components/Icon';
+import Problem from '../components/Problem';
+import ProfileSheet from '../components/ProfileSheet';
+import { RosterSkeleton } from '../components/Skeleton';
+import UserAvatar from '../components/UserAvatar';
+import { COPY } from '../lib/errors';
 import { api } from '../api';
 import { useAgents } from '../hooks/useAgents';
 import { OFFER, useFirstRun } from '../hooks/useFirstRun';
@@ -25,9 +30,6 @@ import { onThreadsChanged } from '../threadsBus';
  * already animates everywhere else, so "needs you" is a property of the
  * companion rather than a separate list that can disagree with it.
  */
-
-// Mirrors `collab.MAX_ROOM_MEMBERS`; the API is the authority.
-const MAX_ROOM = 6;
 
 /** A DM thread is derived from the agent, so a companion with no conversation
  *  yet still has a row rather than disappearing until it first speaks. */
@@ -56,38 +58,39 @@ function previewOf(thread) {
 // activity, and get their own colour instead.
 const LIVE = new Set(['thinking', 'working', 'waiting']);
 
-/** Up to three companions, overlapped. A room is legible by who is in it
- *  before its name is read. */
+/** Up to three agents, overlapped, and a +N for the rest. A room is legible by
+ *  who is in it before its name is read. */
 function RoomMark({ members }) {
   const shown = members.slice(0, 3);
+  const extra = members.length - shown.length;
   return (
-    <span className="inbox-stack" aria-hidden="true">
+    <span className="rs-stack" aria-hidden="true">
       {shown.length === 0
-        ? <Companion archetype="pebble" color="#8a8f9c" state="offline" size={26} />
+        ? <Companion archetype="pebble" color="#8a8f9c" state="offline" size={34} />
         : shown.map((m, i) => (
-          <span key={m.agentId} className="inbox-stack-item" style={{ zIndex: shown.length - i }}>
-            <Companion archetype={m.archetype} color={m.color} state={m.state} size={26} />
+          <span key={m.agentId} className="rs-stack-item" style={{ zIndex: shown.length - i }}>
+            <Companion archetype={m.archetype} color={m.color} state={m.state} size={34} />
           </span>
         ))}
+      {extra > 0 && <span className="rs-more">+{extra}</span>}
     </span>
   );
 }
 
-/** One Bot (or a room's members), drawn identically in a row and in the pinned
- *  strip. The hover title is the third of the memo's four presence layers --
- *  a line of text for "how much do I need to know" -- and the accessible name
- *  already lives on the companion itself. */
+/** One agent (or a room's members), drawn identically in a row and in the pinned
+ *  strip. The hover title is the third presence layer -- a line of text for "how
+ *  much do I need to know" -- and the accessible name lives on the companion. */
 function Mark({ row, size }) {
   const label = STATES[row.state]?.label || 'Idle';
   const title = row.kind === 'room' ? row.title
     : `${row.title} — ${label}${row.action ? `: ${row.action}` : ''}`;
   return (
-    <span className="inbox-mark" title={title}>
+    <span className="rs-mark" title={title}>
       {row.kind === 'room'
         ? <RoomMark members={row.members} />
         : <Companion archetype={row.agent.archetype} color={row.agent.color}
                      state={row.state} size={size} name={row.title} />}
-      {LIVE.has(row.state) && <i className="inbox-presence" aria-hidden="true" />}
+      {LIVE.has(row.state) && <i className="rs-live" aria-hidden="true" />}
     </span>
   );
 }
@@ -107,136 +110,6 @@ function subline(row) {
 }
 
 /**
- * The create menu.
- *
- * Three entries, not four. An imported companion template is still in the
- * proposed menu, and the control plane serves no route for it -- a fourth
- * entry here could only open a form whose submit has nowhere to go. A menu
- * item that cannot complete is worse than an absent one: it reads as a
- * feature until the moment someone depends on it. It belongs here the day
- * the route does, as the routine entry now does below.
- *
- * A routine navigates away rather than opening inline. Its trigger and
- * schedule need more room than a sheet gives a companion or a room, and
- * `Routines` already owns that form -- reached the same way `/agents/new`
- * reaches `CreateAgent` from the full Agents page.
- */
-function CreateSheet({ agents, onClose, onCreated }) {
-  const navigate = useNavigate();
-  const [mode, setMode] = useState('menu');
-  const [title, setTitle] = useState('');
-  const [picked, setPicked] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  async function createRoom(e) {
-    e.preventDefault();
-    if (busy || !title.trim() || !picked.length) return;
-    setBusy(true);
-    setError('');
-    try {
-      const room = await api.createThread({
-        kind: 'room', title: title.trim(), agentIds: picked,
-      });
-      onCreated(`/rooms/${room.threadId}`);
-    } catch (err) {
-      setError(err.message);
-      setBusy(false);
-    }
-  }
-
-  if (mode === 'companion') {
-    return (
-      <CreateAgent
-        onClose={onClose}
-        onCreated={(agent) => onCreated(`/agents/${agent.agentId}`)}
-      />
-    );
-  }
-
-  return (
-    <>
-      <div className="scrim" onClick={onClose} />
-      <div className="sheet" role="dialog" aria-modal="true"
-           aria-label={mode === 'room' ? 'New Channel' : 'Create'}>
-        {mode === 'menu' ? (
-          <>
-            <h2 className="sheet-title">Create</h2>
-            <button type="button" className="sheet-row" onClick={() => setMode('companion')}>
-              <Companion archetype="pebble" color="#2b6bff" state="idle" size={30} />
-              <span>
-                <strong>New Bot</strong>
-                <small>Pick a character, give it a job and a budget.</small>
-              </span>
-            </button>
-            <button type="button" className="sheet-row" onClick={() => setMode('room')}
-                    disabled={!agents.length}>
-              <Companion archetype="cloud" color="#12a594" state="idle" size={30} />
-              <span>
-                <strong>New Channel</strong>
-                <small>{agents.length
-                  ? 'A shared thread for up to six Bots and you.'
-                  : 'Create a Bot first.'}</small>
-              </span>
-            </button>
-            <button type="button" className="sheet-row" disabled={!agents.length}
-                    onClick={() => { onClose(); navigate('/routines/new'); }}>
-              <Companion archetype="lantern" color="#f0a93b" state="idle" size={30} />
-              <span>
-                <strong>New routine</strong>
-                <small>{agents.length
-                  ? 'Work that runs on its own schedule, whether or not you are here.'
-                  : 'Create a Bot first.'}</small>
-              </span>
-            </button>
-            <p className="sheet-note">
-              Companion templates are not offered here yet: importing a
-              pre-built companion has no control-plane route, and a form that
-              cannot submit is not a feature.
-            </p>
-          </>
-        ) : (
-          <form onSubmit={createRoom}>
-            <h2 className="sheet-title">New Channel</h2>
-            <label className="sheet-field">
-              <span>What is this channel for?</span>
-              <input value={title} autoFocus onChange={(e) => setTitle(e.target.value)}
-                     placeholder="Ship the console" />
-            </label>
-            <fieldset className="sheet-field">
-              <legend>Who is in it? (up to six)</legend>
-              <div className="sheet-picks">
-                {agents.map((a) => {
-                  const on = picked.includes(a.agentId);
-                  return (
-                    <label key={a.agentId} className={`pick-chip ${on ? 'on' : ''}`}>
-                      <input type="checkbox" checked={on}
-                             disabled={!on && picked.length >= MAX_ROOM}
-                             onChange={() => setPicked((cur) => (
-                               on ? cur.filter((x) => x !== a.agentId) : [...cur, a.agentId]
-                             ))} />
-                      <Companion archetype={a.archetype} color={a.color} state="idle" size={20} />
-                      {a.name}
-                    </label>
-                  );
-                })}
-              </div>
-            </fieldset>
-            {error && <div className="err"><span className="msg-text">{error}</span></div>}
-            <div className="sheet-actions">
-              <button type="button" className="ghost" onClick={() => setMode('menu')}>Back</button>
-              <button className="primary" disabled={busy || !title.trim() || !picked.length}>
-                {busy ? 'Creating…' : 'Create channel'}
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
-    </>
-  );
-}
-
-/**
  * `variant="pane"` is the same list, rendered by `Shell` beside an open
  * conversation at desktop width instead of standing alone as the `/` route.
  * One component either way -- a second implementation of this list is a
@@ -250,15 +123,16 @@ export default function Inbox({ variant }) {
   const presence = usePresence();
   const { pins } = usePins();
   const [creating, setCreating] = useState(false);
+  const [profile, setProfile] = useState(false);
   const [threads, setThreads] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
-  const [feedError, setFeedError] = useState('');
+  const [feedError, setFeedError] = useState(null);
 
   useEffect(() => {
-    api.threads().then((r) => setThreads(r.threads || []))
-      .catch((e) => setFeedError(e.message));
+    api.threads().then((r) => { setThreads(r.threads || []); setFeedError(null); })
+      .catch((e) => setFeedError(e));
     // Approvals are read once here and re-read by the conversation itself.
     // The inbox only needs to know which companions are waiting, not the
     // detail of what they asked for.
@@ -373,89 +247,53 @@ export default function Inbox({ variant }) {
     navigate(to);
   }
 
+  const retry = () => { setFeedError(null); reload(); api.threads().then((r) => setThreads(r.threads || [])).catch(setFeedError); };
+
   return (
-    <div className={`inbox${variant === 'pane' ? ' inbox--pane' : ''}`}>
-      <header className="inbox-head">
-        <div className="inbox-head-text">
-          <h1>Conversations</h1>
-          {/* Two different facts, and the urgent one wins the line: something
-              awaiting your decision outranks something merely unseen. */}
-          <p>{needsYouCount
-            ? `${needsYouCount} waiting on you`
-            : unreadCount
-              ? `${unreadCount} unread`
-              : 'Nothing is waiting on you'}</p>
-        </div>
-        <div className="inbox-head-actions">
-          <button type="button" className="inbox-icon" aria-label="Search"
-                  aria-pressed={searching} onClick={() => setSearching((s) => !s)}>
-            <Icon name="search" size={19} />
-          </button>
-          <button type="button" className="inbox-icon" aria-label="Create"
-                  onClick={() => setCreating(true)}>
-            <Icon name="plus" size={20} />
-          </button>
-        </div>
+    <div className={`roster${variant === 'pane' ? ' roster--pane' : ''}`}>
+      <header className="rs-top">
+        {searching ? (
+          <>
+            <input className="rs-search" type="search" value={query} data-autofocus autoFocus
+                   placeholder="Search" aria-label="Search agents and rooms"
+                   onChange={(e) => setQuery(e.target.value)} />
+            <button type="button" className="rs-cancel"
+                    onClick={() => { setSearching(false); setQuery(''); }}>Cancel</button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="rs-me" aria-label="Account and settings"
+                    onClick={() => setProfile(true)}>
+              <UserAvatar size={42} />
+              {needsYouCount > 0 && <i className="rs-me-dot" aria-hidden="true" />}
+            </button>
+            <span className="rs-spacer" />
+            <button type="button" className="rs-round" aria-label="Search" onClick={() => setSearching(true)}>
+              <Icon name="search" size={21} />
+            </button>
+            <button type="button" className="rs-round" aria-label="Create" onClick={() => setCreating(true)}>
+              <Icon name="plus" size={23} />
+            </button>
+          </>
+        )}
       </header>
 
-      {searching && (
-        <div className="inbox-search">
-          <input
-            type="search" value={query} autoFocus
-            placeholder="Search Bots and channels"
-            aria-label="Search Bots and channels"
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
-      )}
-
-      {error && (
-        <div className="empty">
-          <strong>Control plane unavailable</strong>
-          <span>{error}</span>
-        </div>
-      )}
-      {feedError && !error && (
-        <div className="empty">
-          <strong>Conversations unavailable</strong>
-          <span>{feedError}</span>
-        </div>
-      )}
-
-      {/* At the top, above the list, so the first thing an owner with nothing
-          but Engineering sees is somewhere to start -- not a conversation
-          they did not choose. Hidden while searching: it is not a result. */}
-      {firstRun === OFFER && !query && !error && (
-        <FirstBotOffer onCreated={(bot) => created(`/agents/${bot.agentId}`)} />
-      )}
-
-      {loading && !rows.length && <div className="empty">Opening your inbox…</div>}
-
-      {!loading && !error && rows.length === 0 && (
-        <div className="rest-state">
-          <Companion archetype="pebble" color="#12a594" state="idle" size={56} />
-          <div>
-            <strong>{query ? 'Nothing matches that' : 'No Bots yet'}</strong>
-            <span>{query
-              ? 'Try a different name.'
-              : 'Create your first Bot to start a conversation. Nothing here is pre-filled or simulated.'}</span>
-          </div>
-        </div>
+      {(error || feedError) && !rows.length && (
+        <Problem error={error ? new Error(error) : feedError} fallback={COPY.loadList} onRetry={retry} />
       )}
 
       {!query && pinnedRows.length > 0 && (
-        <ul className="pin-strip" aria-label="Pinned">
+        <ul className="rs-pins" aria-label="Pinned">
           {pinnedRows.map((row) => (
             <li key={row.key}>
-              <Link className="pin" to={row.to}
-                    data-open={row.to === location.pathname ? 'true' : undefined}>
-                <span className="pin-mark">
-                  <Mark row={row} size={52} />
+              <Link className="rs-pin" to={row.to} data-open={row.to === location.pathname ? 'true' : undefined}>
+                <span className="rs-pin-mark">
+                  <Mark row={row} size={56} />
                   {row.state === 'approval'
-                    ? <i className="pin-dot pin-dot--warn" aria-hidden="true" />
-                    : row.unread && <i className="pin-dot" aria-hidden="true" />}
+                    ? <i className="rs-pin-dot rs-pin-dot--warn" aria-hidden="true" />
+                    : row.unread && <i className="rs-pin-dot" aria-hidden="true" />}
                 </span>
-                <span className="pin-name">{row.title}</span>
+                <span className="rs-pin-name">{row.title}</span>
                 {row.state === 'approval' && <span className="sr-only">Needs you</span>}
                 {row.unread && <span className="sr-only">Unread</span>}
               </Link>
@@ -464,35 +302,49 @@ export default function Inbox({ variant }) {
         </ul>
       )}
 
-      <ul className="inbox-list">
+      {/* A row like any other, first in the list, so the first thing an owner with
+          only Engineering sees is somewhere to start. Hidden while searching: it
+          is not a result. */}
+      {firstRun === OFFER && !query && !error && (
+        <FirstBotOffer onCreated={(bot) => created(`/agents/${bot.agentId}`)} />
+      )}
+
+      {loading && !rows.length && !error && <RosterSkeleton />}
+
+      {!loading && !error && !feedError && rows.length === 0 && (
+        <div className="rs-empty">
+          <Companion archetype="pebble" color="#7b93ff" state="idle" size={64} />
+          <strong>{query ? 'Nothing matches that' : 'No agents yet'}</strong>
+          <span>{query ? 'Try a different name.' : 'Hire your first AI teammate and start a conversation.'}</span>
+          {!query && <button type="button" className="primary" onClick={() => navigate('/agents/new')}>New agent</button>}
+        </div>
+      )}
+
+      <ul className="rs-list">
         {rows.map((row) => {
           const line = subline(row);
-          const idle = row.state === 'idle';
+          const ask = row.state === 'approval';
           return (
             <li key={row.key}>
-              <Link className="inbox-row" to={row.to} data-kind={row.kind}
+              <Link className="rs-row" to={row.to} data-kind={row.kind} data-state={row.state}
                     data-unread={row.unread ? 'true' : undefined}
                     data-open={row.to === location.pathname ? 'true' : undefined}>
-                <Mark row={row} size={44} />
-
-                <span className="inbox-main">
-                  <span className="inbox-line">
-                    <strong>{row.title}</strong>
-                    {row.chip && <span className="inbox-chip">{row.chip}</span>}
+                <Mark row={row} size={48} />
+                <span className="rs-main">
+                  <span className="rs-line">
+                    <strong className="rs-name">{row.title}</strong>
+                    {row.chip && <span className="rs-chip">{row.chip}</span>}
                     {row.unread && <span className="sr-only">Unread</span>}
-                    <small>{timeLabel(row.at)}</small>
+                    <time className="rs-time">{timeLabel(row.at)}</time>
                   </span>
-                  <span className="inbox-line">
-                    <span className={`inbox-sub${line.live ? ' is-live' : ''}`}>{line.text}</span>
-                    {/* The label stays for every state that is not rest: motion
-                        alone is the least reliable carrier. Idle is announced,
-                        not drawn -- a word on every quiet row is noise. */}
-                    {idle
-                      ? <span className="sr-only">Idle</span>
-                      : <span className={`inbox-state s-${row.state}`}>
-                          {STATES[row.state]?.label || 'Idle'}
-                        </span>}
-                    {row.unread && <span className="inbox-dot" aria-hidden="true" />}
+                  <span className="rs-line">
+                    <span className={`rs-preview${line.live ? ' is-live' : ''}${ask ? ' is-ask' : ''}`}>
+                      {ask ? 'Waiting on you' : line.text}
+                    </span>
+                    {/* The state is still said in words for a screen reader: motion
+                        alone is the least reliable carrier of it. */}
+                    {row.state !== 'idle' && <span className="sr-only">{STATES[row.state]?.label}</span>}
+                    {row.unread && <i className="rs-dot" aria-hidden="true" />}
                   </span>
                 </span>
               </Link>
@@ -501,13 +353,8 @@ export default function Inbox({ variant }) {
         })}
       </ul>
 
-      {creating && (
-        <CreateSheet
-          agents={agents}
-          onClose={() => setCreating(false)}
-          onCreated={created}
-        />
-      )}
+      {creating && <CreateMenu agents={agents} onClose={() => setCreating(false)} onCreated={created} />}
+      {profile && <ProfileSheet onClose={() => setProfile(false)} />}
     </div>
   );
 }

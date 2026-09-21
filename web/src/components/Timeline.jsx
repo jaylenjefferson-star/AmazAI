@@ -1,7 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import ApprovalCard from './ApprovalCard';
+import Icon from './Icon';
 import Card, { EventLine } from './Cards';
-import Handoff from './Handoff';
+import Companion from '../characters/Companion';
+import Delegation from './Delegation';
+import { useContacts } from './ContactCard';
 import StepsGroup from './StepsGroup';
 import TypingIndicator from './TypingIndicator';
 
@@ -43,14 +46,46 @@ function separatorFor(items, i) {
   return new Date(at) - new Date(prev.at) > GAP_MS ? stamp(at) : null;
 }
 
+/** One agent messaging another: not addressed to you, but visible, because the
+ *  work between agents is part of what is happening in the room. */
+function AgentNote({ note, agents, onContact }) {
+  const of = (id) => agents?.find((a) => a.agentId === id);
+  const from = of(note.fromAgentId);
+  const to = of(note.toAgentId);
+  return (
+    <div className="tl-note">
+      <span className="tl-note-who">
+        <button type="button" onClick={() => from && onContact(from.agentId)}>{from?.name || note.fromAgentId}</button>
+        <Icon name="arrowright" size={13} />
+        <button type="button" onClick={() => to && onContact(to.agentId)}>{to?.name || note.toAgentId}</button>
+      </span>
+      <span className="tl-note-text">{note.summary}</span>
+    </div>
+  );
+}
+
+/** In a room, a small label above the first message of each agent's burst. Not an
+ *  identity card on every bubble: just enough to know who is speaking. */
+function speakerFor(items, i, agents) {
+  const it = items[i];
+  if (it.type !== 'message' || it.role === 'user' || !it.author) return null;
+  const prev = items[i - 1];
+  if (prev && prev.type === 'message' && prev.role !== 'user' && prev.author === it.author) return null;
+  const who = agents?.find((a) => a.agentId === it.author || a.name === it.author);
+  return { name: who?.name || it.author, who };
+}
+
 /** A message's words, with `@bot` drawn as a mention -- but only for Bots that
  *  exist, so a stray `@word` is never dressed up as an address. */
-function Body({ text, ids }) {
+function Body({ text, ids, onContact }) {
   if (!ids?.length || !text || !text.includes('@')) return text;
-  return String(text).split(/(@[\w-]+)/g).map((part, i) => (
-    part.startsWith('@') && ids.includes(part.slice(1))
-      ? <span key={i} className="mention">{part}</span> : part
-  ));
+  return String(text).split(/(@[\w-]+)/g).map((part, i) => {
+    if (!(part.startsWith('@') && ids.includes(part.slice(1)))) return part;
+    // A mention is a way to a contact card, not just a coloured word.
+    return onContact
+      ? <button type="button" key={i} className="mention" onClick={() => onContact(part.slice(1))}>{part}</button>
+      : <span key={i} className="mention">{part}</span>;
+  });
 }
 
 /**
@@ -66,6 +101,7 @@ export default function Timeline({
   cardCtx, showAuthor = true, onSaveSkill, onRemember, mentionIds,
 }) {
   const endRef = useRef(null);
+  const { open: openContact } = useContacts();
   const [stuck, setStuck] = useState(true);
   // Options are an offer to answer the newest thing said. Once anything follows
   // -- a reply, a run -- they are stale, so only the last message carries them.
@@ -83,9 +119,9 @@ export default function Timeline({
   return (
     <div className="timeline" onScroll={onScroll}>
       {items.length === 0 && !streaming && !typing && (
-        <div className="empty">
-          <span className="title">Nothing here yet</span>
-          <span>Describe a task below. You will be asked before anything risky runs.</span>
+        <div className="tl-empty">
+          <strong>Say hello</strong>
+          <span>Describe a job below. You will be asked before anything risky runs.</span>
         </div>
       )}
 
@@ -99,23 +135,35 @@ export default function Timeline({
           node = <StepsGroup steps={item.steps} />;
         } else if (item.type === 'event') {
           node = <EventLine event={item} />;
+        } else if (item.type === 'agentnote') {
+          node = <AgentNote note={item.note} agents={agents} onContact={openContact} />;
         } else if (item.type === 'handoff') {
-          node = <Handoff handoff={item.handoff} agents={agents} />;
+          node = <Delegation handoff={item.handoff} agents={agents} />;
         } else if (item.type === 'approval') {
           const live = approvals.find((a) => a.approvalId === item.approval.approvalId)
             || item.approval;
           node = (
-            <ApprovalCard approval={live}
-                          onDecide={(ok, note) => onDecide(live, ok, note)} />
+            <>
+              {live.status === 'pending' && <div className="tl-label tl-label--ask"><i aria-hidden="true" />Waiting on you</div>}
+              <ApprovalCard approval={live}
+                            onDecide={(ok, note, opts) => onDecide(live, ok, note, opts)} />
+            </>
           );
         } else {
           const mine = item.role === 'user';
+          const speaker = showAuthor ? speakerFor(items, i, agents) : null;
           const offer = i === lastMessage && !streaming && !typing
             && !mine && item.suggestions?.length && onSuggest;
           node = (
             <div className={`msg enter ${mine ? 'user' : ''}`}>
-              {showAuthor && <div className="who">{item.author || (mine ? 'you' : 'agent')}</div>}
-              {item.text && <div className="body"><Body text={item.text} ids={mentionIds} /></div>}
+              {speaker && (
+                <button type="button" className="tl-label tl-label--who" disabled={!speaker.who}
+                        onClick={() => speaker.who && openContact(speaker.who.agentId)}>
+                  {speaker.who && <Companion archetype={speaker.who.archetype} color={speaker.who.color} state="idle" size={18} name={speaker.name} />}
+                  {speaker.name}
+                </button>
+              )}
+              {item.text && <div className="body"><Body text={item.text} ids={mentionIds} onContact={openContact} /></div>}
               {!mine && item.cards?.length > 0 && (
                 <div className="cards">
                   {item.cards.map((card, j) => <Card key={j} card={card} ctx={cardCtx} />)}

@@ -1,53 +1,75 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import AccountMenu from '../components/AccountMenu';
+import { useEffect } from 'react';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { api } from '../api';
+import { applyMode, explicitMode } from '../theme';
+import { ContactsProvider } from '../components/ContactCard';
 import Icon from '../components/Icon';
-import Logo from '../components/Logo';
 import PresenceFeed from '../components/PresenceFeed';
 import Inbox from '../screens/Inbox';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 
 /**
- * The application shell.
+ * The application shell: almost nothing, on purpose.
  *
- * Mobile-first on purpose: a three-panel desktop layout stretched onto a
- * phone is how most consoles become unusable on the device they are most
- * often opened on.
+ * AmazAI is a communication app whose contacts happen to be AI teammates, so the
+ * conversation gets the whole screen. There is no tab bar, no logo bar, no rail:
+ * everything that is not a conversation is reached from a conversation --
+ * the avatar (you), the + (start something), a teammate's profile (its tools and
+ * permissions) -- and comes back the same way.
  *
- * What a phone gets is the inbox and the conversation it leads to. The rail
- * used to carry seven destinations, three of which -- Home, Agents and Rooms
- * -- are now the same list, and the rest are things you go to from a
- * conversation rather than instead of one. So `primary` marks what a phone
- * shows; a desktop, which has the room, still shows every destination.
- *
- * The vocabulary is AmazAI's own: a Room is several companions on one
- * thread, a Routine is work that runs on a schedule, and an Artifact is
- * something a run produced and sealed.
+ * On a phone that is the roster and the thread it opens, one at a time. On a
+ * desktop it is the same thing widened: the roster on the left, the open
+ * conversation beside it, and (from the conversation) a details pane on the
+ * right. One mental model at every size, not a separate dashboard.
  */
-const NAV = [
-  { to: '/',           label: 'Inbox',      end: true, icon: 'inbox',   primary: true },
-  { to: '/marketplace', label: 'Marketplace', icon: 'store', primary: true },
-  { to: '/routines',   label: 'Routines',   icon: 'clock' },
-  { to: '/artifacts',  label: 'Artifacts',  icon: 'layers' },
-  { to: '/settings',   label: 'Settings',   icon: 'sliders', primary: true },
+
+/** A conversation owns the screen: an agent's thread, or a room's. `/agents/new`
+ *  is a full-screen flow of its own, not a conversation. */
+const FOCUSED = [/^\/agents\/(?!new$)[^/]+$/, /^\/rooms\/[^/]+$/];
+
+/** Screens that own their own chrome, so the page frame stays out of the way. */
+const OWN_CHROME = [/^\/agents\/new$/];
+
+const TITLES = [
+  [/^\/agents\/[^/]+\/settings$/, 'Settings'],
+  [/^\/agents/, 'Agents'],
+  [/^\/marketplace/, 'Skills'],
+  [/^\/connectors/, 'Connect a tool'],
+  [/^\/rooms/, 'Rooms'],
+  [/^\/routines/, 'Routines'],
+  [/^\/artifacts/, 'Files and artifacts'],
+  [/^\/settings/, 'Settings'],
+  [/^\/usage/, 'Billing'],
+  [/^\/characters/, 'Characters'],
 ];
 
-/**
- * A conversation owns the screen on a phone.
- *
- * Reading a thread and answering in it is the whole task, and a bottom bar
- * over a composer costs a thumb's width of it for destinations nobody wants
- * mid-sentence. The rail is still one back-gesture away, and it never leaves
- * on a desktop.
- */
-const FOCUSED = [/^\/agents\/[^/]+$/, /^\/rooms\/[^/]+$/];
-
-/** The detail pane before a conversation is chosen. Not a route -- picking a
- *  row does not navigate away from something, it fills a pane beside it. */
+/** The detail pane before a conversation is chosen. Not a route: picking a row
+ *  does not navigate away from something, it fills a pane beside it. */
 function NothingOpen() {
   return (
     <div className="split-empty">
       <Icon name="inbox" size={28} />
-      <p>Choose a companion or a room to open the conversation here.</p>
+      <p>Choose an agent or a room to open the conversation here.</p>
+    </div>
+  );
+}
+
+/** Everything that is not a conversation: a floating back control and a quiet
+ *  title, and the page underneath. */
+function PageFrame({ pathname, children }) {
+  const navigate = useNavigate();
+  const title = (TITLES.find(([re]) => re.test(pathname)) || [null, ''])[1];
+  const back = () => (window.history.length > 1 ? navigate(-1) : navigate('/'));
+  return (
+    <div className="pgf">
+      <header className="pgf-bar">
+        <button type="button" className="pgf-back" aria-label="Back" onClick={back}>
+          <Icon name="back" size={21} />
+        </button>
+        <h1>{title}</h1>
+        <span className="pgf-spacer" />
+      </header>
+      <div className="pgf-body">{children}</div>
     </div>
   );
 }
@@ -55,56 +77,40 @@ function NothingOpen() {
 export default function Shell() {
   const { pathname } = useLocation();
   const focused = FOCUSED.some((re) => re.test(pathname));
-  // ≥900px is also where the rail stops being a bottom bar (styles.css), so
-  // a single breakpoint decides both: below it, a phone has room for one
-  // screen at a time and the inbox route and the conversation route already
-  // trade places on their own.
+  const ownChrome = OWN_CHROME.some((re) => re.test(pathname));
+  const home = pathname === '/';
+  // One breakpoint decides everything: below it a phone has room for a single
+  // screen and the roster and the conversation trade places on their own.
   const desktop = useMediaQuery('(min-width: 900px)');
+  const split = desktop && (home || focused);
 
-  /**
-   * At desktop width, the inbox is a list beside whatever it leads to, not a
-   * screen you leave to open one. `/routines`, `/settings` and the rest are
-   * still full width -- the split is specific to conversations, which is
-   * the thing this was written to fix: today desktop keeps the rail and
-   * navigates between them, so opening a companion loses the list it came
-   * from and there is no way back to it without a second click.
-   */
-  const split = desktop && (pathname === '/' || focused);
+  // A theme chosen on another device: adopted here only if this device has never chosen,
+  // so it can fill a gap but never override what someone picked on this screen.
+  useEffect(() => {
+    if (explicitMode()) return;
+    api.settings().then((s) => { if (s?.theme && s.theme !== 'dark') applyMode(s.theme); }).catch(() => {});
+  }, []);
 
   return (
-    <div className="shell" data-focused={focused ? 'true' : undefined}>
+    <ContactsProvider>
+    <div className="app" data-focused={focused ? 'true' : undefined}>
       <PresenceFeed />
-      <header className="shell-top">
-        <Logo size={24} title="AmazAI" />
-        <span style={{ flex: 1 }} />
-        <AccountMenu />
-      </header>
-
-      <nav className="shell-rail" aria-label="Sections">
-        {NAV.map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.end}
-                   data-primary={n.primary ? 'true' : undefined}
-                   className={({ isActive }) => `rail-item ${isActive ? 'on' : ''}`}>
-            <Icon name={n.icon} size={21} className="rail-glyph" />
-            <span className="rail-label">{n.label}</span>
-          </NavLink>
-        ))}
-      </nav>
-
-      <main className={`shell-main${split ? ' shell-main--split' : ''}`}>
+      <main className={`app-main${split ? ' app-main--split' : ''}`}>
         {split ? (
-          <div className="shell-split">
-            <div className="shell-split-list"><Inbox variant="pane" /></div>
+          <div className="app-split">
+            <aside className="app-list"><Inbox variant="pane" /></aside>
             {/* Not `<Outlet/>` at "/": that route's own element is this same
-                `<Inbox/>`, and mounting it twice would fetch the account's
-                threads and approvals twice for two lists that would then
-                drift the moment one of them re-read. */}
-            <div className="shell-split-detail">{focused ? <Outlet /> : <NothingOpen />}</div>
+                `<Inbox/>`, and mounting it twice would fetch the threads and
+                approvals twice for two lists that would then drift apart. */}
+            <section className="app-detail">{focused ? <Outlet /> : <NothingOpen />}</section>
           </div>
-        ) : (
+        ) : (home || focused || ownChrome) ? (
           <Outlet />
+        ) : (
+          <PageFrame pathname={pathname}><Outlet /></PageFrame>
         )}
       </main>
     </div>
+    </ContactsProvider>
   );
 }

@@ -1,3 +1,4 @@
+import ToolsSheet from './ToolsSheet';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { SCHEDULE_PRESETS } from '../schedules';
@@ -38,16 +39,18 @@ function Frame({ icon, title, children, actions }) {
  *  answer: the Bot carries on with what it can do without it. */
 function ConnectCard({ card }) {
   const [dismissed, setDismissed] = useState(false);
+  const [picking, setPicking] = useState(false);
   if (dismissed) return null;
   return (
     <Frame icon={<Icon name="plug" size={20} />} title={`Connect ${card.name}`}
            actions={(
              <>
-               <Link className="btn-link primary" to="/marketplace">Connect {card.name}</Link>
+               <button type="button" className="primary" onClick={() => setPicking(true)}>Connect {card.name}</button>
                <button type="button" className="ghost" onClick={() => setDismissed(true)}>Not now</button>
              </>
            )}>
       <span>{card.why}</span>
+      {picking && <ToolsSheet initialQuery={card.name} onClose={() => setPicking(false)} />}
     </Frame>
   );
 }

@@ -6,7 +6,7 @@ import CoordinationFeed from './CoordinationFeed';
 import Icon from './Icon';
 import RoutineList from './RoutineList';
 
-function Activity({ threadId, agents }) {
+export function Activity({ threadId, agents }) {
   const [items, setItems] = useState([]);
   const [error, setError] = useState('');
 
@@ -20,7 +20,7 @@ function Activity({ threadId, agents }) {
   return <CoordinationFeed items={items} agents={agents} />;
 }
 
-function Computer({ threadId, agent }) {
+export function Computer({ threadId, agent }) {
   const [lines, setLines] = useState([]);
   const [cmd, setCmd] = useState('');
   const [history, setHistory] = useState([]);
@@ -99,7 +99,7 @@ function Computer({ threadId, agent }) {
   );
 }
 
-function Usage({ agent }) {
+export function Usage({ agent }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
 
@@ -148,7 +148,7 @@ function Usage({ agent }) {
  * API refuses to let an edit move a fact between the two, so correcting one can
  * never quietly publish it to everyone.
  */
-function Memory({ agent, onChange }) {
+export function Memory({ agent, onChange }) {
   const [scope, setScope] = useState('agent');
   const [shared, setShared] = useState(null);
   const [editing, setEditing] = useState(null);       // { memId, title, body, kind }
@@ -356,7 +356,7 @@ function Access({ agent }) {
   );
 }
 
-function Skills({ agent, onChange }) {
+export function Skills({ agent, onChange }) {
   const [catalog, setCatalog] = useState([]);
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);

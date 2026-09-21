@@ -329,3 +329,51 @@ class TestAtomicity:
 
         retry = store.claim("agent:abc", "pending", field="agentId")
         assert retry == "ops"
+
+
+# --- identity: a Bot knows who it is -------------------------------------------
+
+def _bot(**over):
+    base = {"name": "Tanzie", "title": "Operations", "role": "Sr Director, Head of Ops",
+            "description": "Head of business operations and strategy"}
+    base.update(over)
+    return base
+
+
+def test_the_system_prompt_tells_a_bot_its_name_title_role_and_description():
+    from amazai import agentcore
+    prompt = agentcore.build_system_prompt(_bot(), [])
+    for fact in ("Tanzie", "Operations", "Sr Director, Head of Ops",
+                 "Head of business operations and strategy"):
+        assert fact in prompt
+    # Identity leads: it is the first thing the model reads, ahead of the rules.
+    assert prompt.index("You are Tanzie") < prompt.index("Operating rules")
+
+
+def test_an_unnamed_profile_adds_no_identity_block_and_does_not_break():
+    from amazai import agentcore
+    prompt = agentcore.build_system_prompt({"role": "Researcher"}, [])
+    assert "You are" not in prompt.split("Operating rules")[0]
+    assert prompt.startswith("Researcher")
+
+
+def test_the_greeting_the_operator_read_reaches_the_model_without_becoming_a_turn():
+    from amazai import agentcore
+    greeting = "Hey Jaylen — good to meet you. What do you mainly want me for?"
+    history = [{"role": "assistant", "text": greeting, "starter": True},
+               {"role": "user", "text": "Managing my inbox"}]
+    # Not a turn: a conversation cannot open on an assistant message.
+    turns = agentcore.build_messages(history)
+    assert [t["role"] for t in turns] == ["user"]
+    # But the Bot is told, and told not to greet a second time.
+    prompt = agentcore.build_system_prompt(_bot(), [], opening=greeting)
+    assert greeting in prompt and "do not greet again" in prompt
+
+
+def test_agentcore_keeps_every_method_after_the_harness_id_helper():
+    # A module-level helper defined between two methods silently swallowed
+    # update_filesystem into its own body; nothing failed until it was called.
+    from amazai import agentcore
+    for name in ("get_harness", "missing_inline_tools", "add_inline_tools",
+                 "update_filesystem"):
+        assert callable(getattr(agentcore.AgentCore, name)), name

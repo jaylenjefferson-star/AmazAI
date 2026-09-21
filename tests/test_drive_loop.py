@@ -21,7 +21,8 @@ from amazai import approvals, keys as K, runs
 from amazai.states import RunState
 
 from tests.test_agents_api import api_table, call  # noqa: F401
-from tests.test_runtime_loop import POST, World
+from tests.fake_composio import WRITE
+from tests.loop_world import POST, World
 
 
 def text(t):
@@ -93,7 +94,7 @@ class TestDeliverFirstThenOffer:
 
     def test_a_connect_offer_needs_no_pause_and_the_run_completes(self, world):
         world.script([text("I set up a workspace."),
-                      *tool_use("request_connector", {"connectorId": "pipedream:nonexistent", "why": "x"})])
+                      *tool_use("request_connector", {"connectorId": "nonexistentapp", "why": "x"})])
         assert world.drive()["state"] == RunState.COMPLETED.value
 
     def test_a_bot_proposal_pauses_the_run_on_an_approval_that_names_its_rule(self, world):
@@ -113,15 +114,16 @@ class TestDeliverFirstThenOffer:
 
 class TestAWriteIsHeldThenResumed:
     def test_a_slack_post_the_model_just_calls_pauses_the_run_and_never_reaches_slack(self, world):
-        world.script([text("Posting it now."), *tool_use("slack.post", POST)])
+        world.script([text("Posting it now."), *tool_use("connector_call", {"tool": WRITE, "arguments": POST})])
         assert world.drive()["state"] == RunState.AWAITING_APPROVAL.value
-        assert world.proxy.calls == []
+        assert world.executed == []
         step = [m for m in world.messages() if m["role"] == "assistant"][-1]["steps"][0]
-        assert (step["name"], step["review"]["decision"], step["review"]["rule"]) == ("slack.post", "asked", "floor")
+        assert (step["name"], step["review"]["decision"], step["review"]["rule"]) == (WRITE, "asked", "default")
 
     def test_approving_resumes_and_the_same_call_now_runs_once(self, world):
-        world.script([text("Posting it now."), *tool_use("slack.post", POST)],
-                     [*tool_use("slack.post", POST, "tu-2"), text("Posted to #launch.")])
+        call_ = {"tool": WRITE, "arguments": POST}
+        world.script([text("Posting it now."), *tool_use("connector_call", call_)],
+                     [*tool_use("connector_call", call_, "tu-2"), text("Posted to #launch.")])
         world.drive()
         pending = call("GET", "/approvals")[1]["approvals"][0]
         status, body = call("POST", f"/approvals/{pending['runId']}/{pending['approvalId']}", {"approve": True})
@@ -129,9 +131,9 @@ class TestAWriteIsHeldThenResumed:
 
         # The decision arrives as the D4 fallback turn, appended after the history.
         world.drive({"runId": world.run["runId"], "resume": True,
-                     "resumeNote": 'Your decision on "slack.post": approved.'})
+                     "resumeNote": f'Your decision on "{WRITE}": approved.'})
         assert world.state() == RunState.COMPLETED.value
-        assert len(world.proxy.calls) == 1, "the approved write ran zero or several times"
+        assert len(world.executed) == 1, "the approved write ran zero or several times"
         final = [m for m in world.messages() if m["role"] == "assistant"][-1]
         assert final["text"] == "Posted to #launch."
         assert final["steps"][0]["review"]["rule"] == "approved"

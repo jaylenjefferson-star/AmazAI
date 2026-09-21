@@ -190,3 +190,52 @@ class _NullPush:
 
     def handoff(self, *a, **k):
         pass
+
+
+class TestApprovingMakesTheAgentUsable:
+    """An owner who approves an agent another agent proposed gets a teammate that
+    can use what they have connected, not an empty seat. The proposal itself still
+    carries no grants (a model cannot ask for any); the owner's own approval is what
+    applies the owner's connected apps."""
+
+    def _approve(self, store, api_table, monkeypatch, parent_capability=None):
+        from tests.fake_composio import FakeTransport, wire
+        wire(monkeypatch, FakeTransport(connected={"slack"}))
+        call("POST", "/agents", NEW_AGENT)
+        call("POST", "/connectors/composio:slack/install", {})
+        if parent_capability:
+            call("PUT", "/agents/cloud-operations/grants/composio:slack", {"capability": parent_capability})
+        run = runs.create(store, agent_id="cloud-operations", thread_id="dm-cloud-operations", goal="x")
+        run = runs.advance(store, run, RunState.PLANNING)
+        run = runs.advance(store, run, RunState.EXECUTING)
+        proposal = orch._agent_creation_proposal(
+            {"name": "Shadow Agent", "role": "Handles a bounded lane."}, parent_agent_id="cloud-operations")
+        assert proposal["grants"] == [], "a model must never be able to ask for grants"
+        apv = approvals.request(store, run, action="agent.create", arguments=proposal,
+                                why="x", capability=Capability.ADMIN)
+        runs.pause_for_approval(store, run, apv)
+        status, result = call("POST", f"/approvals/{run['runId']}/{apv['approvalId']}", {"approve": True})
+        assert status == 200, result
+        return result["createdAgent"]["agentId"]
+
+    def test_the_approved_agent_starts_with_the_apps_the_owner_connected(self, store, api_table, monkeypatch):
+        from amazai import connectors as C
+        child = self._approve(store, api_table, monkeypatch)
+        assert [g.slug for g in C.granted_apps(store, child)] == ["slack"]
+
+    def test_it_does_not_inherit_a_read_only_parent_limit_or_anything_else_from_it(self, store, api_table, monkeypatch):
+        from amazai import connectors as C
+        from amazai.policy import Capability as Cap
+        child = self._approve(store, api_table, monkeypatch, parent_capability="read")
+        [parent] = C.granted_apps(store, "cloud-operations")
+        assert parent.capability is Cap.READ
+        [held] = C.granted_apps(store, child)
+        assert held.capability is Cap.ADMIN, "the child got the parent's limit instead of the owner's default"
+
+    def test_and_a_write_by_the_new_agent_still_asks(self, store, api_table, monkeypatch):
+        # Openness is about reach, not about skipping confirmation.
+        from amazai import connectors as C
+        from amazai.policy import Capability as Cap, evaluate
+        child = self._approve(store, api_table, monkeypatch)
+        assert C.granted_apps(store, child)
+        assert evaluate("SLACK_SEND_MESSAGE", Cap.WRITE).required is True

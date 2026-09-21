@@ -191,7 +191,8 @@ class TestExistingHarnessesAreReportedNotGuessedAt:
     def test_a_harness_from_before_the_new_tools_is_missing_exactly_them(self):
         report = core_with(self.OLD).missing_inline_tools("arn")
         assert report["known"] is True
-        assert report["missing"] == ["propose_routine", "request_connector"]
+        assert sorted(report["missing"]) == ["connector_call", "connector_search",
+                                            "propose_routine", "request_connector"]
 
     def test_a_current_harness_is_missing_nothing(self):
         every = [{"type": "inline_function", "name": n} for n in agentcore.INLINE_TOOLS]
