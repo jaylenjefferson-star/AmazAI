@@ -139,3 +139,91 @@ class TestFlush:
             "name": "shell", "toolUseId": "tu-8"}}}})
         p.flush()
         assert p.flush() == []
+
+
+
+class TestUsage:
+    """The event that carries what a turn cost.
+
+    Unparsed, it is indistinguishable from a free model call: every budget
+    ceiling downstream reads numbers that stay at zero. So the shapes matter
+    more here than anywhere else in this parser.
+    """
+
+    def test_usage_nested_under_metadata(self):
+        p = StreamParser()
+        out = p.feed({"metadata": {
+            "usage": {"inputTokens": 48210, "outputTokens": 3120, "totalTokens": 51330},
+            "metrics": {"latencyMs": 8140}}})
+        assert out[0].kind is EventKind.USAGE
+        assert out[0].input_tokens == 48210
+        assert out[0].output_tokens == 3120
+        assert out[0].latency_ms == 8140
+
+    def test_usage_flattened_onto_metadata(self):
+        p = StreamParser()
+        out = p.feed({"metadata": {"inputTokens": 100, "outputTokens": 20}})
+        assert out[0].kind is EventKind.USAGE
+        assert (out[0].input_tokens, out[0].output_tokens) == (100, 20)
+
+    def test_usage_at_the_top_level(self):
+        p = StreamParser()
+        out = p.feed({"usage": {"inputTokens": 7, "outputTokens": 3}})
+        assert out[0].kind is EventKind.USAGE
+
+    def test_snake_case_and_prompt_completion_spellings(self):
+        p = StreamParser()
+        out = p.feed({"metadata": {"usage": {"prompt_tokens": 12, "completion_tokens": 4}}})
+        assert (out[0].input_tokens, out[0].output_tokens) == (12, 4)
+
+    def test_cached_and_reasoning_tokens_are_carried(self):
+        p = StreamParser()
+        out = p.feed({"metadata": {"usage": {
+            "inputTokens": 10, "outputTokens": 2,
+            "cacheReadInputTokens": 900, "reasoningTokens": 44}}})
+        assert out[0].cached_tokens == 900
+        assert out[0].reasoning_tokens == 44
+
+    def test_unreported_cached_tokens_stay_none(self):
+        # None and 0 must remain distinguishable: "the provider did not say"
+        # is not the same fact as "the provider said none".
+        p = StreamParser()
+        out = p.feed({"metadata": {"usage": {"inputTokens": 10, "outputTokens": 2}}})
+        assert out[0].cached_tokens is None
+        assert out[0].reasoning_tokens is None
+
+    def test_counts_arriving_as_strings_are_coerced(self):
+        p = StreamParser()
+        out = p.feed({"metadata": {"usage": {"inputTokens": "480", "outputTokens": "31.0"}}})
+        assert (out[0].input_tokens, out[0].output_tokens) == (480, 31)
+
+    def test_a_reported_zero_is_a_usage_event(self):
+        p = StreamParser()
+        out = p.feed({"metadata": {"usage": {"inputTokens": 0, "outputTokens": 0}}})
+        assert out[0].kind is EventKind.USAGE
+
+    def test_metadata_without_counts_is_not_a_usage_event(self):
+        # Falling through to UNKNOWN is right: recording this as usage would
+        # mean writing a zero-cost model call that never happened.
+        p = StreamParser()
+        out = p.feed({"metadata": {"metrics": {"latencyMs": 12}}})
+        assert out[0].kind is EventKind.UNKNOWN
+
+    def test_unusable_counts_are_not_a_usage_event(self):
+        p = StreamParser()
+        out = p.feed({"metadata": {"usage": {"inputTokens": "many", "outputTokens": None}}})
+        assert out[0].kind is EventKind.UNKNOWN
+
+    def test_usage_does_not_disturb_text_or_tool_parsing(self):
+        p = StreamParser()
+        out = _drain(p, [
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
+            {"metadata": {"usage": {"inputTokens": 5, "outputTokens": 1}}},
+            {"contentBlockStart": {"contentBlockIndex": 1, "start": {"toolUse": {
+                "name": "shell", "toolUseId": "tu-9", "input": {"command": "ls"}}}}},
+            {"contentBlockStop": {"contentBlockIndex": 1}},
+        ])
+        kinds = [e.kind for e in out]
+        assert EventKind.TEXT in kinds
+        assert EventKind.USAGE in kinds
+        assert EventKind.TOOL_USE in kinds
