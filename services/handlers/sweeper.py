@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 import boto3
 
-from amazai import approvals, handoffs, keys as K, runs
+from amazai import approvals, handoffs, keys as K, metrics, runs
 from amazai.evidence import EvidenceWriter
 from amazai.push import Push
 from amazai.states import PAUSED, SWEEPABLE, RunState
@@ -62,6 +62,8 @@ def handler(event, context):  # noqa: ARG001
             total[key] += result[key]
 
     print(json.dumps(total))
+    for key in _RESULT_KEYS:
+        metrics.emit(f"Sweep{key[0].upper()}{key[1:]}", total[key], owners=total["owners"])
     return total
 
 
@@ -111,7 +113,8 @@ def _sweep_run(store: Store, push: Push, run: dict, state: RunState,
     if state in PAUSED:
         if runs.deadline_passed(run, now=now):
             _seal(store, push, run, RunState.EXPIRED,
-                  "expired while waiting; pending approvals were denied")
+                  "expired while waiting; pending approvals were denied",
+                  reason_code="approval_expired")
             result["runsExpired"] += 1
         return
 
@@ -124,7 +127,8 @@ def _sweep_run(store: Store, push: Push, run: dict, state: RunState,
         # The action may or may not have happened. Never silently retry it.
         _seal(store, push, run, RunState.FAILED,
               "worker failed with a tool call in flight; the outcome of "
-              f"{pending.get('toolUseId')} is unknown and was not retried")
+              f"{pending.get('toolUseId')} is unknown and was not retried",
+              reason_code="tool_call_in_flight")
         result["runsFailed"] += 1
         return
 
@@ -141,7 +145,8 @@ def _sweep_run(store: Store, push: Push, run: dict, state: RunState,
         # is told rather than left waiting on a run that will never settle.
         _seal(store, push, run, RunState.FAILED,
               "timed out: no heartbeat and past its deadline; presumed stuck "
-              "and stopped rather than resumed indefinitely")
+              "and stopped rather than resumed indefinitely",
+              reason_code="heartbeat_and_deadline")
         result["runsFailed"] += 1
         return
 
@@ -157,7 +162,8 @@ def _sweep_run(store: Store, push: Push, run: dict, state: RunState,
         result["runsResumed"] += 1
 
 
-def _seal(store: Store, push: Push, run: dict, state: RunState, reason: str) -> None:
+def _seal(store: Store, push: Push, run: dict, state: RunState, reason: str, *,
+         reason_code: str = "other") -> None:
     ev = EvidenceWriter(run["runId"])
     ev.error(run.get("cursor", {}).get("lastEventSeq", 0), "sweeper", reason)
     manifest = ev.seal(
@@ -169,6 +175,8 @@ def _seal(store: Store, push: Push, run: dict, state: RunState, reason: str) -> 
                  sealSha256=manifest.get("sealSha256"))
     push.run_end(run["runId"], run["threadId"], state.value, reason,
                  run.get("costUsd", 0.0))
+    metrics.emit("RunSweepSealed", 1, dimensions={"State": state.value, "Reason": reason_code},
+                runId=run["runId"], agentId=run.get("agentId", ""))
 
     # A swept run can be a coordinator's child too -- the worker that died
     # mid tool-call, or the run that finally expired past its deadline. Same

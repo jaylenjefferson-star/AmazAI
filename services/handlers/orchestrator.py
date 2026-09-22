@@ -22,10 +22,11 @@ import traceback
 import boto3
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
-                    continuation, cost, handoffs, keys as K, memory, onboarding, org, policy,
-                    provisioning, redact, review, router, routines, runs, skills,
+                    continuation, cost, handoffs, keys as K, memory, metrics, onboarding, org,
+                    policy, provisioning, redact, review, router, routines, runs, skills,
                     standard_runtime, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
@@ -343,7 +344,18 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     system_prompt += _reporting_note(store, agent)
 
 
-    run = runs.advance(store, run, RunState.PLANNING) if run["state"] == RunState.QUEUED.value else run
+    if run["state"] == RunState.QUEUED.value:
+        # How long this run sat queued before any worker picked it up --
+        # measured once, on the transition out of QUEUED, not on every
+        # invocation a retry or a resume also passes through here.
+        queued_at = run.get("createdAt")
+        if queued_at:
+            delay = (datetime.now(timezone.utc)
+                     - datetime.fromisoformat(queued_at.replace("Z", "+00:00"))).total_seconds()
+            metrics.emit("RunQueueDelaySeconds", delay, unit="Seconds",
+                         dimensions={"Trigger": (run.get("trigger") or {}).get("type", "user")},
+                         runId=run["runId"], agentId=run["agentId"], threadId=run["threadId"])
+        run = runs.advance(store, run, RunState.PLANNING)
     run = runs.advance(store, run, RunState.EXECUTING) if run["state"] == RunState.PLANNING.value else run
     # A retry is a fresh execution attempt. Moving it back through EXECUTING
     # before invoking preserves the state-machine edge and, crucially, lets a
@@ -675,9 +687,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             # Kept on the run: only the final attempt's evidence is sealed, so without
             # this the error that *started* a retry chain is gone by the time anyone
             # asks why it failed.
+            attempt = run.get("attempt", 0) + 1
             runs.advance(store, run, RunState.RETRYING,
-                         attempt=run.get("attempt", 0) + 1,
-                         lastError=stream_error[:500])
+                         attempt=attempt, lastError=stream_error[:500])
+            metrics.emit("RunRetryAttempt", attempt, dimensions={"ErrorClass": cls.cls.value},
+                        runId=run["runId"], agentId=run["agentId"])
             _reinvoke(run["runId"], store.owner_id, delay_note=cls.reason)
             return {"ok": True, "state": RunState.RETRYING.value, "retry": cls.reason}
 
@@ -1101,6 +1115,10 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
         # filed there (see `_record_handoff`), and that is the id
         # `POST /handoffs/{runId}/{hoffId}` needs to find it again.
         task_id = (run.get("trigger") or {}).get("taskId") or run["runId"]
+        metrics.emit("HandoffProposed", 1,
+                     dimensions={"AutoAccepted": str(handoff["status"] == "accepted")},
+                     taskId=task_id, handoffId=handoff["handoffId"],
+                     fromAgentId=agent["agentId"], toAgentId=handoff["toAgentId"])
         push.handoff(task_id, run["threadId"], handoff)
         _step(push, run, turn, "handoff", f"to {args.get('to')}{auto_note}",
               review.scoped("handoff", "you stay the owner, and no access travels with it"))

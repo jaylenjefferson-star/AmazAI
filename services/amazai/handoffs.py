@@ -19,7 +19,7 @@ just because the receiver's grant would otherwise cover the call.
 
 from __future__ import annotations
 
-from amazai import agents as A, collab, connectors, keys as K, policy, runs
+from amazai import agents as A, collab, connectors, keys as K, metrics, policy, runs
 from amazai.store import Conflict, Store, now_iso
 
 #: Outstanding children one task may have at once. A task-level analogue of
@@ -211,7 +211,10 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
     # After the child row exists, never before: `notify_coordinator_if_child`
     # queries `CHILD#` rows once this counter reaches zero, and that query
     # must never be able to find fewer rows than the count promised.
-    store.increment(K.task_pk(task_id), "META", "pendingChildren", 1)
+    active_now = store.increment(K.task_pk(task_id), "META", "pendingChildren", 1)
+    metrics.emit("TaskActiveChildren", active_now,
+                 taskId=task_id, childRunId=child["runId"],
+                 coordinatorRunId=coordinator_run["runId"], agentId=child["agentId"])
 
     return {"handoff": decided, "child": child, "receiver": receiver}
 
@@ -287,7 +290,11 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
     except Conflict:
         return None
 
+    metrics.emit("TaskChildCompleted", 1, dimensions={"Outcome": outcome},
+                 taskId=task_id, childRunId=run["runId"], coordinatorRunId=coordinator_run_id)
+
     remaining = store.increment(K.task_pk(task_id), "META", "pendingChildren", -1)
+    metrics.emit("TaskActiveChildren", max(0, remaining), taskId=task_id, childRunId=run["runId"])
     if remaining > 0:
         return None   # siblings still outstanding; whoever finishes last wakes the coordinator
 
@@ -315,4 +322,6 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
                  "outcome": outcome, "childCount": len(children), "doneCount": done})
 
     store.update(K.task_pk(task_id), "META", {"coordinatorRunId": continuation["runId"]})
+    metrics.emit("TaskFanInWake", 1, taskId=task_id, coordinatorRunId=continuation["runId"],
+                childCount=len(children), doneCount=done)
     return continuation
