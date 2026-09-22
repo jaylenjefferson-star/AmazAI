@@ -1,6 +1,7 @@
 import pytest
 
-from amazai.cost import Budget, RunCost, Verdict, check
+from amazai import keys as K
+from amazai.cost import Budget, RunCost, Verdict, check, spent_this_month
 
 
 def _budget(**kw):
@@ -169,3 +170,23 @@ class TestRunCostAccumulation:
         c.add_runtime(0.0, seconds=42.5)
         assert c.to_item()["runtimeSeconds"] == 42.5
         assert c.to_item()["runtimeUsd"] == 0.0
+
+
+class TestTwoOwnersWithTheSameAgentId:
+    """`agent_id` is a deterministic slug (e.g. 'chief' -- the default first-
+    Bot name), not a `new_id()`-random one, so without `owner_id` in the cost
+    row's own pk two owners' identically-named Bot would share one month's
+    ledger: same partition, each owner's spend counted against the other's
+    budget. See keys.cost_pk."""
+
+    def test_one_owners_spend_never_counts_against_the_other(self, two_stores):
+        from amazai.store import now_iso
+        store_a, store_b = two_stores
+        month = now_iso()[:7]  # spent_this_month always reads the current month
+        store_a.put({"pk": K.cost_pk(store_a.owner_id, "chief", month),
+                    "sk": K.run_pk("run-a"), "entity": "Cost", "totalUsd": 5.0})
+        store_b.put({"pk": K.cost_pk(store_b.owner_id, "chief", month),
+                    "sk": K.run_pk("run-b"), "entity": "Cost", "totalUsd": 0.25})
+
+        assert spent_this_month(store_a, "chief") == 5.0
+        assert spent_this_month(store_b, "chief") == 0.25

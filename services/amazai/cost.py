@@ -130,7 +130,7 @@ def spent_this_month(store, agent_id: str) -> float:
     from amazai import keys as K
     from amazai.store import now_iso
     month = now_iso()[:7]
-    rows = store.query(K.cost_pk(agent_id, month), limit=500)
+    rows = store.query(K.cost_pk(store.owner_id, agent_id, month), limit=500)
     return sum(float(r.get("totalUsd", 0.0)) for r in rows)
 
 
