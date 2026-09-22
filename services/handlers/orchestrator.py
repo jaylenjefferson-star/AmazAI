@@ -116,7 +116,7 @@ def _settle_paused_cancel(store: Store, run: dict) -> dict:
     fresh = store.get(run["pk"], "META")
     if RunState(fresh["state"]) is not RunState.CANCELLING:
         return {"ok": True, "skipped": f"run is {fresh['state']}"}
-    agent = store.try_get(K.agent_pk(fresh["agentId"]), "META") or {"name": fresh["agentId"]}
+    agent = store.try_get(K.agent_pk(store.owner_id, fresh["agentId"]), "META") or {"name": fresh["agentId"]}
     _finish(store, fresh, RunState.CANCELLED, "cancelled by you while it was waiting",
             Push(store))
     _chain_redirect(store, fresh["pk"], agent)
@@ -231,7 +231,7 @@ def _paused_turn(store: Store, run: dict, event: dict) -> dict | None:
 
 def _drive(store: Store, run: dict, event: dict) -> dict:
     push = Push(store)
-    agent = store.get(K.agent_pk(run["agentId"]), "META")
+    agent = store.get(K.agent_pk(store.owner_id, run["agentId"]), "META")
 
     if agent.get("state") != "active":
         _fail(store, run, f"agent {agent.get('name')} is {agent.get('state')}")
@@ -287,7 +287,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # sorts chronologically, and an ascending `limit=50` returns the fifty oldest
     # facts a Bot ever saved. Past fifty it could no longer see anything it had
     # recently learned -- the exact symptom of a Bot that does not remember.
-    memories = memory.visible(store.query(K.agent_pk(run["agentId"]), sk_prefix="MEM#",
+    memories = memory.visible(store.query(K.agent_pk(store.owner_id, run["agentId"]), sk_prefix="MEM#",
                                           limit=MAX_MEMORY, ascending=False))
     # Shared user memory (name, timezone, standing preferences) is visible to
     # every agent's context alongside its own, on by default -- see
@@ -800,7 +800,7 @@ def _room_note(store: Store, thread: dict, agent: dict, thread_id: str) -> str:
     for aid in thread.get("agentIds") or []:
         if aid == me:
             continue
-        row = store.try_get(K.agent_pk(aid), "META")
+        row = store.try_get(K.agent_pk(store.owner_id, aid), "META")
         if not row or row.get("status") not in A.RUNNABLE:
             continue
         detail = ", ".join(b for b in (row.get("title"), row.get("role")) if b)
@@ -1094,7 +1094,7 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
         # leaves `status: "proposed"` exactly as before; nothing here can
         # make a handoff *less* likely to reach a human.
         auto_note = ""
-        receiver = store.try_get(K.agent_pk(handoff["toAgentId"]), "META")
+        receiver = store.try_get(K.agent_pk(store.owner_id, handoff["toAgentId"]), "META")
         if receiver is not None and receiver.get("status") in A.RUNNABLE:
             ok, reason = handoffs.can_auto_accept(store, handoff, receiver, run)
             if ok:
@@ -1163,7 +1163,7 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
         scope = args.get("scope", "agent")
         try:
             if scope == "agent":
-                pk = K.agent_pk(agent["agentId"])
+                pk = K.agent_pk(store.owner_id, agent["agentId"])
             elif scope == "task":
                 task_id = args.get("task_id") or (run.get("trigger") or {}).get("taskId") or run["runId"]
                 pk = K.task_pk(task_id)
@@ -1577,7 +1577,7 @@ def _update_agent_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
         return refuse("this only works when the operator's own message started the turn; "
                       "ask them for the change instead")
     target_id = A.agent_ref(args.get("agentId"))
-    target = store.try_get(K.agent_pk(target_id), "META") if target_id else None
+    target = store.try_get(K.agent_pk(store.owner_id, target_id), "META") if target_id else None
     if not target or target.get("parentAgentId") != agent["agentId"]:
         return refuse("you can only refine a Bot you created")
     body = {k: args[k].strip() for k in _REFINABLE
@@ -1589,7 +1589,7 @@ def _update_agent_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
         changes, events = A.plan_update(target, body, actor)
     except (A.ValidationError, A.Escalation) as exc:
         return refuse(str(exc))
-    store.update(K.agent_pk(target_id), "META", changes)
+    store.update(K.agent_pk(store.owner_id, target_id), "META", changes)
     for event_row in events:
         store.put(event_row)
     ev.action(seq, "agent.update", f"refined {target_id}", agentId=target_id)
@@ -1727,7 +1727,7 @@ def _create_group_chat(store: Store, run: dict, agent: dict, args: dict) -> dict
 
     members = []
     for agent_id in agent_ids:
-        member = store.try_get(K.agent_pk(agent_id), "META")
+        member = store.try_get(K.agent_pk(store.owner_id, agent_id), "META")
         if not member or member.get("status") not in A.RUNNABLE:
             raise ValueError(f"no such active Bot {agent_id!r}")
         members.append(member)
@@ -1828,7 +1828,7 @@ def _message_agent(store: Store, run: dict, agent: dict, args: dict) -> dict:
         raise collab.MessagingError("an agent cannot message itself")
     args = {**args, "trace_id": _trace_for(run)}
 
-    to_agent = store.try_get(K.agent_pk(to_agent_id), "META")
+    to_agent = store.try_get(K.agent_pk(store.owner_id, to_agent_id), "META")
     if to_agent is None or to_agent.get("status") not in A.RUNNABLE:
         raise collab.MessagingError(f"no such active recipient {to_agent_id!r}")
 

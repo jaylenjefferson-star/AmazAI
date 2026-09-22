@@ -34,7 +34,7 @@ def no_wake_invoke(monkeypatch):
 @pytest.fixture
 def agents(store):
     for row in (ENG, OPS):
-        store.put({"pk": K.agent_pk(row["agentId"]), "sk": "META", "entity": "Agent", **row})
+        store.put({"pk": K.agent_pk(store.owner_id, row["agentId"]), "sk": "META", "entity": "Agent", **row})
     return store
 
 

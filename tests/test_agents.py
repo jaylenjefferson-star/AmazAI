@@ -257,40 +257,112 @@ class TestAudit:
 # --- tenant isolation -------------------------------------------------------
 
 class TestTenantIsolation:
+    """`plan_create` keys every row off `actor.user_id` -- correct because
+    `api.py` always builds `Store(_owner(event))` and `_actor(event)` from
+    the same verified principal, so they never disagree in production. These
+    tests need an actor matching *this* test's store for the same reason;
+    `PERSON` (used elsewhere in this file, including where the literal
+    `"user-1"` is asserted) is deliberately not it here."""
+
     def test_one_tenant_cannot_read_anothers_agent(self, two_stores):
         a, b = two_stores
-        plan = A.plan_create(a_body(), PERSON, org_connectors=ORG)
+        actor = A.Actor(user_id=a.owner_id, org_id="org-1")
+        plan = A.plan_create(a_body(), actor, org_connectors=ORG)
         a.transact_put(plan.items)
 
-        assert a.get(K.agent_pk(plan.agent_id), "META")["name"] == "Cloud Operations"
-        assert b.try_get(K.agent_pk(plan.agent_id), "META") is None
+        assert a.get(K.agent_pk(a.owner_id, plan.agent_id), "META")["name"] == "Cloud Operations"
+        assert b.try_get(K.agent_pk(b.owner_id, plan.agent_id), "META") is None
 
     def test_one_tenant_cannot_patch_anothers_agent(self, two_stores):
         from amazai.store import Conflict
         a, b = two_stores
-        plan = A.plan_create(a_body(), PERSON, org_connectors=ORG)
+        actor = A.Actor(user_id=a.owner_id, org_id="org-1")
+        plan = A.plan_create(a_body(), actor, org_connectors=ORG)
         a.transact_put(plan.items)
 
         with pytest.raises(Conflict):
-            b.update(K.agent_pk(plan.agent_id), "META", {"name": "Hijacked"})
-        assert a.get(K.agent_pk(plan.agent_id), "META")["name"] == "Cloud Operations"
+            b.update(K.agent_pk(b.owner_id, plan.agent_id), "META", {"name": "Hijacked"})
+        assert a.get(K.agent_pk(a.owner_id, plan.agent_id), "META")["name"] == "Cloud Operations"
 
     def test_one_tenant_cannot_see_anothers_agent_in_a_listing(self, two_stores):
         a, b = two_stores
-        a.transact_put(A.plan_create(a_body(), PERSON, org_connectors=ORG).items)
+        actor = A.Actor(user_id=a.owner_id, org_id="org-1")
+        a.transact_put(A.plan_create(a_body(), actor, org_connectors=ORG).items)
 
         assert len(a.query_index("gsi1", "gsi1pk", "AGENTS")) == 1
         assert b.query_index("gsi1", "gsi1pk", "AGENTS") == []
 
     def test_an_agents_grants_stay_with_its_tenant(self, two_stores):
         a, b = two_stores
+        actor = A.Actor(user_id=a.owner_id, org_id="org-1")
         plan = A.plan_create(
             a_body(grants=[{"connectorId": "slack", "allowedTools": ["slack.read"]}]),
-            PERSON, org_connectors=ORG)
+            actor, org_connectors=ORG)
         a.transact_put(plan.items)
 
-        assert len(a.query(K.agent_pk(plan.agent_id), sk_prefix="GRANT#")) == 1
-        assert b.query(K.agent_pk(plan.agent_id), sk_prefix="GRANT#") == []
+        assert len(a.query(K.agent_pk(a.owner_id, plan.agent_id), sk_prefix="GRANT#")) == 1
+        assert b.query(K.agent_pk(b.owner_id, plan.agent_id), sk_prefix="GRANT#") == []
+
+    def test_two_owners_creating_the_identically_named_bot_do_not_collide(self, two_stores):
+        """The scenario that actually matters: `agentId` is slugified from
+        the display name (`normalize_agent_id`), not `new_id()`-generated --
+        identical for every owner whose onboarding creates the same default
+        seat roster ("Cloud Operations" -> `cloud-operations`, every time).
+        Before `agent_pk` was owner-scoped, owner B's create here would have
+        silently overwritten owner A's row outright: same pk, an
+        unconditional transact_put, ownerId on the row guarding only reads.
+
+        This only exercises the Agent/Grant/MemoryNamespace/AuditEvent rows
+        directly, not the whole plan: `plan_create` also queues a
+        `dm-<agentId>` Thread (and its first Message, under the same pk),
+        and that id has the identical collision -- still open, deliberately
+        not fixed alongside this one. Unlike agentId, a thread's id is not
+        just a key: it is already live in production (`dm-eng`, the one real
+        account's actual conversation), so changing how it is derived is a
+        migration question, not a same-shaped find-and-replace. See
+        `test_the_dm_thread_this_agent_gets_still_collides`."""
+        a, b = two_stores
+        actor_a = A.Actor(user_id=a.owner_id, org_id="org-1")
+        actor_b = A.Actor(user_id=b.owner_id, org_id="org-2")
+
+        not_yet_owner_safe = {"Thread", "Message"}
+        plan_a = A.plan_create(a_body(), actor_a, org_connectors=ORG)
+        a.transact_put([i for i in plan_a.items if i["entity"] not in not_yet_owner_safe])
+        plan_b = A.plan_create(a_body(), actor_b, org_connectors=ORG)
+        b.transact_put([i for i in plan_b.items if i["entity"] not in not_yet_owner_safe])
+
+        assert plan_a.agent_id == plan_b.agent_id == "cloud-operations"
+        row_a = a.get(K.agent_pk(a.owner_id, "cloud-operations"), "META")
+        row_b = b.get(K.agent_pk(b.owner_id, "cloud-operations"), "META")
+        assert row_a["orgId"] == "org-1"
+        assert row_b["orgId"] == "org-2"
+        assert a.try_get(K.agent_pk(a.owner_id, "cloud-operations"), "META") is not None, \
+            "owner a's row must still exist, undisturbed by owner b's create"
+        assert len(a.query_index("gsi1", "gsi1pk", "AGENTS")) == 1
+        assert len(b.query_index("gsi1", "gsi1pk", "AGENTS")) == 1
+
+    def test_the_dm_thread_this_agent_gets_still_collides(self, two_stores):
+        """Characterises the gap the test above deliberately steps around --
+        a regression guard against this silently starting to pass (which
+        would mean someone fixed it without this comment being updated) and
+        the clearest possible record of what "fix the thread collision too"
+        would actually need to change. `dm-<agentId>` is identical for two
+        owners' identically-named Bot, same as agentId itself was; the fix
+        is not a one-line mirror of the agent_pk fix, because the DM thread
+        id is not just an internal key the way a pk is -- it is already live
+        data (the one real account's `dm-eng` thread) that a re-derivation
+        would orphan, so it needs a migration decision, not a find-and-replace."""
+        a, b = two_stores
+        actor_a = A.Actor(user_id=a.owner_id, org_id="org-1")
+        actor_b = A.Actor(user_id=b.owner_id, org_id="org-2")
+
+        plan_a = A.plan_create(a_body(), actor_a, org_connectors=ORG)
+        a.transact_put(plan_a.items)
+        plan_b = A.plan_create(a_body(), actor_b, org_connectors=ORG)
+
+        from amazai.store import Conflict
+        with pytest.raises(Conflict):
+            b.transact_put(plan_b.items)
 
 
 # --- atomicity --------------------------------------------------------------
@@ -310,16 +382,17 @@ class TestAtomicity:
     def test_rollback_removes_every_row_the_agent_consisted_of(self, store):
         """The harness is the one step that cannot join the transaction. When
         it fails, this is what stops a half-created agent existing."""
+        actor = A.Actor(user_id=store.owner_id, org_id="org-1")
         plan = A.plan_create(
             a_body(grants=[{"connectorId": "slack", "allowedTools": ["slack.read"]}]),
-            PERSON, org_connectors=ORG)
+            actor, org_connectors=ORG)
         store.transact_put(plan.items)
-        assert store.try_get(K.agent_pk(plan.agent_id), "META") is not None
+        assert store.try_get(K.agent_pk(store.owner_id, plan.agent_id), "META") is not None
 
         store.transact_delete(plan.rollback_keys)
 
-        assert store.try_get(K.agent_pk(plan.agent_id), "META") is None
-        assert store.query(K.agent_pk(plan.agent_id), sk_prefix="GRANT#") == []
+        assert store.try_get(K.agent_pk(store.owner_id, plan.agent_id), "META") is None
+        assert store.query(K.agent_pk(store.owner_id, plan.agent_id), sk_prefix="GRANT#") == []
         assert store.query_index("gsi1", "gsi1pk", "AGENTS") == []
 
     def test_an_idempotent_retry_returns_the_first_agent(self, store):

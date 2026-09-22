@@ -112,7 +112,8 @@ def pk_for(scope: str, *, agent_id: str | None = None, owner_id: str | None = No
           task_id: str | None = None) -> str:
     if scope == "agent":
         _require(bool(agent_id), "agent scope requires agent_id")
-        return K.agent_pk(agent_id)
+        _require(bool(owner_id), "agent scope requires owner_id")
+        return K.agent_pk(owner_id, agent_id)
     if scope == "shared_user":
         _require(bool(owner_id), "shared_user scope requires owner_id")
         return K.user_pk(owner_id)

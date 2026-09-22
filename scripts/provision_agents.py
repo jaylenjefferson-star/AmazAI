@@ -119,10 +119,10 @@ def ensure_account_harness(store: Store, control, role_arn: str) -> tuple[str, d
 def write_agent(store: Store, seat: dict, harness_arn: str, role_arn: str,
                 *, runtime_mode: str) -> None:
     agent_id = seat["key"]
-    existing = store.try_get(K.agent_pk(agent_id), "META")
+    existing = store.try_get(K.agent_pk(store.owner_id, agent_id), "META")
 
     item = {
-        "pk": K.agent_pk(agent_id), "sk": "META",
+        "pk": K.agent_pk(store.owner_id, agent_id), "sk": "META",
         "entity": "Agent", "agentId": agent_id,
         "gsi1pk": "AGENTS", "gsi1sk": seat["name"],
         "name": seat["name"], "role": seat["role"], "accent": seat["accent"],

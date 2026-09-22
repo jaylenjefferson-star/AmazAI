@@ -30,7 +30,7 @@ def grant(store, agent_id, cid=SLACK, **kw):
 
 def an_agent(store, agent_id="eng", status="active"):
     return store.put({
-        "pk": K.agent_pk(agent_id), "sk": "META", "entity": "Agent",
+        "pk": K.agent_pk(store.owner_id, agent_id), "sk": "META", "entity": "Agent",
         "agentId": agent_id, "gsi1pk": "AGENTS", "gsi1sk": agent_id,
         "name": agent_id, "status": status, "allowedTools": ["shell", "file_operations"],
     })
@@ -159,7 +159,7 @@ class TestResolution:
     def test_a_grant_whose_ceiling_cannot_be_read_falls_to_the_lowest(self, store):
         an_agent(store)
         install(store)
-        store.put({**C.grant_row("eng", SLACK, actor_user_id="x"), "capability": "banana"})
+        store.put({**C.grant_row("eng", SLACK, actor_user_id=store.owner_id), "capability": "banana"})
         assert C.granted_apps(store, "eng")[0].capability is Capability.READ
 
     def test_an_explicit_tool_list_allows_only_those_tools(self, store):
@@ -402,7 +402,7 @@ class TestPerBotAccess:
         bot = self._bot_with_slack(api_table, monkeypatch)
         call("PUT", f"/agents/{bot}/grants/{SLACK}", {"capability": "read"})
         from amazai.store import Store
-        audit = [r for r in Store("owner-a", table=api_table).query(K.agent_pk(bot))
+        audit = [r for r in Store("owner-a", table=api_table).query(K.agent_pk(Store("owner-a", table=api_table).owner_id, bot))
                  if r.get("action") == "agent.grants_changed"]
         assert audit and audit[-1]["after"]["grant"]["capability"] == "read"
 

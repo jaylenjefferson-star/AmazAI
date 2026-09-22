@@ -265,21 +265,21 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         })
 
     if (p := _match(path, "/agents/{id}")) and method == "GET":
-        agent = store.get(K.agent_pk(p[0]), "META")
+        agent = store.get(K.agent_pk(store.owner_id, p[0]), "META")
         agent["managerId"] = org.resolve(
             store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)).get(p[0])
-        agent["memory"] = store.query(K.agent_pk(p[0]), sk_prefix="MEM#")
-        agent["grants"] = store.query(K.agent_pk(p[0]), sk_prefix="GRANT#")
-        agent["audit"] = store.query(K.agent_pk(p[0]), sk_prefix="AUDIT#",
+        agent["memory"] = store.query(K.agent_pk(store.owner_id, p[0]), sk_prefix="MEM#")
+        agent["grants"] = store.query(K.agent_pk(store.owner_id, p[0]), sk_prefix="GRANT#")
+        agent["audit"] = store.query(K.agent_pk(store.owner_id, p[0]), sk_prefix="AUDIT#",
                                      limit=50, ascending=False)
         # Raw assignment rows, not `skills.assigned_active_skills` -- the
         # profile needs to show a skill pending approval or disabled too,
         # not only what the prompt is currently allowed to see.
-        agent["skillAssignments"] = store.query(K.agent_pk(p[0]), sk_prefix="SKILLASSIGN#")
+        agent["skillAssignments"] = store.query(K.agent_pk(store.owner_id, p[0]), sk_prefix="SKILLASSIGN#")
         return _resp(200, agent)
 
     if (p := _match(path, "/agents/{id}")) and method == "PATCH":
-        existing = store.get(K.agent_pk(p[0]), "META")
+        existing = store.get(K.agent_pk(store.owner_id, p[0]), "META")
         if "reportsTo" in body:
             # Against the whole org: the target must be an active Bot (or "owner")
             # and the move must not put a Bot under its own team.
@@ -287,7 +287,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
                 p[0], body["reportsTo"],
                 store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200))}
         changes, events = A.plan_update(existing, body, _actor(event))
-        updated = store.update(K.agent_pk(p[0]), "META", changes)
+        updated = store.update(K.agent_pk(store.owner_id, p[0]), "META", changes)
         for ev in events:
             store.put(ev)
         return _resp(200, updated)
@@ -295,10 +295,10 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     if (p := _match(path, "/agents/{id}")) and method == "DELETE":
         # Deactivation, never deletion. An agent that produced evidence must
         # remain something that evidence can point at.
-        existing = store.get(K.agent_pk(p[0]), "META")
+        existing = store.get(K.agent_pk(store.owner_id, p[0]), "META")
         changes, events = A.plan_update(existing, {"status": "archived"},
                                         _actor(event))
-        updated = store.update(K.agent_pk(p[0]), "META", changes)
+        updated = store.update(K.agent_pk(store.owner_id, p[0]), "META", changes)
         for ev in events:
             store.put(ev)
         return _resp(200, updated)
@@ -310,13 +310,13 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     # tool is called (connectors.authorize).
     if (p := _match(path, "/agents/{id}/grants/{connectorId}")) and method == "PUT":
         actor = _actor(event)
-        store.get(K.agent_pk(p[0]), "META")   # 404 if it is not this owner's Bot
+        store.get(K.agent_pk(store.owner_id, p[0]), "META")   # 404 if it is not this owner's Bot
         [grant] = A.validate_grants(
             [{"connectorId": p[1], "capability": body.get("capability"),
               "allowedTools": body.get("allowedTools") or [C.WILDCARD]}],
             _org_connectors(store))
-        before = store.try_get(K.agent_pk(p[0]), K.grant_sk(p[1]))
-        row = store.put({"pk": K.agent_pk(p[0]), "sk": K.grant_sk(p[1]), "entity": "Grant",
+        before = store.try_get(K.agent_pk(store.owner_id, p[0]), K.grant_sk(p[1]))
+        row = store.put({"pk": K.agent_pk(store.owner_id, p[0]), "sk": K.grant_sk(p[1]), "entity": "Grant",
                          "agentId": p[0], "grantedBy": actor.user_id, "grantedAt": now_iso(), **grant})
         store.put(A.audit_event(p[0], "agent.grants_changed", actor,
                                 before={"grant": before and {k: before.get(k) for k in ("capability", "allowedTools")}},
@@ -325,9 +325,9 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     if (p := _match(path, "/agents/{id}/grants/{connectorId}")) and method == "DELETE":
         actor = _actor(event)
-        store.get(K.agent_pk(p[0]), "META")
-        before = store.get(K.agent_pk(p[0]), K.grant_sk(p[1]))   # 404 if this Bot never had it
-        store.delete(K.agent_pk(p[0]), K.grant_sk(p[1]))
+        store.get(K.agent_pk(store.owner_id, p[0]), "META")
+        before = store.get(K.agent_pk(store.owner_id, p[0]), K.grant_sk(p[1]))   # 404 if this Bot never had it
+        store.delete(K.agent_pk(store.owner_id, p[0]), K.grant_sk(p[1]))
         store.put(A.audit_event(p[0], "agent.grants_changed", actor,
                                 before={"grant": {k: before.get(k) for k in ("capability", "allowedTools")}},
                                 after={"grant": None}))
@@ -405,24 +405,24 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     # --- memory ------------------------------------------------------------
     if (p := _match(path, "/agents/{id}/memory")) and method == "POST":
-        row = _write_memory(store, K.agent_pk(p[0]), body, scope="agent", actor=_actor(event))
+        row = _write_memory(store, K.agent_pk(store.owner_id, p[0]), body, scope="agent", actor=_actor(event))
         _event_in_dm(store, p[0], f"Saved to memory: {_label(row)}", icon="layers",
                      memId=row["memId"])
         return _resp(201, row)
 
     if (p := _match(path, "/agents/{id}/memory/{memId}")) and method == "PATCH":
-        existing = store.get(K.agent_pk(p[0]), K.memory_sk(p[1]))
-        updated = store.update(K.agent_pk(p[0]), K.memory_sk(p[1]), memory.plan_edit(existing, body))
+        existing = store.get(K.agent_pk(store.owner_id, p[0]), K.memory_sk(p[1]))
+        updated = store.update(K.agent_pk(store.owner_id, p[0]), K.memory_sk(p[1]), memory.plan_edit(existing, body))
         _event_in_dm(store, p[0], f"Memory corrected: {_label(updated)}", icon="layers",
                      memId=p[1])
         return _resp(200, updated)
 
     if (p := _match(path, "/agents/{id}/memory/{memId}")) and method == "DELETE":
-        store.delete(K.agent_pk(p[0]), K.memory_sk(p[1]))
+        store.delete(K.agent_pk(store.owner_id, p[0]), K.memory_sk(p[1]))
         return _resp(204, {})
 
     if (p := _match(path, "/agents/{id}/memory/{memId}/revoke")) and method == "POST":
-        return _resp(200, store.update(K.agent_pk(p[0]), K.memory_sk(p[1]), memory.revoke()))
+        return _resp(200, store.update(K.agent_pk(store.owner_id, p[0]), K.memory_sk(p[1]), memory.revoke()))
 
     # --- shared user memory --------------------------------------------
     # Facts every seat should know (name, timezone, standing preferences),
@@ -725,7 +725,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
             record = R.plan_create(body, _actor(event))
         except R.ValidationError as exc:
             return _resp(400, {"error": "invalid_request", "detail": str(exc)})
-        agent = store.get(K.agent_pk(record["agentId"]), "META")   # 404 for a foreign agent
+        agent = store.get(K.agent_pk(store.owner_id, record["agentId"]), "META")   # 404 for a foreign agent
         # The agent's zone decides when "every weekday at 9" is.
         record["timezone"] = agent.get("timezone")
         written = store.put(record)
@@ -870,7 +870,7 @@ def _create_agent(store: Store, body: dict, event: dict):
     if idem_key:
         existing_id = store.claim(f"agent:{idem_key}", "pending", field="agentId")
         if existing_id and existing_id != "pending":
-            agent = store.try_get(K.agent_pk(existing_id), "META")
+            agent = store.try_get(K.agent_pk(store.owner_id, existing_id), "META")
             if agent:
                 return _resp(200, agent)
 
@@ -910,7 +910,7 @@ def _create_agent(store: Store, body: dict, event: dict):
         if resolved:
             plan.agent["model"]["modelId"] = resolved
 
-    if store.try_get(K.agent_pk(plan.agent_id), "META"):
+    if store.try_get(K.agent_pk(store.owner_id, plan.agent_id), "META"):
         return _resp(409, {"error": "conflict",
                            "detail": f"agent {plan.agent_id!r} already exists"})
 
@@ -1015,7 +1015,7 @@ def _post_message(store: Store, thread_id: str, body: dict):
     names = {}
     if len(targets) > 1:
         for a in targets:
-            row = store.try_get(K.agent_pk(a), "META")
+            row = store.try_get(K.agent_pk(store.owner_id, a), "META")
             names[a] = (row or {}).get("name", a)
         threads.event(store, thread_id, "Woke " + " and ".join(names[a] for a in targets)
                       if len(targets) == 2 else "Woke " + ", ".join(names[a] for a in targets),
@@ -1131,7 +1131,7 @@ def _patch_room(store: Store, thread_id: str, body: dict):
         if len(ids) > collab.MAX_ROOM_MEMBERS:
             raise A.ValidationError(f"a room holds at most {collab.MAX_ROOM_MEMBERS} agents")
         for agent_id in ids:
-            row = store.try_get(K.agent_pk(agent_id), "META")
+            row = store.try_get(K.agent_pk(store.owner_id, agent_id), "META")
             if not row or row.get("status", row.get("state")) not in A.SEATED:
                 raise A.ValidationError(f"no such agent {agent_id!r}")
         before = thread.get("agentIds") or []
@@ -1145,7 +1145,7 @@ def _patch_room(store: Store, thread_id: str, body: dict):
     updated = store.update(K.thread_pk(thread_id), "META", changes)
 
     def name(agent_id: str) -> str:
-        return (store.try_get(K.agent_pk(agent_id), "META") or {}).get("name", agent_id)
+        return (store.try_get(K.agent_pk(store.owner_id, agent_id), "META") or {}).get("name", agent_id)
 
     for agent_id in added:
         threads.event(store, thread_id, f"{name(agent_id)} joined", icon="check")
@@ -1185,7 +1185,7 @@ def _exec(store: Store, thread_id: str, body: dict):
     agent_id = requested or agent_ids[0]
     if agent_id not in agent_ids:
         return _resp(403, {"error": "that Bot is not a member of this thread"})
-    agent = store.get(K.agent_pk(agent_id), "META")
+    agent = store.get(K.agent_pk(store.owner_id, agent_id), "META")
 
     core = agentcore.AgentCore()
     harness_arn, session_id = standard_runtime.for_exec(store, agent, client=core)
@@ -1377,7 +1377,7 @@ def _decide_handoff(store: Store, run_id: str, handoff_id: str, body: dict,
 
     threads.event(store, run["threadId"],
                   f'{"Accepted" if approve else "Declined"} the handoff to '
-                  f'{(store.try_get(K.agent_pk(handoff["toAgentId"]), "META") or {}).get("name", handoff["toAgentId"])}',
+                  f'{(store.try_get(K.agent_pk(store.owner_id, handoff["toAgentId"]), "META") or {}).get("name", handoff["toAgentId"])}',
                   icon="check" if approve else "x")
     return _resp(200, result)
 
@@ -1431,7 +1431,7 @@ def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict
     proposal = {**proposal, "grants": C.default_grants(store)}
     task = provisioning.first_task(proposal.get("firstTask"))
     proposer_id = proposal.get("parentAgentId") or proposal.get("proposedBy") or ""
-    proposer = store.try_get(K.agent_pk(proposer_id), "META") if proposer_id else None
+    proposer = store.try_get(K.agent_pk(store.owner_id, proposer_id), "META") if proposer_id else None
     briefing = ({
         "text": task,
         "author": (proposer or {}).get("name") or proposer_id or "a teammate",
@@ -1444,7 +1444,7 @@ def _create_approved_agent(store: Store, proposal: dict, actor: A.Actor) -> dict
         max_agents=int(os.environ.get("MAX_AGENTS", A.DEFAULT_MAX_AGENTS)),
         initial_briefing=briefing,
     )
-    if store.try_get(K.agent_pk(plan.agent_id), "META"):
+    if store.try_get(K.agent_pk(store.owner_id, plan.agent_id), "META"):
         raise Conflict(f"agent {plan.agent_id!r} already exists")
 
     # Without this an approved proposal reached provisioning with no model and was

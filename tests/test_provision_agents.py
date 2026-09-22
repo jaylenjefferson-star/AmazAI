@@ -79,7 +79,7 @@ def test_failed_harness_is_refused():
 def test_new_seat_is_written_as_a_logical_bot_on_shared_compute(table):
     store = Store("owner-a", table=table)
     P.write_agent(store, SEAT, ARN, ROLE, runtime_mode="shared")
-    row = store.get(K.agent_pk("eng"), "META")
+    row = store.get(K.agent_pk(store.owner_id, "eng"), "META")
     assert row["harnessArn"] == ARN and row["runtimeMode"] == "shared"
     thread = store.get(K.thread_pk("dm-eng"), "META")
     assert thread["sessionId"] == K.bot_session_id("owner-a", "eng", "dm-eng")
@@ -88,14 +88,14 @@ def test_reprovision_records_shared_and_dedicated_targets_for_v1_resume(table):
     store = Store("owner-a", table=table)
     old = "arn:aws:bedrock-agentcore:us-west-2:1:harness/old-dedicated"
     store.put({
-        "pk": K.agent_pk("eng"), "sk": "META", "entity": "Agent", "agentId": "eng",
+        "pk": K.agent_pk(store.owner_id, "eng"), "sk": "META", "entity": "Agent", "agentId": "eng",
         "harnessArn": old, "executionRoleArn": "arn:aws:iam::1:role/old",
         "systemPrompt": "edited by operator", "state": "active",
     })
 
     P.write_agent(store, SEAT, ARN, ROLE, runtime_mode="shared")
 
-    row = store.get(K.agent_pk("eng"), "META")
+    row = store.get(K.agent_pk(store.owner_id, "eng"), "META")
     assert row["harnessArn"] == ARN
     assert row["sharedHarnessArn"] == ARN
     assert row["dedicatedHarnessArn"] == old
@@ -110,7 +110,7 @@ def test_dedicated_reprovision_does_not_restore_the_shared_arn(table):
 
     P.write_agent(store, SEAT, dedicated, "arn:aws:iam::1:role/eng", runtime_mode="dedicated")
 
-    row = store.get(K.agent_pk("eng"), "META")
+    row = store.get(K.agent_pk(store.owner_id, "eng"), "META")
     assert row["runtimeMode"] == "dedicated"
     assert row["harnessArn"] == row["dedicatedHarnessArn"] == dedicated
     assert row["sharedHarnessArn"] == ARN

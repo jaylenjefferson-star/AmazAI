@@ -48,7 +48,7 @@ def api_table(table, monkeypatch):
     """The handler builds its own Store, so point it at moto's table and give
     every created agent a resolved model — the harness itself is stubbed."""
     monkeypatch.setattr(api, "_provision_harness", lambda store, agent: store.update(
-        K.agent_pk(agent["agentId"]), "META",
+        K.agent_pk(store.owner_id, agent["agentId"]), "META",
         {"harnessArn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/x",
          "status": "active", "state": "active"}))
     # The handler builds `Store(_owner(event))` itself, so replace the name it
@@ -97,6 +97,8 @@ class TestCreate:
                 return {"harness": {"status": "READY", "executionRoleArn": role}}
 
         class StoreStub:
+            owner_id = "owner-a"
+
             def update(self, pk, sk, values):
                 return {"agentId": "tanzie", **values}
 
@@ -119,7 +121,7 @@ class TestCreate:
     def test_new_bot_reuses_an_account_resolved_model(self, api_table):
         status, existing = call("POST", "/agents", NEW_AGENT)
         assert status == 201
-        Store("owner-a", table=api_table).update(K.agent_pk(existing["agentId"]), "META", {
+        Store("owner-a", table=api_table).update(K.agent_pk(Store("owner-a", table=api_table).owner_id, existing["agentId"]), "META", {
             "model": {"tier": "frontier", "modelId": "us.anthropic.claude-opus-4-6-v1"},
         })
 
@@ -165,7 +167,7 @@ class TestCreate:
         assert call("GET", "/agents")[1]["agents"] == []
 
         store = Store("owner-a", table=api_table)
-        assert store.query(K.agent_pk("cloud-operations"), sk_prefix="GRANT#") == []
+        assert store.query(K.agent_pk(store.owner_id, "cloud-operations"), sk_prefix="GRANT#") == []
         assert store.try_get(K.thread_pk("dm-cloud-operations"), "META") is None
 
     def test_a_failed_attempt_still_leaves_an_audit_trail(self, api_table, monkeypatch):
@@ -176,7 +178,7 @@ class TestCreate:
         call("POST", "/agents", NEW_AGENT)
 
         store = Store("owner-a", table=api_table)
-        trail = store.query(K.agent_pk("cloud-operations"), sk_prefix="AUDIT#")
+        trail = store.query(K.agent_pk(store.owner_id, "cloud-operations"), sk_prefix="AUDIT#")
         assert [e["action"] for e in trail] == ["agent.provision_failed"]
         assert "no model" in trail[0]["detail"]
 
@@ -365,8 +367,8 @@ class TestConsoleReadModel:
         from amazai.store import Store
 
         store = Store("owner-a", table=api_table)
-        store.put({"pk": K.agent_pk("eng"), "sk": "META", "entity": "Agent", "agentId": "eng"})
-        store.put({"pk": K.agent_pk("ops"), "sk": "META", "entity": "Agent", "agentId": "ops"})
+        store.put({"pk": K.agent_pk(store.owner_id, "eng"), "sk": "META", "entity": "Agent", "agentId": "eng"})
+        store.put({"pk": K.agent_pk(store.owner_id, "ops"), "sk": "META", "entity": "Agent", "agentId": "ops"})
         call("POST", "/threads", {"kind": "room", "title": "Launch room",
                                   "agentIds": ["eng", "ops"]})
         threads = call("GET", "/threads")[1]["threads"]

@@ -45,8 +45,8 @@ def _tool_call(name, args, tool_use_id="tu-1"):
 
 @pytest.fixture
 def agents(store):
-    store.put({"pk": K.agent_pk("eng"), "sk": "META", "entity": "Agent", **COORDINATOR})
-    store.put({"pk": K.agent_pk("ops"), "sk": "META", "entity": "Agent", **RECEIVER})
+    store.put({"pk": K.agent_pk(store.owner_id, "eng"), "sk": "META", "entity": "Agent", **COORDINATOR})
+    store.put({"pk": K.agent_pk(store.owner_id, "ops"), "sk": "META", "entity": "Agent", **RECEIVER})
     return store
 
 
@@ -70,7 +70,7 @@ class TestMultiChildFanIn:
 
     @pytest.fixture
     def agents3(self, agents):
-        agents.put({"pk": K.agent_pk("clo"), "sk": "META", "entity": "Agent", **THIRD})
+        agents.put({"pk": K.agent_pk(agents.owner_id, "clo"), "sk": "META", "entity": "Agent", **THIRD})
         return agents
 
     def test_the_coordinator_does_not_wake_until_every_child_reports(
@@ -153,14 +153,14 @@ class TestMultiChildFanIn:
 
 class TestCanAutoAccept:
     def test_ordinary_work_with_no_named_action_clears(self, agents, coordinator_run, proposed_handoff):
-        receiver = agents.get(K.agent_pk("ops"), "META")
+        receiver = agents.get(K.agent_pk(agents.owner_id, "ops"), "META")
         ok, reason = handoffs.can_auto_accept(agents, proposed_handoff, receiver, coordinator_run)
         assert ok, reason
 
     def test_an_action_on_the_always_approve_floor_never_auto_accepts(self, agents, coordinator_run):
         handoff = orch._record_handoff(agents, coordinator_run, {
             "to": "ops", "goal": "send the announcement", "requestedAction": "email.send"})
-        receiver = agents.get(K.agent_pk("ops"), "META")
+        receiver = agents.get(K.agent_pk(agents.owner_id, "ops"), "META")
         ok, reason = handoffs.can_auto_accept(agents, handoff, receiver, coordinator_run)
         assert not ok
         assert "always-approve floor" in reason
@@ -168,21 +168,21 @@ class TestCanAutoAccept:
     def test_never_approvable_never_auto_accepts(self, agents, coordinator_run):
         handoff = orch._record_handoff(agents, coordinator_run, {
             "to": "ops", "goal": "grant org admin", "requestedAction": "org.admin.grant"})
-        receiver = agents.get(K.agent_pk("ops"), "META")
+        receiver = agents.get(K.agent_pk(agents.owner_id, "ops"), "META")
         ok, reason = handoffs.can_auto_accept(agents, handoff, receiver, coordinator_run)
         assert not ok
 
     def test_a_dotted_action_needs_the_receiver_to_hold_that_apps_grant(self, agents, coordinator_run):
         handoff = orch._record_handoff(agents, coordinator_run, {
             "to": "ops", "goal": "post the status", "requestedAction": "slack.post_message"})
-        receiver = agents.get(K.agent_pk("ops"), "META")
+        receiver = agents.get(K.agent_pk(agents.owner_id, "ops"), "META")
         ok, reason = handoffs.can_auto_accept(agents, handoff, receiver, coordinator_run)
         assert not ok
         assert "slack" in reason
 
     def test_a_receiver_at_its_concurrency_ceiling_does_not_auto_accept(
             self, agents, coordinator_run, proposed_handoff):
-        receiver = agents.update(K.agent_pk("ops"), "META", {"budget": {"maxConcurrentRuns": 1}})
+        receiver = agents.update(K.agent_pk(agents.owner_id, "ops"), "META", {"budget": {"maxConcurrentRuns": 1}})
         runs.create(agents, agent_id="ops", thread_id="dm-ops", goal="already busy")
         ok, reason = handoffs.can_auto_accept(agents, proposed_handoff, receiver, coordinator_run)
         assert not ok
@@ -193,7 +193,7 @@ class TestCanAutoAccept:
         handoffs.ensure_task(agents, coordinator_run["runId"], coordinator_run)
         agents.update(K.task_pk(coordinator_run["runId"]), "META",
                       {"pendingChildren": handoffs.MAX_ACTIVE_CHILDREN_PER_TASK})
-        receiver = agents.get(K.agent_pk("ops"), "META")
+        receiver = agents.get(K.agent_pk(agents.owner_id, "ops"), "META")
         ok, reason = handoffs.can_auto_accept(agents, proposed_handoff, receiver, coordinator_run)
         assert not ok
         assert "outstanding" in reason
@@ -206,7 +206,7 @@ class TestCanAutoAccept:
         not just this task's own children."""
         for _ in range(handoffs.MAX_ACTIVE_RUNS_PER_ROOM):
             runs.create(agents, agent_id="ops", thread_id=coordinator_run["threadId"], goal="busy")
-        receiver = agents.get(K.agent_pk("ops"), "META")
+        receiver = agents.get(K.agent_pk(agents.owner_id, "ops"), "META")
 
         ok, reason = handoffs.can_auto_accept(agents, proposed_handoff, receiver, coordinator_run)
 
@@ -221,7 +221,7 @@ class TestCanAutoAccept:
         # thread, so this leaves the room one run short of the ceiling.
         for _ in range(handoffs.MAX_ACTIVE_RUNS_PER_ROOM - 2):
             runs.create(agents, agent_id="eng", thread_id=coordinator_run["threadId"], goal="busy")
-        receiver = agents.get(K.agent_pk("ops"), "META")
+        receiver = agents.get(K.agent_pk(agents.owner_id, "ops"), "META")
 
         ok, reason = handoffs.can_auto_accept(agents, proposed_handoff, receiver, coordinator_run)
 
@@ -326,7 +326,7 @@ class TestHandoffToolAutoAccepts:
         woken = []
         monkeypatch.setattr(orch, "_invoke_orchestrator_async",
                             lambda run_id, owner: woken.append(run_id))
-        agent = agents.get(K.agent_pk("eng"), "META")
+        agent = agents.get(K.agent_pk(agents.owner_id, "eng"), "META")
 
         result, push = self._handle(agents, coordinator_run, agent,
                                     {"to": "ops", "goal": "run the migration script"})
@@ -340,7 +340,7 @@ class TestHandoffToolAutoAccepts:
         woken = []
         monkeypatch.setattr(orch, "_invoke_orchestrator_async",
                             lambda run_id, owner: woken.append(run_id))
-        agent = agents.get(K.agent_pk("eng"), "META")
+        agent = agents.get(K.agent_pk(agents.owner_id, "eng"), "META")
 
         result, _push = self._handle(agents, coordinator_run, agent,
                                      {"to": "ops", "goal": "send the announcement",
@@ -354,8 +354,8 @@ class TestManualHandoffRoute:
     def _propose(self, table):
         from amazai.store import Store
         store = Store("owner-a", table=table)
-        store.put({"pk": K.agent_pk("eng"), "sk": "META", "entity": "Agent", **COORDINATOR})
-        store.put({"pk": K.agent_pk("ops"), "sk": "META", "entity": "Agent", **RECEIVER})
+        store.put({"pk": K.agent_pk(store.owner_id, "eng"), "sk": "META", "entity": "Agent", **COORDINATOR})
+        store.put({"pk": K.agent_pk(store.owner_id, "ops"), "sk": "META", "entity": "Agent", **RECEIVER})
         run = runs.create(store, agent_id="eng", thread_id="room-1", goal="ship it")
         handoff = orch._record_handoff(store, run, {
             "to": "ops", "goal": "send the announcement", "requestedAction": "email.send"})
@@ -406,8 +406,8 @@ class TestTaskReadRoute:
         import handlers.api as api
         monkeypatch.setattr(api, "_invoke_orchestrator", lambda *a, **k: None)
         store = Store("owner-a", table=api_table)
-        store.put({"pk": K.agent_pk("eng"), "sk": "META", "entity": "Agent", **COORDINATOR})
-        store.put({"pk": K.agent_pk("ops"), "sk": "META", "entity": "Agent", **RECEIVER})
+        store.put({"pk": K.agent_pk(store.owner_id, "eng"), "sk": "META", "entity": "Agent", **COORDINATOR})
+        store.put({"pk": K.agent_pk(store.owner_id, "ops"), "sk": "META", "entity": "Agent", **RECEIVER})
         run = runs.create(store, agent_id="eng", thread_id="room-1", goal="ship it")
         handoff = orch._record_handoff(store, run, {"to": "ops", "goal": "run the script"})
         handoffs.accept(store, run, handoff, decided_by="system:auto-accept")
@@ -462,7 +462,7 @@ class TestOrderedHandoffs:
         completion created. `collab.send`'s authorization must see this
         handoff as belonging to the same task as wave one, or a task that
         grows its own roster over time can never actually grow it."""
-        agents.put({"pk": K.agent_pk("clo"), "sk": "META", "entity": "Agent", **THIRD})
+        agents.put({"pk": K.agent_pk(agents.owner_id, "clo"), "sk": "META", "entity": "Agent", **THIRD})
         h1 = orch._record_handoff(agents, coordinator_run,
                                   {"to": "ops", "goal": "provision the environment"})
         a1 = handoffs.accept(agents, coordinator_run, h1, decided_by="system:auto-accept")

@@ -46,7 +46,7 @@ def no_aws(monkeypatch):
                 "harnessArn": harness, "executionRoleArn": role,
                 "claimToken": "test", "claimedAt": "2026-01-01T00:00:00Z",
             })
-        return store.update(K.agent_pk(agent["agentId"]), "META", {
+        return store.update(K.agent_pk(store.owner_id, agent["agentId"]), "META", {
             "harnessArn": harness, "sharedHarnessArn": harness,
             "executionRoleArn": role, "runtimeMode": "shared",
             "status": "active", "state": "active"})
@@ -65,7 +65,7 @@ def woken(monkeypatch):
 
 
 def agent_row(world, agent_id):  # noqa: F811
-    return world.store.get(K.agent_pk(agent_id), "META")
+    return world.store.get(K.agent_pk(world.store.owner_id, agent_id), "META")
 
 
 def create(world, **over):  # noqa: F811
@@ -109,7 +109,7 @@ class TestCreatingABotWhenTheOperatorAsked:
 
     def test_it_holds_the_apps_its_creator_holds(self, world, woken):  # noqa: F811
         create(world)
-        grants = world.store.query(K.agent_pk("scout"), sk_prefix="GRANT#")
+        grants = world.store.query(K.agent_pk(world.store.owner_id, "scout"), sk_prefix="GRANT#")
         assert [(g["connectorId"], g["capability"], g["allowedTools"]) for g in grants] == [
             (SLACK, "admin", ["*"])]
 
@@ -121,7 +121,7 @@ class TestCreatingABotWhenTheOperatorAsked:
 
     def test_it_is_audited_with_the_creating_bot_named(self, world, woken):  # noqa: F811
         create(world)
-        audit = [a for a in world.store.query(K.agent_pk("scout"), sk_prefix="AUDIT#")
+        audit = [a for a in world.store.query(K.agent_pk(world.store.owner_id, "scout"), sk_prefix="AUDIT#")
                  if a["action"] == "agent.created"]
         assert len(audit) == 1
         assert world.agent_id in json.dumps(audit[0])
@@ -141,27 +141,27 @@ class TestNothingItCreatesCanHoldMoreThanItsCreator:
     def test_a_read_only_bot_makes_read_only_bots(self, api_table, monkeypatch, woken):  # noqa: F811
         w = World(api_table, monkeypatch, grants=[{"connectorId": SLACK, "capability": "read",
                                                    "allowedTools": ["*"]}])
-        w.store.update(K.agent_pk(w.agent_id), "META", {"model": {"modelId": "m", "tier": "balanced"}})
+        w.store.update(K.agent_pk(w.store.owner_id, w.agent_id), "META", {"model": {"modelId": "m", "tier": "balanced"}})
 
         assert w.handle("create_agent", SCOUT)["toolResult"]["created"] is True
 
-        grants = w.store.query(K.agent_pk("scout"), sk_prefix="GRANT#")
+        grants = w.store.query(K.agent_pk(w.store.owner_id, "scout"), sk_prefix="GRANT#")
         assert [(g["connectorId"], g["capability"]) for g in grants] == [(SLACK, "read")]
 
     def test_a_bot_with_no_apps_makes_bots_with_none(self, api_table, monkeypatch, woken):  # noqa: F811
         w = World(api_table, monkeypatch, grants=[])
-        w.store.update(K.agent_pk(w.agent_id), "META", {"model": {"modelId": "m", "tier": "balanced"}})
+        w.store.update(K.agent_pk(w.store.owner_id, w.agent_id), "META", {"model": {"modelId": "m", "tier": "balanced"}})
 
         w.handle("create_agent", SCOUT)
 
-        assert w.store.query(K.agent_pk("scout"), sk_prefix="GRANT#") == []
+        assert w.store.query(K.agent_pk(w.store.owner_id, "scout"), sk_prefix="GRANT#") == []
 
     def test_the_model_cannot_ask_for_more_by_saying_so(self, world, woken):  # noqa: F811
         create(world, grants=[{"connectorId": "composio:github", "capability": "admin", "allowedTools": ["*"]}],
                budget={"perMonthUsd": 500, "perRunUsd": 100}, allowedTools=["everything"])
 
         row = agent_row(world, "scout")
-        assert world.store.query(K.agent_pk("scout"), sk_prefix="GRANT#")[0]["connectorId"] == SLACK
+        assert world.store.query(K.agent_pk(world.store.owner_id, "scout"), sk_prefix="GRANT#")[0]["connectorId"] == SLACK
         assert row["budget"]["perMonthUsd"] == 20.0
         assert "everything" not in row["allowedTools"]
 
@@ -171,7 +171,7 @@ class TestNothingItCreatesCanHoldMoreThanItsCreator:
         assert agent_row(world, "scout")["allowedTools"] == ["shell", "file_operations"]
 
     def test_a_tool_the_creator_has_can_be_passed_on(self, world, woken):  # noqa: F811
-        world.store.update(K.agent_pk(world.agent_id), "META",
+        world.store.update(K.agent_pk(world.store.owner_id, world.agent_id), "META",
                            {"allowedTools": ["shell", "file_operations", "browser"]})
         world.agent = agent_row(world, world.agent_id)
         create(world, tools=["browser", "code_interpreter"])
@@ -219,7 +219,7 @@ class TestWhenSomethingGoesWrong:
 
         assert "nothing was left behind" in result["error"]
         assert "scout" not in all_agents(world)                          # the rows were removed
-        failed = [a for a in world.store.query(K.agent_pk("scout"), sk_prefix="AUDIT#")
+        failed = [a for a in world.store.query(K.agent_pk(world.store.owner_id, "scout"), sk_prefix="AUDIT#")
                   if a["action"] == "agent.provision_failed"]
         assert len(failed) == 1                                           # the attempt is still on record
 
@@ -328,7 +328,7 @@ class TestRefiningABotYouMade:
     def test_the_change_is_audited_like_a_persons(self, world, woken):  # noqa: F811
         create(world)
         self.refine(world, role="Finds sources and cites them.")
-        assert "agent.updated" in [a["action"] for a in world.store.query(K.agent_pk("scout"), sk_prefix="AUDIT#")]
+        assert "agent.updated" in [a["action"] for a in world.store.query(K.agent_pk(world.store.owner_id, "scout"), sk_prefix="AUDIT#")]
 
     def test_only_a_bot_it_created_can_be_refined(self, world, woken):  # noqa: F811
         status, other = call("POST", "/agents", {"name": "Ledger", "role": "Keeps the books."})
@@ -505,7 +505,7 @@ class TestTheApprovalPathNowReachesProvisioning:
         import handlers.api as api
         status, first = call("POST", "/agents", {"name": "Ledger", "role": "Keeps the books."})
         store = Store("owner-a", table=api_table)
-        store.update(K.agent_pk(first["agentId"]), "META",
+        store.update(K.agent_pk(store.owner_id, first["agentId"]), "META",
                      {"model": {"modelId": "resolved-model", "tier": "balanced"}})
         proposal = orch._agent_creation_proposal(
             {"name": "Scout", "role": "Researches.", "description": "x"}, parent_agent_id="ledger")
@@ -647,7 +647,7 @@ class TestApprovedProposalFirstTask:
 
         _, parent = call("POST", "/agents", {"name": "Chief", "role": "Runs the day."})
         store = Store("owner-a", table=api_table)
-        store.update(K.agent_pk(parent["agentId"]), "META",
+        store.update(K.agent_pk(store.owner_id, parent["agentId"]), "META",
                      {"model": {"modelId": "resolved-model", "tier": "balanced"}})
         proposal = orch._agent_creation_proposal(
             {**SCOUT, "firstTask": "Summarise the rivals."},
@@ -675,7 +675,7 @@ class TestApprovedProposalFirstTask:
 
         _, parent = call("POST", "/agents", {"name": "Chief", "role": "Runs the day."})
         store = Store("owner-a", table=api_table)
-        store.update(K.agent_pk(parent["agentId"]), "META",
+        store.update(K.agent_pk(store.owner_id, parent["agentId"]), "META",
                      {"model": {"modelId": "resolved-model", "tier": "balanced"}})
         proposal = orch._agent_creation_proposal(
             {**SCOUT, "firstTask": "Summarise the rivals."}, parent_agent_id=parent["agentId"])
@@ -698,7 +698,7 @@ class TestApprovedProposalFirstTask:
 
         _, parent = call("POST", "/agents", {"name": "Chief", "role": "Runs the day."})
         store = Store("owner-a", table=api_table)
-        store.update(K.agent_pk(parent["agentId"]), "META",
+        store.update(K.agent_pk(store.owner_id, parent["agentId"]), "META",
                      {"model": {"modelId": "resolved-model", "tier": "balanced"}})
         proposal = orch._agent_creation_proposal(
             {**SCOUT, "firstTask": "Summarise the rivals."}, parent_agent_id=parent["agentId"])

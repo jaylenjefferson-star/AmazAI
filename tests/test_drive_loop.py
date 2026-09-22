@@ -69,7 +69,7 @@ def world(api_table, monkeypatch):
     w = World(api_table, monkeypatch)
     # D2 leaves `modelId` null until it is resolved for a real account; the loop
     # refuses to run without one, so give this agent one.
-    w.store.update(K.agent_pk(w.agent_id), "META",
+    w.store.update(K.agent_pk(w.store.owner_id, w.agent_id), "META",
                    {"model": {"modelId": "test-model", "tier": "balanced"},
                     "harnessArn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/x"})
     w.fake = None
@@ -286,7 +286,7 @@ class TestABotReadsBackWhatItSaved:
                                             "expires_at": "2026-03-01T00:00:00Z"}),
                       text("Noted.")])
         world.drive()
-        rows = [r for r in world.store.query(K.agent_pk(world.agent_id), sk_prefix="MEM#")
+        rows = [r for r in world.store.query(K.agent_pk(world.store.owner_id, world.agent_id), sk_prefix="MEM#")
                 if r.get("entity") == "Memory"]
         assert rows and rows[0]["expiresAt"] == "2026-03-01T00:00:00Z"
 
@@ -308,7 +308,7 @@ class TestABotReadsBackWhatItSaved:
         for i in range(6):
             world.store.put(memory.plan_write(
                 {"body": f"fact-{i:03d}-end", "kind": "foundational"},
-                K.agent_pk(world.agent_id), scope="agent",
+                K.agent_pk(world.store.owner_id, world.agent_id), scope="agent",
                 source="agent", author=world.agent_id))
 
         original = orch.MAX_MEMORY
@@ -437,7 +437,7 @@ class TestBudgetStopsARunawayTurn:
 
     def test_warn_mode_reports_the_ceiling_without_stopping(self, world):
         # D7: a ceiling stops a run only when the Bot is set to hard_stop.
-        world.store.update(K.agent_pk(world.agent_id), "META",
+        world.store.update(K.agent_pk(world.store.owner_id, world.agent_id), "META",
                            {"budget": {"perRunUsd": 1.0, "perMonthUsd": 10.0,
                                        "onCeiling": "warn"}})
         fake = world.script(

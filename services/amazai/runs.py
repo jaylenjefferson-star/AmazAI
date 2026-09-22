@@ -18,7 +18,7 @@ DEFAULT_DEADLINE_MINUTES = 15
 def session_epoch(store: Store, agent_id: str, thread_id: str) -> int:
     """The epoch this (agent, thread) pair's session is currently on. 0 if it
     has never had to rotate."""
-    row = store.try_get(K.agent_pk(agent_id), K.session_epoch_sk(thread_id))
+    row = store.try_get(K.agent_pk(store.owner_id, agent_id), K.session_epoch_sk(thread_id))
     return int((row or {}).get("epoch") or 0)
 
 
@@ -43,13 +43,13 @@ def mark_session_dirty(store: Store, agent_id: str, thread_id: str) -> int:
     so nothing here tries to detect "already rotated for this."
     """
     current = session_epoch(store, agent_id, thread_id)
-    row = store.try_get(K.agent_pk(agent_id), K.session_epoch_sk(thread_id))
+    row = store.try_get(K.agent_pk(store.owner_id, agent_id), K.session_epoch_sk(thread_id))
     if row is None:
-        store.put({"pk": K.agent_pk(agent_id), "sk": K.session_epoch_sk(thread_id),
+        store.put({"pk": K.agent_pk(store.owner_id, agent_id), "sk": K.session_epoch_sk(thread_id),
                   "entity": "SessionEpoch", "agentId": agent_id, "threadId": thread_id,
                   "epoch": current + 1})
     else:
-        store.update(K.agent_pk(agent_id), K.session_epoch_sk(thread_id),
+        store.update(K.agent_pk(store.owner_id, agent_id), K.session_epoch_sk(thread_id),
                      {"epoch": current + 1})
     return current + 1
 

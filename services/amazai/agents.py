@@ -564,7 +564,7 @@ def audit_event(agent_id: str, action: str, actor: Actor, *,
     _require(action in AUDITED_ACTIONS, f"unknown audit action {action!r}")
     stamp = now_iso()
     return {
-        "pk": K.agent_pk(agent_id),
+        "pk": K.agent_pk(actor.user_id, agent_id),
         "sk": f"AUDIT#{stamp}#{ordered_suffix()}",
         "entity": "AuditEvent",
         "gsi1pk": "AUDIT", "gsi1sk": f"{stamp}#{agent_id}",
@@ -664,7 +664,7 @@ def plan_create(body: dict, actor: Actor, *,
     extra = [t for t in (body.get("tools") or []) if t in {"browser", "code_interpreter"}]
 
     agent = {
-        "pk": K.agent_pk(agent_id), "sk": "META",
+        "pk": K.agent_pk(actor.user_id, agent_id), "sk": "META",
         "entity": "Agent", "agentId": agent_id,
         "gsi1pk": "AGENTS", "gsi1sk": profile["name"],
 
@@ -713,7 +713,7 @@ def plan_create(body: dict, actor: Actor, *,
 
     for grant in grants:
         items.append({
-            "pk": K.agent_pk(agent_id),
+            "pk": K.agent_pk(actor.user_id, agent_id),
             "sk": K.grant_sk(grant["connectorId"]),
             "entity": "Grant", "agentId": agent_id,
             "grantedBy": actor.user_id, "grantedAt": now_iso(),
@@ -724,7 +724,7 @@ def plan_create(body: dict, actor: Actor, *,
     # has no memories" and "this agent's memory was never set up" look the
     # same to every reader.
     items.append({
-        "pk": K.agent_pk(agent_id), "sk": "MEMNS",
+        "pk": K.agent_pk(actor.user_id, agent_id), "sk": "MEMNS",
         "entity": "MemoryNamespace", "agentId": agent_id,
         "namespace": agent["memoryNamespace"], "entries": 0,
     })

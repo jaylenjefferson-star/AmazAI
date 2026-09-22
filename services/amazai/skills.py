@@ -205,21 +205,21 @@ def assign(store: Store, *, skill_id: str, agent_id: str, version: int, assigned
     followed by a membership check.
     """
     return store.put({
-        "pk": K.agent_pk(agent_id), "sk": f"SKILLASSIGN#{skill_id}",
+        "pk": K.agent_pk(store.owner_id, agent_id), "sk": f"SKILLASSIGN#{skill_id}",
         "entity": "SkillAssignment", "skillId": skill_id, "agentId": agent_id,
         "version": version, "assignedBy": assigned_by, "assignedAt": now_iso(),
     })
 
 
 def unassign(store: Store, *, skill_id: str, agent_id: str) -> None:
-    store.delete(K.agent_pk(agent_id), f"SKILLASSIGN#{skill_id}")
+    store.delete(K.agent_pk(store.owner_id, agent_id), f"SKILLASSIGN#{skill_id}")
 
 
 def assigned_active_skills(store: Store, agent_id: str) -> list[dict]:
     """Exactly what `build_system_prompt` is allowed to inject for one agent:
     active skills, assigned to this agent, at the version it was assigned --
     never a newer version it was never granted."""
-    assignments = store.query(K.agent_pk(agent_id), sk_prefix="SKILLASSIGN#", limit=200)
+    assignments = store.query(K.agent_pk(store.owner_id, agent_id), sk_prefix="SKILLASSIGN#", limit=200)
     out: list[dict] = []
     for a in assignments:
         skill = store.try_get(K.skill_pk(a["skillId"]), "META")

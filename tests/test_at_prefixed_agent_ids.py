@@ -35,7 +35,7 @@ TANIA = {"agentId": "tania-rodriguez", "name": "Tania Rodriguez", "status": "act
 @pytest.fixture
 def agents(store):
     for row in (CHIEF, JANAI, TANIA):
-        store.put({"pk": K.agent_pk(row["agentId"]), "sk": "META",
+        store.put({"pk": K.agent_pk(store.owner_id, row["agentId"]), "sk": "META",
                    "entity": "Agent", "gsi1pk": "AGENTS", "gsi1sk": row["name"], **row})
     return store
 
@@ -81,7 +81,7 @@ class TestMessagingATeammateByTheNameItWasShown:
             orch._message_agent(agents, run_of(), CHIEF, {"to": "@chief", "text": "hi"})
 
     def test_a_paused_teammate_is_still_refused(self, agents):
-        agents.update(K.agent_pk("janai-williams"), "META", {"status": "paused"})
+        agents.update(K.agent_pk(agents.owner_id, "janai-williams"), "META", {"status": "paused"})
         with pytest.raises(collab.MessagingError, match="no such active recipient"):
             orch._message_agent(agents, run_of(), CHIEF,
                                 {"to": "@janai-williams", "text": "hi"})

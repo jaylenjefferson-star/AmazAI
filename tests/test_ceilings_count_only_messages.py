@@ -28,7 +28,7 @@ OPS = {"agentId": "ops", "name": "Cloud Operations", "status": "active",
 @pytest.fixture
 def agents(store):
     for row in (ENG, OPS):
-        store.put({"pk": K.agent_pk(row["agentId"]), "sk": "META", "entity": "Agent", **row})
+        store.put({"pk": K.agent_pk(store.owner_id, row["agentId"]), "sk": "META", "entity": "Agent", **row})
     return store
 
 

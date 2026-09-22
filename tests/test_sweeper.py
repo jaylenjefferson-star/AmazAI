@@ -43,7 +43,7 @@ def _stub_lambda(monkeypatch):
 def _stale_retrying_run(store, *, agent_id: str, thread_id: str) -> dict:
     """A run parked in RETRYING with a heartbeat and gsi2sk days old --
     exactly the shape the five real stuck runs in production had."""
-    store.put({"pk": K.agent_pk(agent_id), "sk": "META", **AGENT, "agentId": agent_id})
+    store.put({"pk": K.agent_pk(store.owner_id, agent_id), "sk": "META", **AGENT, "agentId": agent_id})
     run = runs.create(store, agent_id=agent_id, thread_id=thread_id, goal="hey")
     run = runs.advance(store, run, RunState.PLANNING)
     run = runs.advance(store, run, RunState.EXECUTING)
@@ -58,7 +58,7 @@ def _stuck_run(store, *, agent_id: str, thread_id: str, trigger: dict | None = N
     shape that must stop being resumed forever, as distinct from
     `_stale_retrying_run`'s heartbeat-stale-but-still-within-deadline shape,
     which must keep being resumed."""
-    store.put({"pk": K.agent_pk(agent_id), "sk": "META", **AGENT, "agentId": agent_id})
+    store.put({"pk": K.agent_pk(store.owner_id, agent_id), "sk": "META", **AGENT, "agentId": agent_id})
     run = runs.create(store, agent_id=agent_id, thread_id=thread_id, goal="hey",
                       trigger=trigger)
     run = runs.advance(store, run, RunState.PLANNING)
@@ -69,7 +69,7 @@ def _stuck_run(store, *, agent_id: str, thread_id: str, trigger: dict | None = N
 
 
 def _stale_approval(store, *, agent_id: str, thread_id: str) -> dict:
-    store.put({"pk": K.agent_pk(agent_id), "sk": "META", **AGENT, "agentId": agent_id})
+    store.put({"pk": K.agent_pk(store.owner_id, agent_id), "sk": "META", **AGENT, "agentId": agent_id})
     run = runs.create(store, agent_id=agent_id, thread_id=thread_id, goal="hey")
     approval_id = "apv_test"
     expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(
@@ -147,7 +147,7 @@ class TestStaleRunRecovery:
     def test_a_fresh_run_is_left_alone(self, store, monkeypatch):
         monkeypatch.delenv("OWNER_ID", raising=False)
         fake = _stub_lambda(monkeypatch)
-        store.put({"pk": K.agent_pk("eng"), "sk": "META", **AGENT, "agentId": "eng"})
+        store.put({"pk": K.agent_pk(store.owner_id, "eng"), "sk": "META", **AGENT, "agentId": "eng"})
         run = runs.create(store, agent_id="eng", thread_id="dm-eng", goal="hey")
         runs.advance(store, run, RunState.PLANNING)
 
@@ -162,7 +162,7 @@ class TestStaleRunRecovery:
         the sweeper must surface that, never guess by retrying."""
         monkeypatch.delenv("OWNER_ID", raising=False)
         fake = _stub_lambda(monkeypatch)
-        store.put({"pk": K.agent_pk("eng"), "sk": "META", **AGENT, "agentId": "eng"})
+        store.put({"pk": K.agent_pk(store.owner_id, "eng"), "sk": "META", **AGENT, "agentId": "eng"})
         run = runs.create(store, agent_id="eng", thread_id="dm-eng", goal="hey")
         run = runs.advance(store, run, RunState.PLANNING)
         run = runs.advance(store, run, RunState.EXECUTING,
@@ -231,8 +231,8 @@ class TestStaleRunRecovery:
         the coordinator with the timeout reported, same as any other
         failure."""
         _stub_lambda(monkeypatch)
-        store.put({"pk": K.agent_pk("eng"), "sk": "META", **AGENT, "agentId": "eng"})
-        store.put({"pk": K.agent_pk("ops"), "sk": "META", **AGENT, "agentId": "ops",
+        store.put({"pk": K.agent_pk(store.owner_id, "eng"), "sk": "META", **AGENT, "agentId": "eng"})
+        store.put({"pk": K.agent_pk(store.owner_id, "ops"), "sk": "META", **AGENT, "agentId": "ops",
                   "name": "Cloud Operations"})
         coordinator_run = runs.create(store, agent_id="eng", thread_id="room-1", goal="ship it")
         handoff = orch._record_handoff(store, coordinator_run,

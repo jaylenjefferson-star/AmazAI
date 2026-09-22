@@ -35,7 +35,7 @@ CLO = {"agentId": "clo", "name": "Counsel", "status": "active",
 @pytest.fixture
 def agents(store):
     for row in (ENG, OPS, CLO):
-        store.put({"pk": K.agent_pk(row["agentId"]), "sk": "META", "entity": "Agent", **row})
+        store.put({"pk": K.agent_pk(store.owner_id, row["agentId"]), "sk": "META", "entity": "Agent", **row})
     return store
 
 
@@ -174,7 +174,7 @@ class TestThroughTheToolTheModelCalls:
                                 {"to": "nobody", "text": "hi"})
 
     def test_a_paused_bot_is_still_refused(self, agents):
-        agents.update(K.agent_pk("ops"), "META", {"status": "paused"})
+        agents.update(K.agent_pk(agents.owner_id, "ops"), "META", {"status": "paused"})
         with pytest.raises(collab.MessagingError):
             self.send(agents, text="hi")
 
