@@ -7,13 +7,21 @@
       "name": "Engineering",
       "accent": "#4F86F7",
       "role": "Repositories, tests, pull requests, application diagnostics.",
-      "modelId": "us.anthropic.claude-opus-4-6-v1",
-      "modelNote": "default: Opus 4.6 (long-horizon agentic work)",
+      "modelId": "us.anthropic.claude-opus-5",
+      "modelNote": "resolved from this account (frontier tier)",
       "maxTokens": 32000,
       "effort": "high",
-      "tools": ["browser"],
+      "tools": [
+        "browser"
+      ],
       "workspaceMode": "project",
-      "budget": { "perRunUsd": 2.0, "perMonthUsd": 40.0, "onCeiling": "hard_stop", "maxConcurrentRuns": 2, "maxToolCallsPerRun": 60 },
+      "budget": {
+        "perRunUsd": 2.0,
+        "perMonthUsd": 40.0,
+        "onCeiling": "hard_stop",
+        "maxConcurrentRuns": 2,
+        "maxToolCallsPerRun": 60
+      },
       "enabled": true
     },
     {
@@ -21,13 +29,21 @@
       "name": "Cloud Operations",
       "accent": "#E8833A",
       "role": "AWS investigations, logs, alarms, controlled deployments.",
-      "modelId": null,
-      "modelNote": "default: Opus 5 (production diagnosis; errors are expensive)",
+      "modelId": "us.anthropic.claude-opus-5",
+      "modelNote": "resolved from this account (frontier tier)",
       "maxTokens": 32000,
       "effort": "high",
-      "tools": ["browser"],
+      "tools": [
+        "browser"
+      ],
       "workspaceMode": "ephemeral",
-      "budget": { "perRunUsd": 1.5, "perMonthUsd": 30.0, "onCeiling": "hard_stop", "maxConcurrentRuns": 1, "maxToolCallsPerRun": 60 },
+      "budget": {
+        "perRunUsd": 1.5,
+        "perMonthUsd": 30.0,
+        "onCeiling": "hard_stop",
+        "maxConcurrentRuns": 1,
+        "maxToolCallsPerRun": 60
+      },
       "enabled": false
     },
     {
@@ -35,13 +51,19 @@
       "name": "Chief of Staff",
       "accent": "#8B5CF6",
       "role": "Intake, prioritization, planning, daily briefings, delegation.",
-      "modelId": null,
-      "modelNote": "default: Sonnet 5 (summarization and routing at volume)",
+      "modelId": "us.anthropic.claude-opus-5",
+      "modelNote": "resolved from this account (frontier tier)",
       "maxTokens": 16000,
       "effort": "medium",
       "tools": [],
       "workspaceMode": "ephemeral",
-      "budget": { "perRunUsd": 0.75, "perMonthUsd": 25.0, "onCeiling": "hard_stop", "maxConcurrentRuns": 2, "maxToolCallsPerRun": 40 },
+      "budget": {
+        "perRunUsd": 0.75,
+        "perMonthUsd": 25.0,
+        "onCeiling": "hard_stop",
+        "maxConcurrentRuns": 2,
+        "maxToolCallsPerRun": 40
+      },
       "enabled": false
     },
     {
@@ -49,13 +71,21 @@
       "name": "Research",
       "accent": "#10B981",
       "role": "Browser research, recurring monitoring, administrative workflows.",
-      "modelId": null,
-      "modelNote": "default: Sonnet 5 (browser work, monitoring)",
+      "modelId": "us.anthropic.claude-opus-5",
+      "modelNote": "resolved from this account (frontier tier)",
       "maxTokens": 16000,
       "effort": "medium",
-      "tools": ["browser"],
+      "tools": [
+        "browser"
+      ],
       "workspaceMode": "ephemeral",
-      "budget": { "perRunUsd": 1.0, "perMonthUsd": 25.0, "onCeiling": "hard_stop", "maxConcurrentRuns": 1, "maxToolCallsPerRun": 50 },
+      "budget": {
+        "perRunUsd": 1.0,
+        "perMonthUsd": 25.0,
+        "onCeiling": "hard_stop",
+        "maxConcurrentRuns": 1,
+        "maxToolCallsPerRun": 50
+      },
       "enabled": false
     }
   ]
