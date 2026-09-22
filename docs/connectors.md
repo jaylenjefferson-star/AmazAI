@@ -8,6 +8,16 @@ There is **no allowlist of apps**. Any app Composio offers can be connected, and
 connecting it makes it usable by the person's Bots. What is decided per *call*,
 in code, is whether the call needs a human.
 
+**Tenant isolation, split across two boundaries.** AmazAI's own table isolates
+owners correctly: `install()` writes `external_user_id=<the caller's Auth0
+sub>` to Composio, and the `CONNECTOR#<ownerId>#<id>` row that references it
+is owner-scoped (fixed 2026-09; it previously was not -- see
+`docs/architecture/03-data-model.md`'s "multi-user seam" section). Whether
+Composio's *own* backend actually keeps two different `external_user_id`
+values from colliding within our one shared project key is not verified
+against the live service from this codebase -- confirm this in Composio's own
+dashboard/docs before relying on it for two real customers.
+
 ## The chain
 
 ```
@@ -18,7 +28,7 @@ connect  ->  org install  ->  per-Bot grant  ->  connector_search / connector_ca
 | Step | Where | What it answers |
 |---|---|---|
 | Connect | Composio's hosted page, via `POST /connectors/connect-token` | Did the person sign in to the app? The credential never reaches us. |
-| Install | `CONNECTOR#composio:<app>` row, `POST /connectors/{id}/install` | Composio reports an ACTIVE account for this person; we record its reference. |
+| Install | `CONNECTOR#<ownerId>#composio:<app>` row, `POST /connectors/{id}/install` | Composio reports an ACTIVE account for this person; we record its reference. |
 | Grant | `AGENT#<id>/GRANT#composio:<app>` row | Which Bots may use it, and how far (see below). Written for every active Bot on install, and defaulted for Bots the owner creates later. |
 | Call | `handlers/orchestrator.py` `_connector_call` | Classify the tool, check the grant, run `policy.evaluate`, then and only then call Composio. |
 

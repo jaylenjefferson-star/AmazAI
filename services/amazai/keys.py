@@ -41,8 +41,21 @@ def grant_sk(connector_id: str) -> str:
     return f"GRANT#{connector_id}"
 
 
-def connector_pk(connector_id: str) -> str:
-    return f"CONNECTOR#{connector_id}"
+def connector_pk(owner_id: str, connector_id: str) -> str:
+    """Owner-scoped, unlike most `_pk` helpers here.
+
+    Every other entity's id (`run_`, `agent_`, ...) is `new_id()`-generated,
+    so it is already globally unique and `ownerId` filtering on read is
+    enough to keep two owners apart. A connector's id is not: it is derived
+    from the app slug (`composio:slack`), the same value for every owner who
+    connects Slack. Without `owner_id` in the key, a second owner installing
+    the same app overwrites the first owner's row outright -- same pk/sk, a
+    `put_item` with no uniqueness check -- silently dropping their grants and
+    their Composio account reference. `ownerId` on the row is still what an
+    authorization check reads; this is what stops the collision from
+    happening before that check ever runs.
+    """
+    return f"CONNECTOR#{owner_id}#{connector_id}"
 
 
 def thread_pk(thread_id: str) -> str:
