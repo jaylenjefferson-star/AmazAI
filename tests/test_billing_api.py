@@ -182,3 +182,22 @@ class TestWebhook:
 
         resp = api.handler(raw_event, None)
         assert resp["statusCode"] == 200
+
+
+class TestTheGatewayItselfExemptsTheWebhook:
+    """The handler-level tests above proved the *code's* bypass works -- but
+    api.handler is never actually reached unless API Gateway's own route
+    resolves without its Auth0 JWT authorizer first. A live smoke test
+    against the deployed endpoint caught exactly this: the catch-all
+    `/{proxy+}` route attaches the authorizer to every path, including
+    /billing/webhook, and API Gateway's own 401 (`{"message":"Unauthorized"}`,
+    distinct in shape from this handler's `{"error": ...}`) never reaches
+    handler code at all. This is the regression guard for the fix -- a
+    dedicated, unauthenticated route registered for exactly this path."""
+
+    def test_the_webhook_route_has_no_authorizer(self):
+        from pathlib import Path
+        stack = (Path(__file__).resolve().parents[1] / "infra/lib/amazai-stack.ts").read_text()
+        start = stack.index("path: '/billing/webhook'")
+        block = stack[start:stack.index("});", start)]
+        assert "authorizer" not in block
