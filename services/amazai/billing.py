@@ -84,6 +84,12 @@ def ensure_billing_row(store: Store) -> dict:
         "entity": "Billing",
         "creditBalanceMicros": _to_micros(TRIAL_GRANT_USD),
         "tier": TIER_TRIAL,
+        # Explore's rate, not a bare number: the free tier is what a trial
+        # balance should read as "Amaz Credits" against before anyone has
+        # subscribed to anything. A missing/misconfigured plans file still
+        # grants the trial -- display just falls back to no credit figure
+        # (see credits_remaining) rather than blocking the grant on it.
+        "creditRateUsd": _explore_rate(),
         "stripeCustomerId": None,
         "stripeSubscriptionId": None,
         "subscriptionStatus": None,
@@ -100,6 +106,27 @@ def balance_usd(store: Store) -> float:
     if not row:
         return 0.0
     return _to_usd(row.get("creditBalanceMicros", 0))
+
+
+def _explore_rate() -> float | None:
+    try:
+        return plan("explore").get("creditRateUsd")
+    except (ValueError, OSError, KeyError):
+        return None
+
+
+def credits_remaining(store: Store) -> float | None:
+    """The balance, in "Amaz Credits" at this account's own tier rate --
+    what the console shows next to the real dollar balance `balance_usd`
+    still tracks underneath. `None` when the row (or its rate) doesn't
+    exist yet, never a divide-by-zero or a made-up number."""
+    row = store.try_get(_pk(store), BILLING_SK)
+    if not row:
+        return None
+    rate = row.get("creditRateUsd")
+    if not rate:
+        return None
+    return round(_to_usd(row.get("creditBalanceMicros", 0)) / rate, 2)
 
 
 def has_credit(store: Store) -> bool:
@@ -342,11 +369,17 @@ def _on_checkout_completed(session: dict, event_id: str, *, table=None) -> dict:
         # The subscription's own renewal grant lands separately via
         # invoice.paid -- Stripe fires that for every period, including this
         # first one, so granting here too would double-credit it. This only
-        # records which tier was bought, read back from the metadata this
-        # checkout session was created with (see start_checkout).
+        # records which tier was bought and its credit-to-dollar rate, read
+        # back from the metadata this checkout session was created with (see
+        # start_checkout) -- the rate travels with the tier because a plan's
+        # price in billing_plans.json can change after someone has already
+        # subscribed at the old one.
         plan_key = (session.get("metadata") or {}).get("planKey")
         if plan_key:
-            store.update(_pk(store), BILLING_SK, {"tier": plan_key})
+            row = plan(plan_key)
+            store.update(_pk(store), BILLING_SK, {
+                "tier": plan_key, "creditRateUsd": row.get("creditRateUsd"),
+            })
     return {"handled": True, "ownerId": owner_id}
 
 

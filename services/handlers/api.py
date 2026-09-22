@@ -920,6 +920,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         row = billing.ensure_billing_row(store)
         return _resp(200, {
             "balanceUsd": billing.balance_usd(store),
+            "creditsRemaining": billing.credits_remaining(store),
             "tier": row.get("tier"),
             "subscriptionStatus": row.get("subscriptionStatus"),
             "hasCredit": billing.has_credit(store),

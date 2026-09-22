@@ -49,7 +49,8 @@ class TestGetBillingPlans:
     def test_returns_the_shipped_plan_config(self, api_table):
         status, body = call("GET", "/billing/plans")
         assert status == 200
-        assert "entry" in body["plans"] and "mid" in body["plans"]
+        for key in ("explore", "personal", "personal_plus", "pro", "power"):
+            assert key in body["plans"]
 
 
 class TestPostCheckout:

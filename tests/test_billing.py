@@ -31,6 +31,36 @@ class TestTheFreeTrialGrant:
         assert entries[0]["kind"] == "trial_grant"
         assert entries[0]["amountUsd"] == B.TRIAL_GRANT_USD
 
+    def test_the_trial_balance_reads_as_amaz_credits_at_explores_rate(self, store):
+        B.ensure_billing_row(store)
+        explore_rate = B.plan("explore")["creditRateUsd"]
+        assert B.credits_remaining(store) == round(B.TRIAL_GRANT_USD / explore_rate, 2)
+
+
+class TestCreditsRemaining:
+    def test_none_for_an_unprovisioned_account(self, store):
+        assert B.credits_remaining(store) is None
+
+    def test_reflects_the_subscribed_tiers_rate(self, store, table):
+        B.ensure_billing_row(store)
+        event = {"id": "evt_x", "type": "checkout.session.completed",
+                 "data": {"object": {
+                     "client_reference_id": store.owner_id, "customer": "cus_x",
+                     "mode": "subscription", "metadata": {"planKey": "power"},
+                 }}}
+        B.handle_webhook_event(event, table=table)
+        # The rate as actually stored, not the raw JSON value: Store rounds
+        # floats to 6dp on write (DynamoDB rejects float natively), so the
+        # persisted rate can differ from billing_plans.json's by that much.
+        stored_rate = store.get(K_user_pk(store), B.BILLING_SK)["creditRateUsd"]
+        assert B.credits_remaining(store) == round(B.balance_usd(store) / stored_rate, 2)
+
+    def test_spending_lowers_credits_remaining_too(self, store):
+        B.ensure_billing_row(store)
+        before = B.credits_remaining(store)
+        B.spend(store, 1.0, run_id="run-1", agent_id="chief")
+        assert B.credits_remaining(store) < before
+
 
 class TestNoRowYetIsOpenNotZero:
     """The same convention identity.assert_owner uses for an unconfigured
@@ -142,7 +172,21 @@ class TestTwoOwnersDoNotShareABalance:
 class TestPlanConfig:
     def test_the_shipped_plans_load(self):
         plans = B.load_plans()
-        assert "entry" in plans["plans"] and "mid" in plans["plans"]
+        for key in ("explore", "personal", "personal_plus", "pro", "power"):
+            assert key in plans["plans"]
+
+    def test_the_paid_tiers_credit_rate_is_price_over_credits(self):
+        for key, row in B.load_plans()["plans"].items():
+            if row["priceUsd"] == 0:
+                continue
+            assert row["creditRateUsd"] == pytest.approx(
+                row["priceUsd"] / row["creditsPerMonth"]), key
+
+    def test_credit_rate_improves_at_higher_tiers(self):
+        plans = B.load_plans()["plans"]
+        rates = [plans[k]["creditRateUsd"]
+                for k in ("personal", "personal_plus", "pro", "power")]
+        assert rates == sorted(rates, reverse=True)
 
     def test_plan_raises_for_an_unknown_key(self):
         with pytest.raises(ValueError, match="unknown plan"):
@@ -210,17 +254,17 @@ class TestStartCheckout:
         monkeypatch.setattr(B.stripe_client, "StripeClient", lambda: fake)
         # The shipped config ships stripePriceId: null; a real price is what
         # scripts/stripe_setup.py fills in -- stand one up for this test.
-        monkeypatch.setattr(B, "plan", lambda key: {"stripePriceId": "price_entry_x"})
+        monkeypatch.setattr(B, "plan", lambda key: {"stripePriceId": "price_personal_x"})
 
-        url = B.start_checkout(store, plan_key="entry",
+        url = B.start_checkout(store, plan_key="personal",
                                success_url="https://x/ok", cancel_url="https://x/cancel")
 
         assert url == "https://checkout.stripe.com/x"
         call = fake.checkout_calls[0]
         assert call["mode"] == "subscription"
-        assert call["price_id"] == "price_entry_x"
+        assert call["price_id"] == "price_personal_x"
         assert call["owner_id"] == store.owner_id
-        assert call["metadata"] == {"planKey": "entry"}
+        assert call["metadata"] == {"planKey": "personal"}
 
     def test_a_top_up_checkout_is_one_time_payment_mode(self, store, monkeypatch):
         fake = _FakeStripeClient()
@@ -239,7 +283,7 @@ class TestStartCheckout:
         store.put({"pk": K_user_pk(store), "sk": B.BILLING_SK, "entity": "Billing",
                   "creditBalanceMicros": 0, "stripeCustomerId": "cus_existing"})
 
-        B.start_checkout(store, plan_key="entry",
+        B.start_checkout(store, plan_key="personal",
                          success_url="https://x", cancel_url="https://x")
 
         assert fake.checkout_calls[0]["customer_id"] == "cus_existing"
@@ -249,8 +293,10 @@ class TestStartCheckout:
             B.start_checkout(store, success_url="https://x", cancel_url="https://x")
 
     def test_a_plan_with_no_stripe_price_yet_refuses_clearly(self, store):
+        # The shipped config has every real plan's stripePriceId: null until
+        # scripts/stripe_setup.py runs against a real Stripe account.
         with pytest.raises(RuntimeError, match="stripe_setup.py"):
-            B.start_checkout(store, plan_key="entry",
+            B.start_checkout(store, plan_key="personal",
                              success_url="https://x", cancel_url="https://x")
 
 
@@ -295,11 +341,12 @@ class TestWebhookDispatch:
         event = {"id": "evt_2", "type": "checkout.session.completed",
                  "data": {"object": {
                      "client_reference_id": store.owner_id, "customer": "cus_2",
-                     "mode": "subscription", "metadata": {"planKey": "entry"},
+                     "mode": "subscription", "metadata": {"planKey": "personal"},
                  }}}
         B.handle_webhook_event(event, table=table)
         row = store.get(K_user_pk(store), B.BILLING_SK)
-        assert row["tier"] == "entry"
+        assert row["tier"] == "personal"
+        assert row["creditRateUsd"] == pytest.approx(0.019)
         assert B.balance_usd(store) == before  # invoice.paid grants the period, not this
 
     def test_checkout_completed_replayed_does_not_double_grant_a_top_up(self, store, table):
