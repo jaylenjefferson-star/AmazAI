@@ -517,6 +517,20 @@ export class AmazaiStack extends cdk.Stack {
       authorizer: httpAuthorizer,
     });
 
+    // Stripe signs this request with its own HMAC secret
+    // (stripe_client.verify_webhook, checked inside the handler) and never
+    // sends an Auth0 bearer token -- the catch-all route's authorizer above
+    // would reject every real webhook at the gateway before the handler's
+    // own bypass (handlers.api.handler, the `path == "/billing/webhook"`
+    // check) ever runs. HTTP API resolves a literal path against a `{proxy+}`
+    // wildcard by specificity, not registration order, so this exemption
+    // applies regardless of where it appears in the file.
+    httpApi.addRoutes({
+      path: '/billing/webhook',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: new apigwv2int.HttpLambdaIntegration('BillingWebhookInt', apiFn),
+    });
+
     // ---------------------------------------------------------------------
     // L1 · WebSocket — streaming deltas, tool chips, approval prompts
     // ---------------------------------------------------------------------
