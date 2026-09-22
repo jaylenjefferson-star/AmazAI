@@ -61,7 +61,7 @@ class TestTheGreeting:
 
     def test_the_greeting_lives_on_the_bots_own_thread(self):
         plan = A.plan_create(a_bot(), PERSON)
-        assert greeting(plan)["pk"] == K.thread_pk("dm-cloud-operations")
+        assert greeting(plan)["pk"] == K.thread_pk(PERSON.user_id, "dm-cloud-operations")
 
     def test_the_greeting_is_undone_with_the_agent(self):
         """A failed harness rolls back every row; a greeting left behind would

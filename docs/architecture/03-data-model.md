@@ -26,8 +26,8 @@ yours.
 | Memory | `AGENT#<ownerId>#<id>` | `MEM#<memId>` | — | — |
 | Grant | `AGENT#<ownerId>#<id>` | `GRANT#<connectorId>` | — | `CONNECTOR#<connectorId>` / `AGENT#<ownerId>#<id>` |
 | Connector | `CONNECTOR#<ownerId>#<id>` | `META` | `CONNECTORS` / `<provider>` | — |
-| Thread | `THREAD#<id>` | `META` | `THREADS` / `<lastActivity>` | — |
-| Message | `THREAD#<id>` | `MSG#<iso>#<rand>` | — | — |
+| Thread | `THREAD#<ownerId>#<id>` | `META` | `THREADS` / `<lastActivity>` | — |
+| Message | `THREAD#<ownerId>#<id>` | `MSG#<iso>#<rand>` | — | — |
 | Run | `RUN#<id>` | `META` | `RUNS` / `<startedAt>` | `RUNSTATE#<state>` / `<heartbeatAt>` |
 | Run event | `RUN#<id>` | `EVT#<seq>` | — | — |
 | Approval | `RUN#<id>` | `APV#<apvId>` | `APPROVALS` / `<status>#<created>` | `APVEXPIRY` / `<expiresAt>` |
@@ -257,27 +257,28 @@ No table redesign, no GSI change, no migration of run history. That is the whole
 point of putting `ownerId` on every row now, while there is exactly one value
 for it.
 
-**An exception, hit twice.** The "`ownerId` on the row is enough" premise
-assumes every entity's own id is already globally unique -- true for `Run`
-and for a room `Thread` (both `new_id()`-generated), but not for `Connector`
-(id derived from the app slug, `composio:slack`) or `Agent` (id derived from
-the Bot's display name via `normalize_agent_id` -- "Engineering" always slugs
-to `eng`). Either way, a second owner's write used to overwrite the first
-owner's row outright: same pk, an unconditional write, `ownerId` filtering
-only ever guarding *reads*, never the write itself. Both fixed the same way
--- `ownerId` moved into the row's own pk (`CONNECTOR#<ownerId>#<id>`,
-`AGENT#<ownerId>#<id>`) rather than relying on the field alone -- see
-`keys.connector_pk` / `keys.agent_pk`.
+**An exception, hit three times.** The "`ownerId` on the row is enough"
+premise assumes every entity's own id is already globally unique -- true for
+`Run` and for a *room* `Thread` (both `new_id()`-generated), but not for
+`Connector` (id derived from the app slug, `composio:slack`), `Agent` (id
+derived from the Bot's display name via `normalize_agent_id` -- "Engineering"
+always slugs to `eng`), or a *DM* `Thread` (`dm-<agentId>`, `agents.plan_create`
+and five more call sites -- grep `f"dm-{` under `services/`; also what
+`collab.direct_thread_id` hashes, from just the pair of agent ids, no owner).
+Every one of these is identical for every owner whose onboarding creates the
+same default names, and every one used to let a second owner's write silently
+overwrite the first owner's row outright: same pk, an unconditional write,
+`ownerId` filtering only ever guarding *reads*, never the write itself.
 
-**A third instance, found but not yet fixed: a DM `Thread`.** Every *room*
-thread already gets a `new_id()` id, safe by construction, but a Bot's own DM
-thread is `dm-<agentId>` (`agents.plan_create`, and five more call sites --
-grep `f"dm-{` under `services/`) -- identical for every owner whose
-identically-named Bot gets one. Deliberately not fixed alongside `Agent`:
-unlike an internal pk, this id is already live production data (the one real
-account's actual `dm-eng` conversation), so changing how it is derived is a
-migration decision -- what happens to existing threads on the old scheme --
-not a same-shaped find-and-replace. `tests/test_agents.py`'s
-`TestTenantIsolation::test_the_dm_thread_this_agent_gets_still_collides`
-characterises exactly this gap so it cannot regress silently into "fixed" or
-be forgotten.
+All three fixed the same way -- `ownerId` moved into the row's own pk
+(`CONNECTOR#<ownerId>#<id>`, `AGENT#<ownerId>#<id>`, `THREAD#<ownerId>#<id>`)
+rather than relying on the field alone -- see `keys.connector_pk` /
+`keys.agent_pk` / `keys.thread_pk`. The `Thread` fix deliberately does not
+touch how a thread's *id* is generated (`dm-<agentId>` stays `dm-<agentId>`,
+`direct_thread_id`'s hash stays a hash of just the two agent ids): only the
+*storage key* built from that id gained an owner prefix, exactly as for
+`Agent`. That distinction is what keeps every other place `threadId` is read
+as a field -- a `Run`'s own `threadId`, a push event, a console URL --
+unchanged and in need of no migration of their own; only the `Thread`/`Message`
+rows themselves needed moving, the same copy-verify-delete migration already
+proven for `Agent`.

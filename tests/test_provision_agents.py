@@ -81,7 +81,7 @@ def test_new_seat_is_written_as_a_logical_bot_on_shared_compute(table):
     P.write_agent(store, SEAT, ARN, ROLE, runtime_mode="shared")
     row = store.get(K.agent_pk(store.owner_id, "eng"), "META")
     assert row["harnessArn"] == ARN and row["runtimeMode"] == "shared"
-    thread = store.get(K.thread_pk("dm-eng"), "META")
+    thread = store.get(K.thread_pk(store.owner_id, "dm-eng"), "META")
     assert thread["sessionId"] == K.bot_session_id("owner-a", "eng", "dm-eng")
 
 def test_reprovision_records_shared_and_dedicated_targets_for_v1_resume(table):

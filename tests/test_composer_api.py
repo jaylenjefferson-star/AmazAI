@@ -301,7 +301,7 @@ class TestRoomMembers:
         store = Store("owner-a", table=api_table)
         eng, ops = make_agent("Eng"), make_agent("Ops")
         room = make_room(eng)
-        store.update(K.thread_pk(room), "META", {"status": "completed"})
+        store.update(K.thread_pk(store.owner_id, room), "META", {"status": "completed"})
         assert call("PATCH", f"/threads/{room}", {"agentIds": [eng, ops]})[0] == 409
 
     def test_a_room_can_be_renamed(self, api_table):

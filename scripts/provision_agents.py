@@ -168,7 +168,7 @@ def write_agent(store: Store, seat: dict, harness_arn: str, role_arn: str,
     store.put(item)
     print(f"  agent row written: {agent_id}")
 
-    thread_pk = K.thread_pk(f"dm-{agent_id}")
+    thread_pk = K.thread_pk(store.owner_id, f"dm-{agent_id}")
     if not store.try_get(thread_pk, "META"):
         store.put({
             "pk": thread_pk, "sk": "META",

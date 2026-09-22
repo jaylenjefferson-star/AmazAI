@@ -312,24 +312,21 @@ class TestTenantIsolation:
         silently overwritten owner A's row outright: same pk, an
         unconditional transact_put, ownerId on the row guarding only reads.
 
-        This only exercises the Agent/Grant/MemoryNamespace/AuditEvent rows
-        directly, not the whole plan: `plan_create` also queues a
-        `dm-<agentId>` Thread (and its first Message, under the same pk),
-        and that id has the identical collision -- still open, deliberately
-        not fixed alongside this one. Unlike agentId, a thread's id is not
-        just a key: it is already live in production (`dm-eng`, the one real
-        account's actual conversation), so changing how it is derived is a
-        migration question, not a same-shaped find-and-replace. See
-        `test_the_dm_thread_this_agent_gets_still_collides`."""
+        Exercises the *whole* plan, including the `dm-<agentId>` Thread and
+        its first Message: `thread_pk` is owner-scoped the same way, so the
+        identical-DM-id collision (`dm-cloud-operations` for both owners) is
+        closed by the same mechanism without changing what `threadId`
+        actually contains anywhere it is read as a field (a Run's own
+        `threadId`, a push event) -- only the row's storage key gained an
+        owner prefix, same as `agent_pk`."""
         a, b = two_stores
         actor_a = A.Actor(user_id=a.owner_id, org_id="org-1")
         actor_b = A.Actor(user_id=b.owner_id, org_id="org-2")
 
-        not_yet_owner_safe = {"Thread", "Message"}
         plan_a = A.plan_create(a_body(), actor_a, org_connectors=ORG)
-        a.transact_put([i for i in plan_a.items if i["entity"] not in not_yet_owner_safe])
+        a.transact_put(plan_a.items)
         plan_b = A.plan_create(a_body(), actor_b, org_connectors=ORG)
-        b.transact_put([i for i in plan_b.items if i["entity"] not in not_yet_owner_safe])
+        b.transact_put(plan_b.items)
 
         assert plan_a.agent_id == plan_b.agent_id == "cloud-operations"
         row_a = a.get(K.agent_pk(a.owner_id, "cloud-operations"), "META")
@@ -341,28 +338,14 @@ class TestTenantIsolation:
         assert len(a.query_index("gsi1", "gsi1pk", "AGENTS")) == 1
         assert len(b.query_index("gsi1", "gsi1pk", "AGENTS")) == 1
 
-    def test_the_dm_thread_this_agent_gets_still_collides(self, two_stores):
-        """Characterises the gap the test above deliberately steps around --
-        a regression guard against this silently starting to pass (which
-        would mean someone fixed it without this comment being updated) and
-        the clearest possible record of what "fix the thread collision too"
-        would actually need to change. `dm-<agentId>` is identical for two
-        owners' identically-named Bot, same as agentId itself was; the fix
-        is not a one-line mirror of the agent_pk fix, because the DM thread
-        id is not just an internal key the way a pk is -- it is already live
-        data (the one real account's `dm-eng` thread) that a re-derivation
-        would orphan, so it needs a migration decision, not a find-and-replace."""
-        a, b = two_stores
-        actor_a = A.Actor(user_id=a.owner_id, org_id="org-1")
-        actor_b = A.Actor(user_id=b.owner_id, org_id="org-2")
-
-        plan_a = A.plan_create(a_body(), actor_a, org_connectors=ORG)
-        a.transact_put(plan_a.items)
-        plan_b = A.plan_create(a_body(), actor_b, org_connectors=ORG)
-
-        from amazai.store import Conflict
-        with pytest.raises(Conflict):
-            b.transact_put(plan_b.items)
+        # Both DM threads -- same id ("dm-cloud-operations"), different pk.
+        thread_id = "dm-cloud-operations"
+        thread_a = a.get(K.thread_pk(a.owner_id, thread_id), "META")
+        thread_b = b.get(K.thread_pk(b.owner_id, thread_id), "META")
+        assert thread_a["agentIds"] == ["cloud-operations"]
+        assert thread_b["agentIds"] == ["cloud-operations"]
+        assert len(a.query(K.thread_pk(a.owner_id, thread_id), sk_prefix="MSG#")) == 1
+        assert len(b.query(K.thread_pk(b.owner_id, thread_id), sk_prefix="MSG#")) == 1
 
 
 # --- atomicity --------------------------------------------------------------

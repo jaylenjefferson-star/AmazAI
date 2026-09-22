@@ -745,7 +745,7 @@ def plan_create(body: dict, actor: Actor, *,
             **({"previewAuthor": brief_author} if brief_author else {}),
         }
         initial_message = {
-            "pk": K.thread_pk(thread_id),
+            "pk": K.thread_pk(actor.user_id, thread_id),
             "sk": K.message_sk(now_iso(), ordered_suffix()),
             "entity": "Message", "role": "user", "kind": "briefing",
             "author": brief_author or "a teammate",
@@ -758,7 +758,7 @@ def plan_create(body: dict, actor: Actor, *,
             entrypoint=profile["entrypoint"], operator=onboarding.operator_name(body))
         preview = threads.touch(text, "assistant")
         initial_message = {
-            "pk": K.thread_pk(thread_id),
+            "pk": K.thread_pk(actor.user_id, thread_id),
             "sk": K.message_sk(now_iso(), ordered_suffix()),
             "entity": "Message", "role": "assistant",
             "author": profile["name"], "agentId": agent_id,
@@ -768,7 +768,7 @@ def plan_create(body: dict, actor: Actor, *,
             initial_message["suggestions"] = suggestions
 
     items.append({
-        "pk": K.thread_pk(thread_id), "sk": "META",
+        "pk": K.thread_pk(actor.user_id, thread_id), "sk": "META",
         "entity": "Thread", "threadId": thread_id,
         "gsi1pk": "THREADS", "gsi1sk": now_iso(),
         "kind": "dm", "title": profile["name"], "agentIds": [agent_id],

@@ -291,7 +291,7 @@ class TestWhatTheTurnLeavesBehind:
         orch._persist_message(world.store, world.run, world.agent, "Here you go.", world.cost,
                               steps=world.turn.steps, cards=world.turn.cards,
                               started_at="2026-09-20T09:00:00Z")
-        rows = world.store.query(K.thread_pk(world.run["threadId"]), sk_prefix="MSG#")
+        rows = world.store.query(K.thread_pk(world.store.owner_id, world.run["threadId"]), sk_prefix="MSG#")
         row = rows[-1]
         assert [s["name"] for s in row["steps"]] == [READ, "propose_routine"]
         assert row["steps"][0]["review"]["decision"] == "allowed"
@@ -302,7 +302,7 @@ class TestWhatTheTurnLeavesBehind:
         world.use(WRITE, POST)   # pauses; the model said nothing
         orch._persist_message(world.store, world.run, world.agent, "", world.cost,
                               steps=world.turn.steps, cards=[])
-        rows = world.store.query(K.thread_pk(world.run["threadId"]), sk_prefix="MSG#")
+        rows = world.store.query(K.thread_pk(world.store.owner_id, world.run["threadId"]), sk_prefix="MSG#")
         assert rows[-1]["steps"][0]["review"]["decision"] == "asked"
         assert agentcore.build_messages(rows) == []
 
@@ -311,13 +311,13 @@ class TestWhatTheTurnLeavesBehind:
                                   "body": "Summaries as bullets, not prose."})
         memories = world.store.query(K.agent_pk(world.store.owner_id, world.agent_id), sk_prefix="MEM#")
         assert [m["title"] for m in memories] == ["Prefers bullets"]
-        rows = world.store.query(K.thread_pk(world.run["threadId"]), sk_prefix="MSG#")
+        rows = world.store.query(K.thread_pk(world.store.owner_id, world.run["threadId"]), sk_prefix="MSG#")
         event = rows[-1]
         assert event["kind"] == "event" and event["role"] == "system"
         assert "Prefers bullets" in event["text"]
 
     def test_an_event_is_not_sent_to_the_model_and_does_not_make_a_thread_unread(self, world):
-        thread = K.thread_pk(world.run["threadId"])
+        thread = K.thread_pk(world.store.owner_id, world.run["threadId"])
         world.store.put({"pk": thread, "sk": "META", "entity": "Thread",
                          "threadId": world.run["threadId"], "lastActivity": "2026-01-01T00:00:00Z"})
         threads.event(world.store, world.run["threadId"], "Routine created: X", icon="clock")

@@ -291,7 +291,7 @@ class TestApprovedCreationAlwaysResumesTheProposer:
         saved = store.get(run["pk"], K.approval_sk(apv["approvalId"]))
         assert saved["executionStatus"] == "created"
         assert saved["firstTaskStatus"]["status"] == "deferred"
-        events = store.query(K.thread_pk(run["threadId"]), sk_prefix="MSG#")
+        events = store.query(K.thread_pk(store.owner_id, run["threadId"]), sk_prefix="MSG#")
         assert any("first task waiting: over budget" in e.get("text", "") for e in events)
 
     def test_a_creation_failure_is_recorded_and_the_parent_still_resumes(self, api_table, monkeypatch):
@@ -314,7 +314,7 @@ class TestApprovedCreationAlwaysResumesTheProposer:
         saved = store.get(run["pk"], K.approval_sk(apv["approvalId"]))
         assert saved["executionStatus"] == "failed"
         assert "provision failed" in saved["executionError"]
-        events = store.query(K.thread_pk(run["threadId"]), sk_prefix="MSG#")
+        events = store.query(K.thread_pk(store.owner_id, run["threadId"]), sk_prefix="MSG#")
         assert any("Bot creation failed" in e.get("text", "") for e in events)
 
 

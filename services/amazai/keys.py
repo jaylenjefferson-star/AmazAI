@@ -70,8 +70,22 @@ def connector_pk(owner_id: str, connector_id: str) -> str:
     return f"CONNECTOR#{owner_id}#{connector_id}"
 
 
-def thread_pk(thread_id: str) -> str:
-    return f"THREAD#{thread_id}"
+def thread_pk(owner_id: str, thread_id: str) -> str:
+    """Owner-scoped, for the same reason `agent_pk`/`connector_pk` are.
+
+    A room thread's own id is `new_id()`-generated and already globally
+    unique, but a DM thread's is not: `agents.plan_create` derives it as
+    `dm-<agentId>`, identical for every owner whose identically-named Bot
+    gets one, and `collab.direct_thread_id` hashes only the *pair of agent
+    ids* -- no owner -- so two owners' same-named agent pair collide there
+    too. Both are values passed into this one function for storage, so
+    scoping the pk here closes both at once without changing either
+    id-generation scheme, and without touching `threadId` as it appears
+    everywhere else (a `Run`'s own `threadId` field, a push event, a
+    console URL) -- those still read the same value they always did; only
+    the row's storage key gained a prefix.
+    """
+    return f"THREAD#{owner_id}#{thread_id}"
 
 
 def message_sk(iso: str, rand: str) -> str:

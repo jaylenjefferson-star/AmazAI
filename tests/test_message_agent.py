@@ -40,7 +40,7 @@ def agents(store):
 @pytest.fixture
 def room(agents):
     """A collaboration context both eng and ops belong to."""
-    agents.put({"pk": K.thread_pk("room-1"), "sk": "META", "entity": "Thread",
+    agents.put({"pk": K.thread_pk(agents.owner_id, "room-1"), "sk": "META", "entity": "Thread",
                "kind": "room", "agentIds": ["eng", "ops"]})
     return "room-1"
 

@@ -168,7 +168,7 @@ class TestCreate:
 
         store = Store("owner-a", table=api_table)
         assert store.query(K.agent_pk(store.owner_id, "cloud-operations"), sk_prefix="GRANT#") == []
-        assert store.try_get(K.thread_pk("dm-cloud-operations"), "META") is None
+        assert store.try_get(K.thread_pk(store.owner_id, "dm-cloud-operations"), "META") is None
 
     def test_a_failed_attempt_still_leaves_an_audit_trail(self, api_table, monkeypatch):
         """Rollback removes the agent. That it was attempted and why it failed
