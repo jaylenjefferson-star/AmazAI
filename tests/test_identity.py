@@ -161,15 +161,82 @@ class TestOwnerAllowlist:
         monkeypatch.setenv("OWNER_SUBJECTS", "auth0|owner-1")
         I.assert_owner(I.verify(token(signing)))
 
-    def test_an_unlisted_subject_is_refused(self, signing, monkeypatch):
+    def test_an_unlisted_subject_is_refused(self, signing, monkeypatch, table):
+        # Refusal now falls through to the DB-backed allowlist too (see
+        # TestDbAllowlist below); an empty mocked table is what makes "and
+        # isn't in the DB list either" true here rather than a real AWS call.
+        monkeypatch.setattr(I, "_table", lambda: table)
         monkeypatch.setenv("OWNER_SUBJECTS", "auth0|somebody-else")
         with pytest.raises(I.AuthError):
             I.assert_owner(I.verify(token(signing)))
 
-    def test_an_unverified_email_never_satisfies_the_allowlist(self, signing, monkeypatch):
+    def test_an_unverified_email_never_satisfies_the_allowlist(self, signing, monkeypatch, table):
         """Otherwise anyone who can sign up with an address gets in before
         proving they hold it."""
+        monkeypatch.setattr(I, "_table", lambda: table)
         monkeypatch.setenv("OWNER_EMAILS", "owner@example.com")
         unverified = I.verify(token(signing, email_verified=False))
         with pytest.raises(I.AuthError):
             I.assert_owner(unverified)
+
+
+class TestDbAllowlist:
+    """The second door: OWNER_SUBJECTS/OWNER_EMAILS still work unchanged
+    (an env var, redeploy to add one more person); this is the same gate
+    with entries a signed-in owner can add or remove without one."""
+
+    def test_allowing_by_email_lets_a_verified_match_in(self, signing, monkeypatch, table):
+        monkeypatch.setattr(I, "_table", lambda: table)
+        monkeypatch.setenv("OWNER_SUBJECTS", "auth0|the-operator")
+        I.allow("owner@example.com")
+
+        I.assert_owner(I.verify(token(signing)))  # sub=auth0|owner-1, email=owner@example.com
+
+    def test_an_unverified_email_does_not_satisfy_the_db_allowlist_either(
+            self, signing, monkeypatch, table):
+        monkeypatch.setattr(I, "_table", lambda: table)
+        monkeypatch.setenv("OWNER_SUBJECTS", "auth0|the-operator")
+        I.allow("owner@example.com")
+
+        unverified = I.verify(token(signing, email_verified=False))
+        with pytest.raises(I.AuthError):
+            I.assert_owner(unverified)
+
+    def test_allowing_by_subject_lets_that_subject_in(self, signing, monkeypatch, table):
+        monkeypatch.setattr(I, "_table", lambda: table)
+        monkeypatch.setenv("OWNER_SUBJECTS", "auth0|the-operator")
+        I.allow("auth0|owner-1")
+
+        I.assert_owner(I.verify(token(signing, email=None, email_verified=False)))
+
+    def test_disallow_revokes_it(self, signing, monkeypatch, table):
+        monkeypatch.setattr(I, "_table", lambda: table)
+        monkeypatch.setenv("OWNER_SUBJECTS", "auth0|the-operator")
+        I.allow("owner@example.com")
+        I.disallow("owner@example.com")
+
+        with pytest.raises(I.AuthError):
+            I.assert_owner(I.verify(token(signing)))
+
+    def test_allow_is_case_insensitive_and_idempotent(self, monkeypatch, table):
+        monkeypatch.setattr(I, "_table", lambda: table)
+        I.allow("Friend@Example.com")
+        I.allow("friend@example.com")
+
+        entries = I.list_allowed()
+        assert [e["value"] for e in entries] == ["friend@example.com"]
+
+    def test_list_allowed_reports_who_added_each_entry(self, monkeypatch, table):
+        monkeypatch.setattr(I, "_table", lambda: table)
+        I.allow("friend@example.com", added_by="auth0|the-operator")
+
+        entries = I.list_allowed()
+        assert entries[0]["addedBy"] == "auth0|the-operator"
+
+    def test_an_unrelated_email_is_still_refused(self, signing, monkeypatch, table):
+        monkeypatch.setattr(I, "_table", lambda: table)
+        monkeypatch.setenv("OWNER_SUBJECTS", "auth0|the-operator")
+        I.allow("somebody-else@example.com")
+
+        with pytest.raises(I.AuthError):
+            I.assert_owner(I.verify(token(signing)))

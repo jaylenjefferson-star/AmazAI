@@ -808,6 +808,27 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         except S.ValidationError as exc:
             return _resp(400, {"error": "invalid_request", "detail": str(exc)})
 
+    # --- allowlist -----------------------------------------------------
+    # Who may sign in at all -- the gate `identity.assert_owner` checks
+    # before any route (including this one) is ever reached, so getting
+    # here already proves the caller is allowed. Managing the list is
+    # therefore no more privileged than anything else an owner can already
+    # do; there is no separate admin role yet (that is PR-scoped elsewhere).
+    if path == "/allowlist" and method == "GET":
+        return _resp(200, {"allowlist": identity.list_allowed()})
+
+    if path == "/allowlist" and method == "POST":
+        value = (body.get("value") or body.get("email") or "").strip()
+        if not value:
+            return _resp(400, {"error": "invalid_request", "detail": "value is required"})
+        actor = _actor(event)
+        entry = identity.allow(value, added_by=actor.user_id)
+        return _resp(201, entry)
+
+    if (p := _match(path, "/allowlist/{value}")) and method == "DELETE":
+        identity.disallow(p[0])
+        return _resp(204, {})
+
     # --- usage -------------------------------------------------------------
     if path == "/usage" and method == "GET":
         qs = event.get("queryStringParameters") or {}
