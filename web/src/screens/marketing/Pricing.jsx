@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import PublicShell from '../../components/PublicShell';
+import { api } from '../../api';
+import { startLogin, useAuth0 } from '../../auth0';
 
 const TIERS = [
-  { name: 'Explore', price: '$0', period: '/month', credits: '100 Amaz Credits', tagline: 'Build your first AI team', includes: ['Try skills, agents, and safe tasks'] },
-  { name: 'Personal', price: '$19', period: '/month', credits: '1,000 Amaz Credits', tagline: 'Your work, delegated', includes: ['Agent workspace', 'Connected tools', 'Approval-first actions'] },
-  { name: 'Personal+', price: '$39', period: '/month', credits: '2,500 Amaz Credits', tagline: 'More capacity for daily work', includes: ['More agents', 'More routines', 'Add-on credits'], featured: true },
-  { name: 'Pro', price: '$79', period: '/month', credits: '6,000 Amaz Credits', tagline: 'For power users', includes: ['Priority runs', 'Advanced Skills', 'More connected work'] },
-  { name: 'Power', price: '$149', period: '/month', credits: '12,000 Amaz Credits', tagline: 'For people who run their work through AmazAI', includes: ['Maximum capacity', 'Advanced controls', 'Priority support'] },
+  { key: 'explore', name: 'Explore', price: '$0', period: '/month', credits: '100 Amaz Credits', tagline: 'Build your first AI team', includes: ['Try skills, agents, and safe tasks'] },
+  { key: 'personal', name: 'Personal', price: '$19', period: '/month', credits: '1,000 Amaz Credits', tagline: 'Your work, delegated', includes: ['Agent workspace', 'Connected tools', 'Approval-first actions'] },
+  { key: 'personal_plus', name: 'Personal+', price: '$39', period: '/month', credits: '2,500 Amaz Credits', tagline: 'More capacity for daily work', includes: ['More agents', 'More routines', 'Add-on credits'], featured: true },
+  { key: 'pro', name: 'Pro', price: '$79', period: '/month', credits: '6,000 Amaz Credits', tagline: 'For power users', includes: ['Priority runs', 'Advanced Skills', 'More connected work'] },
+  { key: 'power', name: 'Power', price: '$149', period: '/month', credits: '12,000 Amaz Credits', tagline: 'For people who run their work through AmazAI', includes: ['Maximum capacity', 'Advanced controls', 'Priority support'] },
 ];
 
 const FAQ = [
@@ -20,6 +22,35 @@ const FAQ = [
 
 export default function Pricing() {
   const [openFaq, setOpenFaq] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const { isAuthenticated, loginWithRedirect } = useAuth0();
+
+  // Signed in: start checkout for that exact plan and go straight to
+  // Stripe. Signed out: the same Universal Login signup every other "get
+  // started" button on this site uses -- a brand-new account still has
+  // onboarding to get through (meeting Chief) before a plan means anything,
+  // so this does not try to carry the chosen tier through that flow. The
+  // Billing page (linked from account nav once signed in) is one more click
+  // away to pick a plan for real.
+  async function getStarted(planKey) {
+    if (!isAuthenticated) {
+      startLogin(loginWithRedirect, { signup: true, returnTo: '/welcome' });
+      return;
+    }
+    setBusy(planKey); setError('');
+    try {
+      // success/cancel URLs are not sent from here: the server builds them
+      // from the request's own Origin header (services/handlers/api.py),
+      // never from client input -- a client-supplied redirect target would
+      // be an open redirect through Stripe's own domain.
+      const { url } = await api.billing.checkout({ planKey });
+      window.location.href = url;
+    } catch (err) {
+      setError(err.message);
+      setBusy('');
+    }
+  }
 
   return (
     <PublicShell wide>
@@ -27,6 +58,8 @@ export default function Pricing() {
         <h1>Pricing that scales with the work, not the seat.</h1>
         <p>Every plan includes the same approval-first guardrails. What changes is how much work your team can run.</p>
       </section>
+
+      {error && <div className="err"><span className="msg-text">{error}</span></div>}
 
       <section className="pricing-grid">
         {TIERS.map((t) => (
@@ -39,7 +72,13 @@ export default function Pricing() {
             <ul>
               {t.includes.map((i) => <li key={i}>{i}</li>)}
             </ul>
-            <button className={t.featured ? 'primary' : 'ghost'}>Get started</button>
+            <button
+              className={t.featured ? 'primary' : 'ghost'}
+              disabled={busy === t.key}
+              onClick={() => getStarted(t.key)}
+            >
+              {busy === t.key ? 'Redirecting…' : 'Get started'}
+            </button>
           </article>
         ))}
       </section>
