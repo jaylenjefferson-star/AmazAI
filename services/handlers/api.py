@@ -1288,7 +1288,7 @@ def _resolve_entrypoint_agent(store: Store) -> dict:
     rows = store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
     for row in rows:
         if row.get("entrypoint") is True:
-            return store.get(K.agent_pk(row["agentId"]), "META")
+            return store.get(K.agent_pk(store.owner_id, row["agentId"]), "META")
     raise NotFound("this organization has no entrypoint Bot to reset")
 
 
@@ -1311,7 +1311,7 @@ def _admin_reset_onboarding(store: Store, agent_id: str, body: dict, event: dict
     govern.assert_not_frozen(store.try_get(K.org_pk(_admin_org_id(event)), "KILLSWITCH"))
     D.assert_can(membership, D.Capability.CHANGE_ORG_POLICIES)
 
-    agent = store.get(K.agent_pk(agent_id), "META")   # 404 if not this owner's
+    agent = store.get(K.agent_pk(store.owner_id, agent_id), "META")   # 404 if not this owner's
     if agent.get("entrypoint") is not True:
         # 'Chief' is the onboarding entrypoint; only it carries the brief and
         # the closest-fit greeting, so only it can be reset back into it.
@@ -1359,7 +1359,7 @@ def _reset_onboarding_agent(store: Store, agent: dict, body: dict, event: dict):
     # and validation are identical to any other prompt change.
     fresh_prompt = onboarding.brief(agent["name"])
     changes, events = A.plan_update(agent, {"systemPrompt": fresh_prompt}, actor)
-    store.update(K.agent_pk(agent_id), "META", changes)
+    store.update(K.agent_pk(store.owner_id, agent_id), "META", changes)
     for ev in events:
         store.put(ev)
 
@@ -1368,7 +1368,7 @@ def _reset_onboarding_agent(store: Store, agent: dict, body: dict, event: dict):
     # in the dm partition are removed -- there are no AUDIT#/evidence rows in a
     # thread partition, so nothing append-only is at risk here.
     thread_id = f"dm-{agent_id}"
-    thread_pk = K.thread_pk(thread_id)
+    thread_pk = K.thread_pk(store.owner_id, thread_id)
     existing_msgs = store.query(thread_pk, sk_prefix="MSG#", limit=500)
     for msg in existing_msgs:
         store.delete(thread_pk, msg["sk"])
@@ -1425,7 +1425,7 @@ def _admin_archive_memory(store: Store, agent_id: str, body: dict, event: dict):
     govern.assert_not_frozen(store.try_get(K.org_pk(_admin_org_id(event)), "KILLSWITCH"))
     D.assert_can(membership, D.Capability.TERMINATE_COMPUTER)
 
-    agent = store.get(K.agent_pk(agent_id), "META")   # 404 if not this owner's
+    agent = store.get(K.agent_pk(store.owner_id, agent_id), "META")   # 404 if not this owner's
     return _archive_memory_agent(store, agent, body, event)
 
 
@@ -1463,7 +1463,7 @@ def _archive_memory_agent(store: Store, agent: dict, body: dict, event: dict):
     # (agent scope lives under the agent partition; shared_user under the
     # owner's). MEMNS/other MEM-prefixed rows are not Memory entities, so filter
     # on entity to revoke only actual memory facts.
-    agent_rows = [r for r in store.query(K.agent_pk(agent_id), sk_prefix="MEM#", limit=500)
+    agent_rows = [r for r in store.query(K.agent_pk(store.owner_id, agent_id), sk_prefix="MEM#", limit=500)
                   if r.get("entity") == "Memory"]
     shared_rows = [r for r in store.query(K.user_pk(store.owner_id), sk_prefix="MEM#", limit=500)
                    if r.get("entity") == "Memory" and r.get("scope") == "shared_user"

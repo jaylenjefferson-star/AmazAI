@@ -280,7 +280,7 @@ class TestFreezingFailsBotActionsClosed:
         from amazai.states import RunState
 
         w = World(api_table, monkeypatch)
-        w.store.update(K.agent_pk(w.agent_id), "META",
+        w.store.update(K.agent_pk(w.store.owner_id, w.agent_id), "META",
                        {"model": {"modelId": "test-model", "tier": "balanced"},
                         "harnessArn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/x"})
 
@@ -304,7 +304,7 @@ class TestFreezingFailsBotActionsClosed:
         from amazai.states import RunState
 
         w = World(api_table, monkeypatch)
-        w.store.update(K.agent_pk(w.agent_id), "META",
+        w.store.update(K.agent_pk(w.store.owner_id, w.agent_id), "META",
                        {"model": {"modelId": "test-model", "tier": "balanced"},
                         "harnessArn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/x"})
 
@@ -591,7 +591,7 @@ def seed_entrypoint_agent(table, *, org=OWNER, agent_id="chief", entrypoint=True
     # just persist them and mark the agent active (the harness is out of scope).
     for item in plan.items:
         store.put(item)
-    store.update(K.agent_pk(plan.agent_id), "META",
+    store.update(K.agent_pk(org, plan.agent_id), "META",
                  {"status": "active", "state": "active"})
     return plan.agent_id
 
@@ -603,7 +603,7 @@ def seed_agent_memory(table, agent_id, *, org=OWNER, title="a fact"):
     store = Store(org, table=table)
     actor = A.Actor(user_id=org, org_id=org)
     mem = memory.plan_write({"title": title, "body": "remember this", "kind": "foundational"},
-                            K.agent_pk(agent_id), scope="agent", source="user",
+                            K.agent_pk(org, agent_id), scope="agent", source="user",
                             author=org, status="published")
     store.put(mem)
     store.put(A.audit_event(agent_id, "agent.created", actor, detail="seeded"))
@@ -611,11 +611,11 @@ def seed_agent_memory(table, agent_id, *, org=OWNER, title="a fact"):
 
 
 def agent_audit_rows(table, agent_id, org=OWNER):
-    return Store(org, table=table).query(K.agent_pk(agent_id), sk_prefix="AUDIT#", limit=100)
+    return Store(org, table=table).query(K.agent_pk(org, agent_id), sk_prefix="AUDIT#", limit=100)
 
 
 def thread_messages(table, agent_id, org=OWNER):
-    return Store(org, table=table).query(K.thread_pk(f"dm-{agent_id}"),
+    return Store(org, table=table).query(K.thread_pk(org, f"dm-{agent_id}"),
                                          sk_prefix="MSG#", limit=100)
 
 
@@ -627,17 +627,17 @@ class TestResetOnboarding:
         store = Store(OWNER, table=admin_table)
         # Move the prompt off the brief and add operator chatter to the thread,
         # so the reset has something to undo.
-        store.update(K.agent_pk(agent_id), "META", {"systemPrompt": "you are a specialist now"})
-        store.put({"pk": K.thread_pk(f"dm-{agent_id}"),
+        store.update(K.agent_pk(OWNER, agent_id), "META", {"systemPrompt": "you are a specialist now"})
+        store.put({"pk": K.thread_pk(OWNER, f"dm-{agent_id}"),
                    "sk": K.message_sk("2024-01-01T00:00:00.000Z", "zzzz"),
                    "entity": "Message", "role": "user", "text": "hi", "author": "you"})
-        assert onboarding.is_brief(store.get(K.agent_pk(agent_id), "META")["systemPrompt"]) is False
+        assert onboarding.is_brief(store.get(K.agent_pk(OWNER, agent_id), "META")["systemPrompt"]) is False
 
         status, body = call("POST", f"/admin/agents/{agent_id}/reset-onboarding")
         assert status == 200 and body["reset"] is True
 
         # The prompt is a brief again, so the next run's is_brief() is true.
-        after = store.get(K.agent_pk(agent_id), "META")
+        after = store.get(K.agent_pk(OWNER, agent_id), "META")
         assert onboarding.is_brief(after["systemPrompt"]) is True
 
         # The thread was cleared and re-seeded with exactly one starter greeting.
@@ -674,7 +674,7 @@ class TestResetOnboarding:
     def test_a_member_cannot_reset_and_nothing_changes(self, admin_table):
         agent_id = seed_entrypoint_agent(admin_table)
         store = Store(OWNER, table=admin_table)
-        store.update(K.agent_pk(agent_id), "META", {"systemPrompt": "specialist"})
+        store.update(K.agent_pk(OWNER, agent_id), "META", {"systemPrompt": "specialist"})
         # Demote the caller to MEMBER in their OWN org (org_id == user_id today),
         # so the same caller who owns the Bot's partition now lacks the
         # capability. This pins the RBAC gate rather than the ownership 404.
@@ -683,7 +683,7 @@ class TestResetOnboarding:
         status, _ = call("POST", f"/admin/agents/{agent_id}/reset-onboarding")
         assert status == 403
         # The gate fired before any state change or audit row.
-        assert store.get(K.agent_pk(agent_id), "META")["systemPrompt"] == "specialist"
+        assert store.get(K.agent_pk(OWNER, agent_id), "META")["systemPrompt"] == "specialist"
         assert [r["action"] for r in audit_rows(admin_table)] == []
 
     def test_a_suspended_admin_fails_closed(self, admin_table):
@@ -711,7 +711,7 @@ class TestArchiveMemory:
         agent_id = seed_entrypoint_agent(admin_table)
         mem = seed_agent_memory(admin_table, agent_id)
         store = Store(OWNER, table=admin_table)
-        assert memory.is_visible(store.get(K.agent_pk(agent_id), mem["sk"])) is True
+        assert memory.is_visible(store.get(K.agent_pk(OWNER, agent_id), mem["sk"])) is True
 
         status, body = call("POST", f"/admin/agents/{agent_id}/archive-memory")
         assert status == 200
@@ -719,7 +719,7 @@ class TestArchiveMemory:
 
         # The row still exists (never hard-deleted) but is no longer visible:
         # it leaves the next prompt built from it.
-        after = store.get(K.agent_pk(agent_id), mem["sk"])
+        after = store.get(K.agent_pk(OWNER, agent_id), mem["sk"])
         assert after is not None
         assert memory.is_visible(after) is False
 
@@ -751,7 +751,7 @@ class TestArchiveMemory:
         # The memory is untouched and no admin-audit row was written: the RBAC
         # gate fired before the revoke.
         assert memory.is_visible(
-            Store(OWNER, table=admin_table).get(K.agent_pk(agent_id), mem["sk"])) is True
+            Store(OWNER, table=admin_table).get(K.agent_pk(OWNER, agent_id), mem["sk"])) is True
         assert [r["action"] for r in audit_rows(admin_table)] == []
 
     def test_a_suspended_admin_fails_closed(self, admin_table):
@@ -788,16 +788,16 @@ class TestEntrypointResolutionRoutes:
         agent_id = seed_entrypoint_agent(admin_table, agent_id="chief")
         assert agent_id == "chief"
         store = Store(OWNER, table=admin_table)
-        store.update(K.agent_pk(agent_id), "META",
+        store.update(K.agent_pk(OWNER, agent_id), "META",
                      {"systemPrompt": "you are a specialist now"})
         assert onboarding.is_brief(
-            store.get(K.agent_pk(agent_id), "META")["systemPrompt"]) is False
+            store.get(K.agent_pk(OWNER, agent_id), "META")["systemPrompt"]) is False
 
         status, body = call("POST", "/admin/agents/entrypoint/reset-onboarding")
         assert status == 200
         # The reset landed on the entrypoint Bot, resolved server-side.
         assert body["reset"] is True and body["agentId"] == "chief"
-        after = store.get(K.agent_pk(agent_id), "META")
+        after = store.get(K.agent_pk(OWNER, agent_id), "META")
         assert onboarding.is_brief(after["systemPrompt"]) is True
         assert audit_rows(admin_table)[0]["action"] == "onboarding.reset"
 
@@ -822,11 +822,11 @@ class TestEntrypointResolutionRoutes:
         agent_id = seed_entrypoint_agent(admin_table, agent_id="chief")
         mem = seed_agent_memory(admin_table, agent_id)
         store = Store(OWNER, table=admin_table)
-        assert memory.is_visible(store.get(K.agent_pk(agent_id), mem["sk"])) is True
+        assert memory.is_visible(store.get(K.agent_pk(OWNER, agent_id), mem["sk"])) is True
 
         status, body = call("POST", "/admin/agents/entrypoint/archive-memory")
         assert status == 200 and body["revoked"] == 1 and body["agentId"] == "chief"
-        assert memory.is_visible(store.get(K.agent_pk(agent_id), mem["sk"])) is False
+        assert memory.is_visible(store.get(K.agent_pk(OWNER, agent_id), mem["sk"])) is False
 
     def test_entrypoint_reset_still_gates_on_rbac(self, admin_table):
         seed_entrypoint_agent(admin_table, agent_id="chief")
