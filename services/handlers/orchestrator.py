@@ -1606,11 +1606,16 @@ def _create_group_chat(store: Store, run: dict, agent: dict, args: dict) -> dict
                   icon="check", fromAgentId=agent["agentId"])
 
     names = [member.get("name", member["agentId"]) for member in members]
+    # Carried so a room opened in the middle of a chain stays part of it. Without
+    # it, a Bot that hit the hop ceiling could open a room and have every member
+    # start counting from zero -- the loop guard routed around rather than hit.
+    trace_id = _trace_for(run)
     for member in members:
         started = runs.create(
             store, agent_id=member["agentId"], thread_id=thread_id, goal=goal,
             trigger={"type": "group_chat", "fromAgentId": agent["agentId"],
-                     "woke": names, "collaborationContextId": thread_id},
+                     "woke": names, "collaborationContextId": thread_id,
+                     **({"traceId": trace_id} if trace_id else {})},
         )
         _invoke_orchestrator_async(started["runId"], store.owner_id)
 
@@ -1634,6 +1639,28 @@ def _find_agents(store: Store, query: str) -> list[dict]:
     return matches[:20]
 
 
+def _trace_for(run: dict) -> str | None:
+    """The conversation this run's outgoing messages belong to.
+
+    A trace is how `collab.send` recognises a loop: hop depth counts the prior
+    messages in the same context carrying the same trace. Every wake already
+    records the trace it came from (`trigger.traceId`), but nothing ever read it
+    back, so every Bot minted a fresh one and hop depth was 0 on every send --
+    A wakes B wakes A wakes B could run until the round or budget ceiling caught
+    it, which is not the ceiling meant to catch it. Reading it here is what makes
+    a chain a chain.
+
+    Taken from the run and never from the model's arguments. A Bot that could
+    name its own trace could reset the hop count on every hop, which is the one
+    thing the guard must not allow -- so `trace_id` is deliberately absent from
+    `message_agent`'s schema, and overwritten here even if a model invents it.
+
+    None on a run that starts a conversation rather than continuing one; `send`
+    mints a fresh trace for it.
+    """
+    return (run.get("trigger") or {}).get("traceId")
+
+
 def _message_agent(store: Store, run: dict, agent: dict, args: dict) -> dict:
     """Context-bound agent-to-agent messaging.
 
@@ -1645,12 +1672,16 @@ def _message_agent(store: Store, run: dict, agent: dict, args: dict) -> dict:
     clear concurrency and budget before a run is actually spawned for the
     recipient -- exactly the same gates any other trigger goes through in
     `_drive`.
+
+    The trace this message belongs to is decided here, from the run, and never
+    read from `args` -- see `_trace_for`.
     """
     to_agent_id = (args.get("to") or "").strip()
     if not to_agent_id:
         raise collab.MessagingError("message_agent requires 'to'")
     if to_agent_id == agent["agentId"]:
         raise collab.MessagingError("an agent cannot message itself")
+    args = {**args, "trace_id": _trace_for(run)}
 
     to_agent = store.try_get(K.agent_pk(to_agent_id), "META")
     if to_agent is None or to_agent.get("status") not in A.RUNNABLE:
