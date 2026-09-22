@@ -122,14 +122,14 @@ class TestNoInheritance:
         from amazai import memory
         store.put(memory.plan_write(
             {"title": "Parent secret", "body": "only for engineering", "kind": "note"},
-            K.agent_pk("engineering"), scope="agent", source="user", author="user-1"))
+            K.agent_pk(store.owner_id, "engineering"), scope="agent", source="user", author="user-1"))
         proposal = orch._agent_creation_proposal(
             {"name": "Shadow Agent", "role": "Handles a bounded lane."}, parent_agent_id="engineering")
         actor = A.Actor(user_id="user-1", org_id="org-1")
         plan = A.plan_create(proposal, actor)
         store.transact_put(plan.items)
 
-        child_memory = store.query(K.agent_pk(plan.agent_id), sk_prefix="MEM#")
+        child_memory = store.query(K.agent_pk(store.owner_id, plan.agent_id), sk_prefix="MEM#")
         assert child_memory == []
 
     def test_the_proposal_normalizer_never_lets_the_model_set_grants_or_tools(self):
@@ -255,7 +255,7 @@ class TestApprovedCreationAlwaysResumesTheProposer:
 
         call("POST", "/agents", NEW_AGENT)
         store = Store("owner-a", table=api_table)
-        store.update(K.agent_pk("cloud-operations"), "META",
+        store.update(K.agent_pk(store.owner_id, "cloud-operations"), "META",
                      {"model": {"modelId": "resolved-model", "tier": "balanced"}})
         run = runs.create(store, agent_id="cloud-operations", thread_id="dm-cloud-operations",
                           goal="propose a companion", trigger={"type": "routine"})
@@ -325,7 +325,7 @@ def test_creation_outcome_history_failure_cannot_strand_the_parent(api_table, mo
 
     call("POST", "/agents", NEW_AGENT)
     store = Store("owner-a", table=api_table)
-    store.update(K.agent_pk("cloud-operations"), "META",
+    store.update(K.agent_pk(store.owner_id, "cloud-operations"), "META",
                  {"model": {"modelId": "resolved-model", "tier": "balanced"}})
     run = runs.create(store, agent_id="cloud-operations", thread_id="dm-cloud-operations",
                       goal="propose a companion", trigger={"type": "routine"})

@@ -74,7 +74,7 @@ class TestWhatABotIsGivenOnEveryRun:
         assert "browser" not in names(fake.calls[0])                 # absent from the schema, not refused
 
     def test_a_bot_that_may_has_it_declared_on_the_call(self, world):  # noqa: F811
-        world.store.update(K.agent_pk(world.agent_id), "META",
+        world.store.update(K.agent_pk(world.store.owner_id, world.agent_id), "META",
                            {"allowedTools": ["shell", "file_operations", "browser"]})
         fake = world.script([text("hi")])
         world.drive()
@@ -83,7 +83,7 @@ class TestWhatABotIsGivenOnEveryRun:
 
     def test_the_browser_is_removed_when_a_connector_covers_the_job(self, world):  # noqa: F811
         # Rule 4 (docs 05): never screen-scrape what a scoped API can do, by removal, not by prompting.
-        world.store.update(K.agent_pk(world.agent_id), "META",
+        world.store.update(K.agent_pk(world.store.owner_id, world.agent_id), "META",
                            {"allowedTools": ["shell", "file_operations", "browser"]})
         world.store.update(world.run["pk"], "META", {"connectorCoversOutcome": True})
         fake = world.script([text("hi")])

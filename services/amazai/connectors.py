@@ -133,7 +133,7 @@ def grant_row(agent_id: str, cid: str, *, actor_user_id: str,
               capability: Capability = CEILING,
               tools: list[str] | None = None) -> dict:
     return {
-        "pk": K.agent_pk(agent_id), "sk": K.grant_sk(cid),
+        "pk": K.agent_pk(actor_user_id, agent_id), "sk": K.grant_sk(cid),
         "entity": "Grant", "agentId": agent_id,
         "grantedBy": actor_user_id, "grantedAt": now_iso(),
         "connectorId": cid, "capability": capability.value,
@@ -151,7 +151,7 @@ def grant_to_active_agents(store: Store, cid: str, *, actor_user_id: str) -> lis
     for agent in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200):
         if agent.get("status") not in (None, "active"):
             continue
-        if store.try_get(K.agent_pk(agent["agentId"]), K.grant_sk(cid)):
+        if store.try_get(K.agent_pk(store.owner_id, agent["agentId"]), K.grant_sk(cid)):
             continue
         store.put(grant_row(agent["agentId"], cid, actor_user_id=actor_user_id))
         granted.append(agent["agentId"])
@@ -172,8 +172,8 @@ def revoke(store: Store, cid: str) -> dict:
     """Remove the org install and every agent grant that depended on it."""
     removed_from: list[str] = []
     for agent in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200):
-        if store.try_get(K.agent_pk(agent["agentId"]), K.grant_sk(cid)):
-            store.delete(K.agent_pk(agent["agentId"]), K.grant_sk(cid))
+        if store.try_get(K.agent_pk(store.owner_id, agent["agentId"]), K.grant_sk(cid)):
+            store.delete(K.agent_pk(store.owner_id, agent["agentId"]), K.grant_sk(cid))
             removed_from.append(agent["agentId"])
     store.delete(K.connector_pk(store.owner_id, cid), "META")
     return {"connectorId": cid, "revokedFrom": removed_from}
@@ -198,7 +198,7 @@ def granted_apps(store: Store, agent_id: str) -> list[Granted]:
     """
     org = installed(store)
     out: list[Granted] = []
-    for grant in store.query(K.agent_pk(agent_id), sk_prefix="GRANT#"):
+    for grant in store.query(K.agent_pk(store.owner_id, agent_id), sk_prefix="GRANT#"):
         cid = grant.get("connectorId", "")
         if cid not in org:
             continue

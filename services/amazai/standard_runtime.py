@@ -340,7 +340,7 @@ def provision_bot(store: Store, agent: dict, *, client: agentcore.AgentCore | No
             "dedicatedHarnessArn": harness_arn,
         }
 
-    return store.update(K.agent_pk(agent["agentId"]), "META", {
+    return store.update(K.agent_pk(store.owner_id, agent["agentId"]), "META", {
         **changes,
         "executionRoleArn": role,
         "runtimeMode": mode,

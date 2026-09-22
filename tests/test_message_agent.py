@@ -31,9 +31,9 @@ def _set_org_policy(store, messaging_cfg: dict) -> None:
 
 @pytest.fixture
 def agents(store):
-    store.put({"pk": K.agent_pk("eng"), "sk": "META", "entity": "Agent", **FROM_AGENT})
-    store.put({"pk": K.agent_pk("ops"), "sk": "META", "entity": "Agent", **TO_AGENT})
-    store.put({"pk": K.agent_pk("clo"), "sk": "META", "entity": "Agent", **THIRD_AGENT})
+    store.put({"pk": K.agent_pk(store.owner_id, "eng"), "sk": "META", "entity": "Agent", **FROM_AGENT})
+    store.put({"pk": K.agent_pk(store.owner_id, "ops"), "sk": "META", "entity": "Agent", **TO_AGENT})
+    store.put({"pk": K.agent_pk(store.owner_id, "clo"), "sk": "META", "entity": "Agent", **THIRD_AGENT})
     return store
 
 
@@ -179,12 +179,12 @@ class TestPriorityWakeThrottling:
     def test_priority_never_bypasses_recipient_concurrency(self, agents, room):
         """Even a granted priority wake must still clear `may_wake_now` --
         it requests scheduling, it does not force execution."""
-        agents.update(K.agent_pk("ops"), "META", {"budget": {"maxConcurrentRuns": 1}})
+        agents.update(K.agent_pk(agents.owner_id, "ops"), "META", {"budget": {"maxConcurrentRuns": 1}})
         for i in range(2):
             runs.create(agents, agent_id="ops", thread_id="other-thread",
                        goal=f"busy {i}")
         allowed, reason = collab.may_wake_now(
-            agents, agents.get(K.agent_pk("ops"), "META"), collab.limits_for_org(agents))
+            agents, agents.get(K.agent_pk(agents.owner_id, "ops"), "META"), collab.limits_for_org(agents))
         assert allowed is False
         assert "concurrency" in reason
 
@@ -231,7 +231,7 @@ class TestMessageAgentToolWiring:
                                 "collaboration_context_id": room})
 
     def test_messaging_an_inactive_agent_is_rejected(self, agents, room):
-        agents.update(K.agent_pk("ops"), "META", {"status": "paused"})
+        agents.update(K.agent_pk(agents.owner_id, "ops"), "META", {"status": "paused"})
         with pytest.raises(collab.MessagingError):
             orch._message_agent(agents, {"runId": "run_x"}, FROM_AGENT,
                                {"to": "ops", "text": "hi",

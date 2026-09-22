@@ -29,8 +29,20 @@ def user_pk(subject: str) -> str:
     return f"USER#{subject}"
 
 
-def agent_pk(agent_id: str) -> str:
-    return f"AGENT#{agent_id}"
+def agent_pk(owner_id: str, agent_id: str) -> str:
+    """Owner-scoped, for the same reason `connector_pk` is (see there).
+
+    `agentId` is `normalize_agent_id()`-derived from the Bot's *display name*
+    ("Engineering" -> `eng`), not `new_id()`-generated -- identical for every
+    owner whose onboarding creates the same default seat roster. Without
+    `owner_id` in the key, a second owner's Bot creation would silently
+    overwrite the first owner's `Agent` row outright, the same collision
+    `connector_pk` had: same pk, an unconditional write, `ownerId` on the row
+    guarding only reads. This is the pk nearly every entity in this codebase
+    hangs off of (`GRANT#`, `MEM#`, session epochs, ...), so this one field
+    is what makes all of them owner-safe at once.
+    """
+    return f"AGENT#{owner_id}#{agent_id}"
 
 
 def memory_sk(mem_id: str) -> str:

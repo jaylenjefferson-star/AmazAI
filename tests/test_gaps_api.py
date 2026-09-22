@@ -44,7 +44,7 @@ def api_table(table, monkeypatch):
     Store, so point the name it reaches for at moto's table, and stub the
     harness call so a created agent lands active without AWS."""
     monkeypatch.setattr(api, "_provision_harness", lambda store, agent: store.update(
-        K.agent_pk(agent["agentId"]), "META",
+        K.agent_pk(store.owner_id, agent["agentId"]), "META",
         {"harnessArn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/x",
          "status": "active", "state": "active"}))
     monkeypatch.setattr(api, "Store", lambda owner_id: Store(owner_id, table=table))

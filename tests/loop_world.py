@@ -58,7 +58,7 @@ class World:
         status, agent = call("POST", "/agents", body)
         assert status == 201, agent
         self.agent_id = agent["agentId"]
-        self.agent = self.store.get(K.agent_pk(self.agent_id), "META")
+        self.agent = self.store.get(K.agent_pk(self.store.owner_id, self.agent_id), "META")
         self.run = runs.create(self.store, agent_id=self.agent_id,
                                thread_id=f"dm-{self.agent_id}", goal="post the update")
         self.push, self.ev, self.cost, self.turn = RecPush(), EvidenceWriter("run_test"), RunCost(), orch.Turn()

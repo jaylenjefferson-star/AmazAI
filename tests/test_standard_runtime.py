@@ -51,7 +51,7 @@ def store(table, monkeypatch):
 
 def agent(store, agent_id="chief", **extra):
     return store.put({
-        "pk": K.agent_pk(agent_id), "sk": "META", "entity": "Agent",
+        "pk": K.agent_pk(store.owner_id, agent_id), "sk": "META", "entity": "Agent",
         "agentId": agent_id, "name": agent_id.title(), "status": "active", "state": "active",
         "harnessArn": f"arn:aws:bedrock-agentcore:us-west-2:1:harness/{agent_id}-old",
         "executionRoleArn": ROLE,

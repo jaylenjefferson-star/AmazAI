@@ -99,7 +99,7 @@ class TestTheWholeTurnIsRecordedWhenItPauses:
         assert after["error"] is True
         assert "not run" in after["text"]
         # The memory it asked for after the pause was never written.
-        saved = [m["title"] for m in world.store.query(K.agent_pk(world.agent_id), sk_prefix="MEM#")]
+        saved = [m["title"] for m in world.store.query(K.agent_pk(world.store.owner_id, world.agent_id), sk_prefix="MEM#")]
         assert "After" not in saved and "Pacific time" in saved
 
     def test_the_trail_says_the_held_call_is_waiting_on_the_operator(self, world):  # noqa: F811

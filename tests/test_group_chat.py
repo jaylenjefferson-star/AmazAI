@@ -79,7 +79,7 @@ class TestWhatAnAgentIsToldInARoom:
         chief = _bot("Chief", entrypoint=True, title="Chief of staff", role="Runs the day.")
         eng = _bot("Engle", title="Sr Engineer", role="Repositories, tests and diagnostics.")
         for agent_id in (chief, eng):
-            world.store.update(K.agent_pk(agent_id), "META", {
+            world.store.update(K.agent_pk(world.store.owner_id, agent_id), "META", {
                 "model": {"modelId": "test-model", "tier": "balanced"},
                 "harnessArn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/x"})
         status, thread = call("POST", "/threads", {"kind": "room", "title": "Eng Ops", "agentIds": [eng, chief]})
@@ -120,7 +120,7 @@ class TestWhatAnAgentIsToldInARoom:
         assert "## This room" not in prompt
 
     def test_a_prompt_the_owner_rewrote_is_kept_in_a_room(self, room):
-        room.store.update(K.agent_pk(room.chief), "META", {"systemPrompt": "Always answer in haiku."})
+        room.store.update(K.agent_pk(room.store.owner_id, room.chief), "META", {"systemPrompt": "Always answer in haiku."})
         assert "Always answer in haiku." in self._prompt_for(room, room.chief, room.room_id)
 
     def test_a_direct_thread_gets_no_room_note(self, room):
@@ -135,8 +135,8 @@ class TestWhatAnAgentIsToldInARoom:
 class TestABotOpeningATaskRoom:
     def test_it_can_find_an_active_specialist_before_inviting_them(self, world):
         ops = _bot("Ops", title="Release", role="Owns deployment checks.")
-        world.store.update(K.agent_pk(world.agent_id), "META", {"status": "active", "state": "active"})
-        world.store.update(K.agent_pk(ops), "META", {"status": "active", "state": "active"})
+        world.store.update(K.agent_pk(world.store.owner_id, world.agent_id), "META", {"status": "active", "state": "active"})
+        world.store.update(K.agent_pk(world.store.owner_id, ops), "META", {"status": "active", "state": "active"})
 
         found = world.handle("find_agents", {"query": "deployment"})["toolResult"]["agents"]
 
@@ -147,7 +147,7 @@ class TestABotOpeningATaskRoom:
         chief = world.agent_id
         ops = _bot("Ops", role="Owns deployment checks.")
         for agent_id in (chief, ops):
-            world.store.update(K.agent_pk(agent_id), "META", {"status": "active", "state": "active"})
+            world.store.update(K.agent_pk(world.store.owner_id, agent_id), "META", {"status": "active", "state": "active"})
 
         woken = []
         monkeypatch.setattr(orch, "_invoke_orchestrator_async", lambda run_id, owner: woken.append(run_id))
@@ -168,7 +168,7 @@ class TestABotOpeningATaskRoom:
         assert "own access and approvals" in world.last["review"]["reason"]
 
     def test_it_refuses_a_room_without_another_active_bot(self, world):
-        world.store.update(K.agent_pk(world.agent_id), "META", {"status": "active", "state": "active"})
+        world.store.update(K.agent_pk(world.store.owner_id, world.agent_id), "META", {"status": "active", "state": "active"})
         result = world.handle("create_group_chat", {
             "title": "Solo room", "agentIds": [], "goal": "Do the work.",
         })["toolResult"]

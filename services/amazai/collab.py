@@ -154,7 +154,7 @@ def direct_context(store: Store, *, sender_id: str, recipient_id: str) -> Contex
                                               or {sender_id, recipient_id}))
 
     members = sorted({sender_id, recipient_id})
-    names = [(store.try_get(K.agent_pk(a), "META") or {}).get("name") or a for a in members]
+    names = [(store.try_get(K.agent_pk(store.owner_id, a), "META") or {}).get("name") or a for a in members]
     stamp = now_iso()
     store.put({
         "pk": pk, "sk": "META", "entity": "Thread", "threadId": thread_id,

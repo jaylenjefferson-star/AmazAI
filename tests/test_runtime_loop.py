@@ -101,7 +101,7 @@ class TestAConnectorWriteStopsForAPersonInCode:
         # What the approval card's checkbox does: the owner's own audited PATCH.
         status, _ = call("PATCH", f"/agents/{world.agent_id}", {"preapproved": [WRITE]})
         assert status == 200
-        world.agent = world.store.get(K.agent_pk(world.agent_id), "META")
+        world.agent = world.store.get(K.agent_pk(world.store.owner_id, world.agent_id), "META")
         assert world.use(WRITE, POST)["pause"] is False
         assert world.last["review"]["rule"] == "preapproved"
         # It named one action: a different write on the same app still asks.
@@ -109,7 +109,7 @@ class TestAConnectorWriteStopsForAPersonInCode:
 
     def test_a_destructive_tool_stays_gated_even_if_it_is_saved_as_pre_approved(self, world):
         call("PATCH", f"/agents/{world.agent_id}", {"preapproved": [WRITE, DELETE]})
-        world.agent = world.store.get(K.agent_pk(world.agent_id), "META")
+        world.agent = world.store.get(K.agent_pk(world.store.owner_id, world.agent_id), "META")
         assert world.use(DELETE, {"channel": "C1", "ts": "1"})["pause"] is True
         assert world.executed == []
 
@@ -309,7 +309,7 @@ class TestWhatTheTurnLeavesBehind:
     def test_saving_to_memory_writes_the_fact_and_a_real_event(self, world):
         world.handle("remember", {"scope": "agent", "title": "Prefers bullets",
                                   "body": "Summaries as bullets, not prose."})
-        memories = world.store.query(K.agent_pk(world.agent_id), sk_prefix="MEM#")
+        memories = world.store.query(K.agent_pk(world.store.owner_id, world.agent_id), sk_prefix="MEM#")
         assert [m["title"] for m in memories] == ["Prefers bullets"]
         rows = world.store.query(K.thread_pk(world.run["threadId"]), sk_prefix="MSG#")
         event = rows[-1]

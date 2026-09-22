@@ -171,7 +171,7 @@ def create_child(store: Store, creator: dict, args: dict) -> dict:
     except (A.ValidationError, A.QuotaExceeded, A.Conflict, A.Escalation) as exc:
         raise ChildCreationError(str(exc)) from exc
 
-    if store.try_get(K.agent_pk(plan.agent_id), "META"):
+    if store.try_get(K.agent_pk(store.owner_id, plan.agent_id), "META"):
         raise ChildCreationError(
             f"a Bot with the id {plan.agent_id!r} already exists; choose a different name")
 

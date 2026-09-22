@@ -45,7 +45,7 @@ class HandoffError(ValueError):
 
 
 def _receiver(store: Store, to_agent_id: str) -> dict:
-    receiver = store.try_get(K.agent_pk(to_agent_id), "META")
+    receiver = store.try_get(K.agent_pk(store.owner_id, to_agent_id), "META")
     if receiver is None or receiver.get("status") not in A.RUNNABLE:
         raise HandoffError(f"no such active recipient {to_agent_id!r}")
     return receiver
@@ -241,7 +241,7 @@ _CHILD_OUTCOME = {
 
 
 def _digest_line(store: Store, child_row: dict) -> str:
-    name = (store.try_get(K.agent_pk(child_row["agentId"]), "META") or {}).get(
+    name = (store.try_get(K.agent_pk(store.owner_id, child_row["agentId"]), "META") or {}).get(
         "name", child_row["agentId"])
     status = child_row.get("status", "active")
     summary = (child_row.get("summary") or "").strip()
