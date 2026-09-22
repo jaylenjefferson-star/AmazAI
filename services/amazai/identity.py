@@ -221,21 +221,105 @@ def owner_emails() -> tuple[str, ...]:
     return tuple(s.strip().lower() for s in raw.split(",") if s.strip())
 
 
+# --- the DB-backed allowlist --------------------------------------------
+#
+# OWNER_SUBJECTS/OWNER_EMAILS are an env var, which means adding one more
+# person means editing it and redeploying -- fine for the single operator
+# this started as, not for "invite a friend". This is the same gate, with
+# entries a signed-in owner can add or remove through the API instead.
+#
+# Stored outside any owner's own partition, in one fixed, reserved pk:
+# *whether someone may become a tenant at all* has to be readable before this
+# request has an owner to scope a Store to -- the one place `ownerId`
+# filtering does not apply, same reasoning as `store.discover_owner_ids`.
+
+ALLOWLIST_PK = "PLATFORM#ALLOWLIST"
+
+
+def _table():
+    import boto3
+    from amazai.store import TABLE_NAME
+    return boto3.resource("dynamodb").Table(TABLE_NAME)
+
+
+def _allowlist_key(value: str) -> str:
+    return value.strip().lower()
+
+
+def allow(value: str, *, added_by: str = "") -> dict:
+    """Let one more person in, by email (what an operator types to invite
+    someone who has never signed in) or by Auth0 subject (once they have).
+    Idempotent: allowing an already-allowed value just refreshes it."""
+    key = _allowlist_key(value)
+    if not key:
+        raise ValueError("value is required")
+    item = {
+        "pk": ALLOWLIST_PK, "sk": f"ENTRY#{key}",
+        "entity": "AllowlistEntry", "value": key,
+        "addedBy": added_by, "addedAt": now_iso(),
+    }
+    _table().put_item(Item=item)
+    return item
+
+
+def disallow(value: str) -> None:
+    _table().delete_item(Key={"pk": ALLOWLIST_PK, "sk": f"ENTRY#{_allowlist_key(value)}"})
+
+
+def list_allowed() -> list[dict]:
+    from boto3.dynamodb.conditions import Key
+    resp = _table().query(KeyConditionExpression=Key("pk").eq(ALLOWLIST_PK))
+    return sorted(resp.get("Items", []), key=lambda i: i.get("addedAt", ""))
+
+
+def _is_allowed_in_table(principal: Principal) -> bool:
+    """A DynamoDB outage here must read as "not on the list", not as an
+    unhandled exception -- this is a security gate, and the failure mode a
+    gate must never have is opening because the lock jammed. `assert_owner`
+    already has another door (the env allowlist) that does not depend on
+    this table at all, so a real outage still denies cleanly with AuthError
+    rather than a raw 500 that says nothing about why.
+    """
+    checks = [principal.user_id]
+    if principal.email and principal.email_verified:
+        checks.append(principal.email)
+    try:
+        table = _table()
+        for value in checks:
+            resp = table.get_item(Key={"pk": ALLOWLIST_PK, "sk": f"ENTRY#{_allowlist_key(value)}"})
+            if "Item" in resp:
+                return True
+    except Exception:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return False
+    return False
+
+
 def assert_owner(principal: Principal) -> None:
     """Server-side gate for a private workspace.
 
     Separate from the token check on purpose: a valid Auth0 token proves who
-    someone is, not that they are allowed here. With neither list configured
-    this is open — appropriate for a single-tenant private deployment, and
-    the reason it is one function to change rather than a scattered check.
+    someone is, not that they are allowed here. With neither env list
+    configured this is open — appropriate for a single-tenant private
+    deployment (and for local/test setups with nothing configured at all),
+    checked first and exactly as before so a fresh, unconfigured deploy's
+    very first sign-in is unaffected by any of what follows.
+
+    Once either env list is set, three ways in: the env allowlist (unchanged,
+    for the original operator), the DB-backed allowlist (`allow`/`disallow`,
+    reachable once *any* owner is signed in -- the API route sits behind this
+    same check), or an unverified-nothing: an unverified email is a claim,
+    not an identity, and is never enough on its own for either list.
     """
     subs, emails = owner_subjects(), owner_emails()
     if not subs and not emails:
         return
     if principal.user_id in subs:
         return
-    # An unverified email is a claim, not an identity.
     if (principal.email and principal.email_verified
             and principal.email.lower() in emails):
+        return
+    if _is_allowed_in_table(principal):
         return
     raise AuthError("not an owner of this workspace")
