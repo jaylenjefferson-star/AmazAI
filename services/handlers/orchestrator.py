@@ -24,10 +24,10 @@ import boto3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
-                    continuation, cost, govern, handoffs, keys as K, memory, metrics,
-                    onboarding, org, policy, provisioning, redact, review, router, routines,
-                    runs, skills, standard_runtime, threads)
+from amazai import (agentcore, agents as A, approvals, billing, collab, composio,
+                    connectors, continuation, cost, govern, handoffs, keys as K, memory,
+                    metrics, onboarding, org, policy, provisioning, redact, review, router,
+                    routines, runs, skills, standard_runtime, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
@@ -242,6 +242,16 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     if govern.is_frozen(store.try_get(K.org_pk(org_id), "KILLSWITCH")):
         _fail(store, run, "this organization is frozen by an administrator")
         return {"ok": False, "reason": "org frozen"}
+
+    # The account-wide credit balance, checked right alongside the kill
+    # switch: both are account-level gates that must refuse a run before a
+    # single token is spent, ahead of the per-agent Budget below (which
+    # governs how much *this run* may spend, not whether the account has
+    # anything left to spend at all). See billing.py's module docstring for
+    # why this is a coarse pre-flight check, not mid-run metering.
+    if not billing.has_credit(store):
+        _fail(store, run, "this account is out of credits")
+        return {"ok": False, "reason": "out of credits"}
 
     if agent.get("state") != "active":
         _fail(store, run, f"agent {agent.get('name')} is {agent.get('state')}")
@@ -652,6 +662,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
         "consecutiveToolErrors": consecutive_errors,
     })
     _write_cost(store, run, agent, spend)
+    billing.spend(store, spend.total_usd, run_id=run["runId"], agent_id=agent["agentId"])
 
     # A pause is exempt: `_record_paused_turn`, just below, is what carries a
     # paused turn's calls forward whole, so that session is not left owing

@@ -18,9 +18,10 @@ import urllib.parse
 
 import boto3
 
-from amazai import (agentcore, agents as A, approvals, collab, composio, connectors as C,
-                    handoffs, identity, keys as K, memory, models, onboarding, routines as R,
-                    runs, schedules, settings as S, skills, standard_runtime, threads)
+from amazai import (agentcore, agents as A, approvals, billing, collab, composio,
+                    connectors as C, handoffs, identity, keys as K, memory, models,
+                    onboarding, routines as R, runs, schedules, settings as S, skills,
+                    standard_runtime, threads)
 from amazai import dispatch, directory as D, govern, org, provisioning
 from amazai.policy import Capability
 from amazai.states import PAUSED, RunState, TERMINAL
@@ -214,6 +215,11 @@ def handler(event, context):
         _, is_new_signup = identity.ensure_user(store, principal)
         if is_new_signup:
             _warm_account_harness(context, store.owner_id)
+        # Unconditional and idempotent, exactly like ensure_user above: a
+        # brand-new signup gets the free trial grant on this very call, and an
+        # account that predates this feature is backfilled with one rather
+        # than left permanently without a billing row.
+        billing.ensure_billing_row(store)
         return _route(store, method, path, body, event)
     except identity.AuthError:
         return _resp(401, {"error": "unauthorized"})
@@ -884,6 +890,25 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         total = sum(float(r.get("totalUsd", 0.0)) for r in rows)
         return _resp(200, {"agentId": agent_id, "month": month,
                            "totalUsd": round(total, 4), "runs": rows})
+
+    # --- billing -------------------------------------------------------------
+    # Self-service, per-account: every owner sees and manages only their own
+    # balance and subscription. No cross-account view exists yet -- see
+    # identity.load_membership's own "single-tenant seam" note; that is a
+    # deliberately separate, larger piece of work.
+    if path == "/billing" and method == "GET":
+        row = billing.ensure_billing_row(store)
+        return _resp(200, {
+            "balanceUsd": billing.balance_usd(store),
+            "tier": row.get("tier"),
+            "subscriptionStatus": row.get("subscriptionStatus"),
+            "hasCredit": billing.has_credit(store),
+        })
+
+    if path == "/billing/ledger" and method == "GET":
+        qs = event.get("queryStringParameters") or {}
+        limit = min(int(qs.get("limit", 100)), 200)
+        return _resp(200, {"entries": billing.ledger(store, limit=limit)})
 
     # --- admin governance --------------------------------------------------
     # The Directory, the org kill switch, and the admin audit trail. Every
