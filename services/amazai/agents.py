@@ -267,6 +267,27 @@ def normalize_agent_id(name: str, *, explicit: str | None = None) -> str:
     return slug
 
 
+def agent_ref(raw: object) -> str:
+    """One agent id as a *model* refers to it, cleaned up into one we can look up.
+
+    Every surface that names a teammate to a Bot writes it with an `@`: the team
+    directory emits `"id": "@janai-williams"`, a room roster reads
+    `Janai Williams (@janai-williams)`, and an operator's mention is `@name`. So a
+    Bot asked to message a teammate reasonably passes back exactly what it was
+    shown -- and the store has no `AGENT#@janai-williams`, so every one of those
+    sends was refused with "no such active recipient".
+
+    That was a prompt and a lookup disagreeing about a format, not a Bot getting
+    it wrong, and the fix belongs on the reading side: `@` is how an id is
+    *written*, not part of the id. Whitespace goes too, since a directory line is
+    easy to copy with it attached.
+
+    This only ever normalises a reference. It does not check the agent exists --
+    the caller still does that, and still refuses if it does not.
+    """
+    return str(raw or "").strip().lstrip("@").strip()
+
+
 def validate_profile(body: dict) -> dict:
     """Check the human-authored half of an agent and return it normalized."""
     name, lifted_title = normalize_name(body.get("name"))
