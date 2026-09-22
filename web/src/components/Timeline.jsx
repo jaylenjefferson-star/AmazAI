@@ -8,12 +8,15 @@ import Delegation from './Delegation';
 import { useContacts } from './ContactCard';
 import StepsGroup from './StepsGroup';
 import TypingIndicator from './TypingIndicator';
+import { stepLabel } from '../lib/tools';
 
 function ToolChip({ chip }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="chip enter">
-      <span className="tool">{chip.name}</span>
+      {/* Plain words, with the exact identifier on hover -- the same rule the
+          steps trail follows. This drew `group_chat.create` before. */}
+      <span className="tool" title={chip.name}>{stepLabel(chip.name)}</span>
       <div>
         <button className="disclose" onClick={() => setOpen((o) => !o)}
                 aria-expanded={open}>

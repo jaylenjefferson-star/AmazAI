@@ -281,8 +281,14 @@ class TestEveryBotGetsTheActiveTeamDirectory:
                    "role": "Coordinates."})
         note = orch._reporting_note(store, store.get(K.agent_pk("chief"), "META"))
         assert "find_agents" in note
-        assert "create_group_chat" in note and "everyone starts in parallel" in note
-        assert "message_agent only inside a task or room you already share" in note
+        # Asking one teammate one thing is the cheap path and is named first. It
+        # used to be named as the *forbidden* one ("only inside a task or room you
+        # already share"), which was true of the code and useless as advice: a Bot
+        # with a question and no shared room had nowhere to go but a group chat.
+        assert "message_agent" in note
+        assert "you do not need a task or a room first" in note
+        assert "create_group_chat" in note and "several Bots at once" in note
+        assert "starts a run for every member" in note, "the costly path must say it is costly"
 
     def test_only_active_bots_are_actionable(self, api_table):  # noqa: F811
         store = self.make_store(api_table)

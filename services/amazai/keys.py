@@ -67,6 +67,15 @@ def approval_sk(approval_id: str) -> str:
     return f"APV#{approval_id}"
 
 
+def paused_turn_sk(approval_id: str) -> str:
+    """The shape of the model turn that stopped on this approval.
+
+    Keyed by the approval rather than the run: one run can pause more than
+    once, and each pause has to resume the turn *it* interrupted.
+    """
+    return f"PAUSE#{approval_id}"
+
+
 def handoff_sk(handoff_id: str) -> str:
     return f"HOFF#{handoff_id}"
 

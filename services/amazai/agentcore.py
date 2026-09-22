@@ -137,16 +137,20 @@ INLINE_TOOLS = {
     },
     "message_agent": {
         "description": (
-            "Send a message to another agent, bound to the task or "
-            "collaboration context you are both part of -- never an open "
-            "broadcast. Provide exactly one of task_id (this run's id, or "
-            "the id of the task you were handed) or collaboration_context_id "
-            "(a room/thread id). The recipient must already be a participant "
-            "in that same task or context; messaging someone outside it is "
-            "refused unless an org policy explicitly allows the escalation. "
+            "Send a message to one other agent -- never an open broadcast. "
+            "`to` and `text` are all it needs: with no task_id or "
+            "collaboration_context_id the message goes to your direct "
+            "conversation with that agent, which is opened for you the first "
+            "time and reused after. Give task_id (this run's id, or the id of "
+            "the task you were handed) or collaboration_context_id (a "
+            "room/thread id) only to send *into* that shared task or room, so "
+            "the others in it can see it -- one or the other, never both, and "
+            "the recipient must already be a participant there. Use this to "
+            "ask a teammate one thing; use create_group_chat only when work "
+            "genuinely needs several agents at once. "
             "Set `priority` to request an expedited wake -- it is a request, "
             "not a guarantee: it never bypasses the recipient's own budget, "
-            "concurrency, or approval rules, and it is rate-limited per task."
+            "concurrency, or approval rules, and it is rate-limited."
         ),
         "inputSchema": {
             "type": "object",
@@ -154,10 +158,12 @@ INLINE_TOOLS = {
                 "to": {"type": "string", "description": "Target agent ID"},
                 "text": {"type": "string"},
                 "task_id": {"type": "string",
-                           "description": "This message's task (a run id). Mutually "
-                                         "exclusive with collaboration_context_id."},
+                           "description": "Optional. Send into this shared task (a run "
+                                         "id) instead of your direct conversation. "
+                                         "Mutually exclusive with collaboration_context_id."},
                 "collaboration_context_id": {"type": "string",
-                           "description": "This message's room/thread id. Mutually "
+                           "description": "Optional. Send into this shared room/thread "
+                                         "instead of your direct conversation. Mutually "
                                          "exclusive with task_id."},
                 "priority": {"type": "boolean",
                             "description": "Request an expedited wake -- scheduling only"},

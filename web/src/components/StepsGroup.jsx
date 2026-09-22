@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { stepLabel } from '../lib/tools';
+import { VERDICT, stepLabel } from '../lib/tools';
 import Icon from './Icon';
 
 function span(seconds) {
@@ -7,11 +7,10 @@ function span(seconds) {
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
 }
 
-// What each verdict is called, and in which words the rule behind it is said. The
-// control plane names the rule (`policy.Decision.rule`); this is only how the
-// console phrases it -- it never re-decides or upgrades a verdict.
-const VERDICT = { allowed: 'Allowed', asked: 'Asked', denied: 'Denied' };
-
+// In which words the rule behind a verdict is said. The control plane names the
+// rule (`policy.Decision.rule`); this is only how the console phrases it -- it
+// never re-decides or upgrades a verdict. A rule with no case here falls back to
+// the reason the control plane sent, which is already a sentence.
 export function ruleSentence(review) {
   if (!review) return '';
   switch (review.rule) {
@@ -24,6 +23,9 @@ export function ruleSentence(review) {
     case 'sandbox': return 'ran in its own sandbox';
     case 'no_grant': return 'not granted to this Bot';
     case 'never': return `never approvable (${review.matched})`;
+    // Asked for in the same turn as something that needed you. Not run, and not
+    // refused either: it is waiting on the decision above it.
+    case 'paused': return 'held while you decide on the request above';
     default: return review.reason || '';
   }
 }

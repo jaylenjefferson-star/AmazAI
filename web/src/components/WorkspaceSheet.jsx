@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { STATES } from '../characters/Companion';
+import { VERDICT, stepLabel } from '../lib/tools';
 import { Activity, Computer } from './RightPanel';
 import Icon from './Icon';
 import Problem from './Problem';
@@ -16,8 +17,6 @@ const ago = (iso) => {
   if (s < 86400) return `${Math.round(s / 3600)} h ago`;
   return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
 };
-
-const VERDICT = { allowed: 'Ran', asked: 'Asked', denied: 'Stopped' };
 
 /**
  * An agent's desk: what it is doing now, what it has produced, what it has done,
@@ -81,7 +80,9 @@ export default function WorkspaceSheet({ agent, threadId, agents, live, steps, a
               <div className="ws-item" key={`${s.at}-${i}`}>
                 <Icon name={s.review?.decision === 'denied' ? 'x' : s.review?.decision === 'asked' ? 'shield' : 'check'} size={17} />
                 <span>
-                  <strong>{s.name}</strong>
+                  {/* The same plain-word label the trail uses, with the exact
+                      identifier on hover. This read `agent.find` before. */}
+                  <strong title={s.name}>{stepLabel(s.name)}</strong>
                   <small>{s.summary}</small>
                 </span>
                 {s.review?.decision && <em className={`ws-verdict v-${s.review.decision}`}>{VERDICT[s.review.decision] || s.review.decision}</em>}

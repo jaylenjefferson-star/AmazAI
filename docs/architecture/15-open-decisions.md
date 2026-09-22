@@ -93,6 +93,25 @@ fallback. What D4 changes is the *shape of the resume turn*. Cards (`request_con
 `propose_routine`) do not depend on it at all: they are made as a turn's last
 action, after the reply, so nothing needs to continue past them.
 
+**What the native shape also demands: completeness.** The `tool_result` shape is
+not just tidier, it is *checked*. The service holds every `toolUseId` it handed
+out for a turn and rejects the continuation if one comes back unanswered:
+
+    EventStreamError (runtimeClientError) calling InvokeHarness:
+    Inline function result is missing toolUseId 'tooluse_...'
+
+That is a real error this design produced in practice, and it had nothing to do
+with permissions or with anything a Bot did. A model can ask for several things
+in one turn. The loop used to leave the stream at the first call needing a
+decision, discard the results of the calls it had already answered, and replay
+only the approval's own pair — so every sibling id in that turn went unanswered.
+The fix is `continuation.paused_turn_calls` and the `PAUSE#` row that
+`orchestrator._record_paused_turn` writes: the whole turn is recorded when it
+pauses and answered whole when it resumes, with the decision in the position the
+model asked for it, and the calls that came *after* the pause answered as "not
+run" rather than executed. The fallback shape needs none of this, which is
+exactly why the gap survived as long as it did.
+
 **Separately: existing harnesses.** Superseded. Inline tools are no longer declared when a
 harness is created or updated on it: they are sent with every invocation (`invoke_harness`
 takes `tools` per request and that overrides the harness's own list), so no harness needs
