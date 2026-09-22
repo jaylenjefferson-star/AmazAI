@@ -199,8 +199,31 @@ class Store:
             raise Conflict(f"conditional update failed on {pk}/{sk}") from e
         return _decimals_to_native(resp["Attributes"])
 
+    def increment(self, pk: str, sk: str, field: str, delta: int) -> int:
+        """Atomically add `delta` to a numeric attribute; return its new value.
+
+        DynamoDB's `ADD` is server-side and linearizable per item: concurrent
+        increments on the same row are serialized by the service itself, so
+        whichever caller's own call is the one that lands a counter on a
+        particular number (zero, for a fan-in "every child has reported"
+        counter) is unambiguous -- no separate claim/lock, and no window
+        where two callers could both believe they were last. `update`'s
+        `SET`-based conditional writes cannot express this: computing a new
+        value from a value this client already read and writing it back with
+        `SET` is a read-modify-write a concurrent caller can race and undo.
+        """
+        resp = self._table.update_item(
+            Key={"pk": pk, "sk": sk},
+            UpdateExpression="ADD #f :d SET updatedAt = :u",
+            ExpressionAttributeNames={"#f": field},
+            ExpressionAttributeValues={":d": delta, ":u": now_iso(), ":owner": self.owner_id},
+            ConditionExpression="ownerId = :owner",
+            ReturnValues="UPDATED_NEW",
+        )
+        return int(resp["Attributes"][field])
+
     def query(self, pk: str, *, sk_prefix: str = "", limit: int = 100,
-              ascending: bool = True,
+              ascending: bool = True, consistent: bool = False,
               sk_between: tuple[str, str] | None = None) -> list[dict]:
         """Rows in one partition, optionally narrowed by sort key.
 
@@ -218,7 +241,8 @@ class Store:
         elif sk_prefix:
             cond = cond & Key("sk").begins_with(sk_prefix)
         resp = self._table.query(
-            KeyConditionExpression=cond, Limit=limit, ScanIndexForward=ascending
+            KeyConditionExpression=cond, Limit=limit, ScanIndexForward=ascending,
+            ConsistentRead=consistent,
         )
         return [i for i in _decimals_to_native(resp.get("Items", []))
                 if i.get("ownerId") == self.owner_id]

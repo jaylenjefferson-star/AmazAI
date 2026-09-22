@@ -22,10 +22,12 @@ import traceback
 import boto3
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
-                    continuation, cost, keys as K, memory, onboarding, org, policy, provisioning,
-                    redact, review, router, routines, runs, skills, standard_runtime, threads)
+                    continuation, cost, handoffs, keys as K, memory, metrics, onboarding, org,
+                    policy, provisioning, redact, review, router, routines, runs, skills,
+                    standard_runtime, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
@@ -140,6 +142,7 @@ def _fail(store: Store, run: dict, message: str) -> None:
                      summary=message, sealSha256=manifest.get("sealSha256"))
         Push(store).run_end(fresh["runId"], fresh["threadId"],
                             RunState.FAILED.value, message, fresh.get("costUsd", 0.0))
+        _wake_coordinator_if_child(store, fresh, RunState.FAILED.value, message)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
@@ -341,7 +344,18 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     system_prompt += _reporting_note(store, agent)
 
 
-    run = runs.advance(store, run, RunState.PLANNING) if run["state"] == RunState.QUEUED.value else run
+    if run["state"] == RunState.QUEUED.value:
+        # How long this run sat queued before any worker picked it up --
+        # measured once, on the transition out of QUEUED, not on every
+        # invocation a retry or a resume also passes through here.
+        queued_at = run.get("createdAt")
+        if queued_at:
+            delay = (datetime.now(timezone.utc)
+                     - datetime.fromisoformat(queued_at.replace("Z", "+00:00"))).total_seconds()
+            metrics.emit("RunQueueDelaySeconds", delay, unit="Seconds",
+                         dimensions={"Trigger": (run.get("trigger") or {}).get("type", "user")},
+                         runId=run["runId"], agentId=run["agentId"], threadId=run["threadId"])
+        run = runs.advance(store, run, RunState.PLANNING)
     run = runs.advance(store, run, RunState.EXECUTING) if run["state"] == RunState.PLANNING.value else run
     # A retry is a fresh execution attempt. Moving it back through EXECUTING
     # before invoking preserves the state-machine edge and, crucially, lets a
@@ -673,9 +687,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             # Kept on the run: only the final attempt's evidence is sealed, so without
             # this the error that *started* a retry chain is gone by the time anyone
             # asks why it failed.
+            attempt = run.get("attempt", 0) + 1
             runs.advance(store, run, RunState.RETRYING,
-                         attempt=run.get("attempt", 0) + 1,
-                         lastError=stream_error[:500])
+                         attempt=attempt, lastError=stream_error[:500])
+            metrics.emit("RunRetryAttempt", attempt, dimensions={"ErrorClass": cls.cls.value},
+                        runId=run["runId"], agentId=run["agentId"])
             _reinvoke(run["runId"], store.owner_id, delay_note=cls.reason)
             return {"ok": True, "state": RunState.RETRYING.value, "retry": cls.reason}
 
@@ -1069,12 +1085,51 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
     if name == "handoff":
         handoff = _record_handoff(store, run, args)
         ev.action(seq, "handoff", f"to {args.get('to')}", handoffId=handoff["handoffId"])
-        push.handoff(run["runId"], run["threadId"], handoff)
-        _step(push, run, turn, "handoff", f"to {args.get('to')}",
+
+        # Auto-accept, right where the handoff is proposed: a handoff this
+        # Bot's own receiver already has the grant/budget/policy clearance
+        # for should not sit waiting for a human to notice and click accept.
+        # Anything `can_auto_accept` cannot resolve cleanly -- and anything
+        # `accept` itself refuses (hop depth, a task volume ceiling) -- just
+        # leaves `status: "proposed"` exactly as before; nothing here can
+        # make a handoff *less* likely to reach a human.
+        auto_note = ""
+        receiver = store.try_get(K.agent_pk(handoff["toAgentId"]), "META")
+        if receiver is not None and receiver.get("status") in A.RUNNABLE:
+            ok, reason = handoffs.can_auto_accept(store, handoff, receiver, run)
+            if ok:
+                try:
+                    accepted = handoffs.accept(store, run, handoff,
+                                               decided_by="system:auto-accept")
+                except (collab.MessagingError, handoffs.HandoffError) as exc:
+                    auto_note = f" (not auto-accepted: {exc})"
+                else:
+                    handoff = accepted["handoff"]
+                    _invoke_orchestrator_async(accepted["child"]["runId"], store.owner_id)
+                    receiver_name = accepted["receiver"].get("name", handoff["toAgentId"])
+                    auto_note = f" -- accepted automatically; {receiver_name} is on it"
+            else:
+                auto_note = f" (not auto-accepted: {reason})"
+
+        # The task's own run id, not necessarily this run's -- `handoff` is
+        # filed there (see `_record_handoff`), and that is the id
+        # `POST /handoffs/{runId}/{hoffId}` needs to find it again.
+        task_id = (run.get("trigger") or {}).get("taskId") or run["runId"]
+        metrics.emit("HandoffProposed", 1,
+                     dimensions={"AutoAccepted": str(handoff["status"] == "accepted")},
+                     taskId=task_id, handoffId=handoff["handoffId"],
+                     fromAgentId=agent["agentId"], toAgentId=handoff["toAgentId"])
+        push.handoff(task_id, run["threadId"], handoff)
+        _step(push, run, turn, "handoff", f"to {args.get('to')}{auto_note}",
               review.scoped("handoff", "you stay the owner, and no access travels with it"))
+        if handoff["status"] == "accepted":
+            note = ("accepted automatically and started; no access travels with a "
+                    "handoff -- the receiving Bot works under its own grants")
+        else:
+            note = "recorded and shown to the operator; no access travels with a handoff"
         return {"pause": False, "toolResult": {
-            "ok": True, "handoffId": handoff["handoffId"],
-            "note": "recorded and shown to the operator; no access travels with a handoff"}}
+            "ok": True, "handoffId": handoff["handoffId"], "status": handoff["status"],
+            "note": note}}
 
     if name == "message_agent":
         try:
@@ -1614,9 +1669,22 @@ def _capability_for(action: str, agent: dict) -> Capability:
 
 
 def _record_handoff(store: Store, run: dict, args: dict) -> dict:
+    """Propose a handoff, filed under the *task's* own run -- not necessarily
+    this run's own pk.
+
+    A run continuing a task after a child completed (`trigger.type ==
+    "child_completion"`) is not the run the task started as, but a handoff it
+    proposes still belongs to that one task. Filing it anywhere else would
+    strand it from `collab.resolve_context`'s task branch, which always reads
+    handoffs from the task's root run -- exactly the partition
+    `K.task_pk`-scoped state (`ensure_task`, `TaskChild` rows) already uses.
+    One task, one partition its handoffs live in, regardless of which of its
+    runs proposed them.
+    """
     handoff_id = new_id("hoff_")
+    task_id = (run.get("trigger") or {}).get("taskId") or run["runId"]
     return store.put({
-        "pk": run["pk"], "sk": K.handoff_sk(handoff_id),
+        "pk": K.run_pk(task_id), "sk": K.handoff_sk(handoff_id),
         "entity": "Handoff", "handoffId": handoff_id,
         "gsi1pk": "HANDOFFS", "gsi1sk": f"proposed#{now_iso()}",
         "fromAgentId": run["agentId"], "toAgentId": A.agent_ref(args.get("to")),
@@ -1874,6 +1942,27 @@ def _finish(store: Store, run: dict, state: RunState, summary: str, push: Push,
                  sealSha256=manifest.get("sealSha256"))
     push.run_end(fresh["runId"], fresh["threadId"], state.value, summary[:2000],
                  fresh.get("costUsd", 0.0))
+    _wake_coordinator_if_child(store, fresh, state.value, summary)
+
+
+def _wake_coordinator_if_child(store: Store, run: dict, state_value: str, summary: str) -> None:
+    """A run's terminal settle, seen by whoever handed it the work.
+
+    The one place every terminal exit already funnels through (`_finish` for
+    a normal settle, `_fail` for the top-level exception path) -- so this is
+    the one place a completion needs to be reported from, rather than one
+    check per exit branch. Best-effort and never allowed to turn a run that
+    *did* settle correctly into a failure to report that it did: the
+    idempotent conditional write inside `notify_coordinator_if_child` is what
+    actually decides whether a wake happens, not this wrapper.
+    """
+    try:
+        continuation_run = handoffs.notify_coordinator_if_child(
+            store, run, state_value, summary)
+        if continuation_run:
+            _invoke_orchestrator_async(continuation_run["runId"], store.owner_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
 
 
 def _reinvoke(run_id: str, owner_id: str, *, delay_note: str = "") -> None:

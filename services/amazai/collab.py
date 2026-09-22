@@ -420,6 +420,22 @@ def active_run_count_for_agent(store: Store, agent_id: str) -> int:
     return sum(1 for r in rows if r.get("agentId") == agent_id and r.get("state") not in _TERMINAL_VALUES)
 
 
+def active_run_count_for_thread(store: Store, thread_id: str) -> int:
+    """In-flight (non-terminal) runs on one thread, across every agent.
+
+    A per-agent ceiling (`active_run_count_for_agent`, `may_wake_now`) bounds
+    how much any *one* Bot can have outstanding, but not how much a *room*
+    can: `handoffs.MAX_ACTIVE_CHILDREN_PER_TASK` bounds one task's own
+    fan-out, but a task's counter resets once it settles, so a coordinator
+    that keeps starting new tasks in the same room is not bounded by that
+    alone. This is the same full-listing scan `active_run_count_for_agent`
+    already accepts at this scale, filtered by thread instead of agent.
+    """
+    rows = store.query_index("gsi1", "gsi1pk", "RUNS", limit=1000)
+    return sum(1 for r in rows
+              if r.get("threadId") == thread_id and r.get("state") not in _TERMINAL_VALUES)
+
+
 def may_wake_now(store: Store, recipient_agent: dict, limits: MessagingLimits) -> tuple[bool, str]:
     """The concurrency + budget gate a priority wake must still pass.
 

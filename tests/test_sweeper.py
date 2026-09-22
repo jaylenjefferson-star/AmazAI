@@ -15,9 +15,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from amazai import approvals, keys as K, runs
+from amazai import approvals, handoffs, keys as K, runs
 from amazai.states import RunState
 
+import handlers.orchestrator as orch
 import handlers.sweeper as sweeper
 
 AGENT = {"entity": "Agent", "name": "Engineering", "status": "active",
@@ -50,6 +51,21 @@ def _stale_retrying_run(store, *, agent_id: str, thread_id: str) -> dict:
     old = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(
         timespec="seconds").replace("+00:00", "Z")
     return store.update(run["pk"], "META", {"heartbeatAt": old, "gsi2sk": old})
+
+
+def _stuck_run(store, *, agent_id: str, thread_id: str, trigger: dict | None = None) -> dict:
+    """An EXECUTING run with no heartbeat *and* past its own deadline -- the
+    shape that must stop being resumed forever, as distinct from
+    `_stale_retrying_run`'s heartbeat-stale-but-still-within-deadline shape,
+    which must keep being resumed."""
+    store.put({"pk": K.agent_pk(agent_id), "sk": "META", **AGENT, "agentId": agent_id})
+    run = runs.create(store, agent_id=agent_id, thread_id=thread_id, goal="hey",
+                      trigger=trigger)
+    run = runs.advance(store, run, RunState.PLANNING)
+    run = runs.advance(store, run, RunState.EXECUTING)
+    old = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(
+        timespec="seconds").replace("+00:00", "Z")
+    return store.update(run["pk"], "META", {"heartbeatAt": old, "gsi2sk": old, "deadlineAt": old})
 
 
 def _stale_approval(store, *, agent_id: str, thread_id: str) -> dict:
@@ -162,6 +178,81 @@ class TestStaleRunRecovery:
         assert fake.invocations == []
         fresh = store.get(run["pk"], "META")
         assert fresh["state"] == RunState.FAILED.value
+
+    def test_heartbeat_stale_but_still_within_deadline_keeps_being_resumed(
+            self, store, monkeypatch):
+        """The recoverable case: a worker gap, not a dead run. Must not be
+        touched by the new timeout check -- only the *combination* of no
+        heartbeat and a passed deadline stops a resume."""
+        fake = _stub_lambda(monkeypatch)
+        _stale_retrying_run(store, agent_id="eng", thread_id="dm-eng")
+
+        result = sweeper.handler({}, None)
+
+        assert result["runsResumed"] == 1
+        assert result["runsFailed"] == 0
+        assert len(fake.invocations) == 1
+
+    def test_no_heartbeat_and_past_its_deadline_is_failed_not_resumed_forever(
+            self, store, monkeypatch):
+        """The exact production shape: five real runs sat in RETRYING for
+        days, "resumed" by the sweeper every five minutes forever because
+        nothing ever asked whether that resuming was actually working."""
+        fake = _stub_lambda(monkeypatch)
+        run = _stuck_run(store, agent_id="eng", thread_id="dm-eng")
+
+        result = sweeper.handler({}, None)
+
+        assert result["runsFailed"] == 1
+        assert result["runsResumed"] == 0
+        assert fake.invocations == []
+        fresh = store.get(run["pk"], "META")
+        assert fresh["state"] == RunState.FAILED.value
+        assert "timed out" in fresh["summary"]
+
+    def test_a_second_sweep_does_not_touch_an_already_sealed_run(self, store, monkeypatch):
+        """Sealing is terminal. A run failed on one sweep must not be
+        re-processed (and re-reported as newly failed) by the next one."""
+        fake = _stub_lambda(monkeypatch)
+        _stuck_run(store, agent_id="eng", thread_id="dm-eng")
+        first = sweeper.handler({}, None)
+        assert first["runsFailed"] == 1
+
+        second = sweeper.handler({}, None)
+
+        assert second["runsFailed"] == 0
+        assert fake.invocations == []
+
+    def test_a_timed_out_child_reports_to_its_coordinator_instead_of_stalling_it(
+            self, store, monkeypatch):
+        """The whole reason this gap mattered: a task waiting on a child that
+        never settles waits forever. Once the sweeper actually seals the
+        stuck child, `_seal`'s own `notify_coordinator_if_child` hook wakes
+        the coordinator with the timeout reported, same as any other
+        failure."""
+        _stub_lambda(monkeypatch)
+        store.put({"pk": K.agent_pk("eng"), "sk": "META", **AGENT, "agentId": "eng"})
+        store.put({"pk": K.agent_pk("ops"), "sk": "META", **AGENT, "agentId": "ops",
+                  "name": "Cloud Operations"})
+        coordinator_run = runs.create(store, agent_id="eng", thread_id="room-1", goal="ship it")
+        handoff = orch._record_handoff(store, coordinator_run,
+                                       {"to": "ops", "goal": "run the long migration"})
+        accepted = handoffs.accept(store, coordinator_run, handoff, decided_by="system:auto-accept")
+        child = accepted["child"]
+        old = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(
+            timespec="seconds").replace("+00:00", "Z")
+        store.update(child["pk"], "META", {"heartbeatAt": old, "gsi2sk": old, "deadlineAt": old})
+
+        result = sweeper.handler({}, None)
+
+        assert result["runsFailed"] == 1
+        task = store.get(K.task_pk(coordinator_run["runId"]), "META")
+        # The wake fired: a continuation run for the coordinator now exists,
+        # recorded as the task's current coordinatorRunId.
+        assert task["coordinatorRunId"] != coordinator_run["runId"]
+        continuation = store.get(K.run_pk(task["coordinatorRunId"]), "META")
+        assert continuation["trigger"]["type"] == "child_completion"
+        assert "timed out" in continuation["goal"]
 
 
 class TestApprovalExpiry:
