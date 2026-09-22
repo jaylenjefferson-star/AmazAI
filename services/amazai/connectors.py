@@ -115,7 +115,7 @@ def install(store: Store, cid: str, *, name: str, account_id: str,
     slug = slug_of(cid)
     cid = connector_id(slug)
     return store.put({
-        "pk": K.connector_pk(cid), "sk": "META",
+        "pk": K.connector_pk(store.owner_id, cid), "sk": "META",
         "entity": "Connector", "connectorId": cid,
         "gsi1pk": "CONNECTORS", "gsi1sk": name or slug,
         "app": slug, "name": name or slug,
@@ -175,7 +175,7 @@ def revoke(store: Store, cid: str) -> dict:
         if store.try_get(K.agent_pk(agent["agentId"]), K.grant_sk(cid)):
             store.delete(K.agent_pk(agent["agentId"]), K.grant_sk(cid))
             removed_from.append(agent["agentId"])
-    store.delete(K.connector_pk(cid), "META")
+    store.delete(K.connector_pk(store.owner_id, cid), "META")
     return {"connectorId": cid, "revokedFrom": removed_from}
 
 
@@ -246,7 +246,7 @@ def _effect(capability: Capability) -> str:
 
 # --- invocation -------------------------------------------------------------
 
-def connector_event(cid: str, action: str, *, agent_id: str = "",
+def connector_event(owner_id: str, cid: str, action: str, *, agent_id: str = "",
                     run_id: str = "", actor_user_id: str = "",
                     outcome: str = "ok", detail: str = "") -> dict:
     """An append-only connector log line.
@@ -257,7 +257,7 @@ def connector_event(cid: str, action: str, *, agent_id: str = "",
     """
     stamp = now_iso()
     return {
-        "pk": K.connector_pk(cid),
+        "pk": K.connector_pk(owner_id, cid),
         "sk": f"LOG#{stamp}#{ordered_suffix()}",
         "entity": "ConnectorEvent",
         "gsi1pk": "CONNECTORLOG", "gsi1sk": f"{stamp}#{cid}",
@@ -286,13 +286,13 @@ def invoke(store: Store, client, *, agent_id: str, grant: Granted, tool: str,
                                 account_id=org.get("accountId") or None)
     except Exception as exc:  # noqa: BLE001
         store.put(connector_event(
-            grant.connector_id, "connector.invocation_failed", agent_id=agent_id,
+            store.owner_id, grant.connector_id, "connector.invocation_failed", agent_id=agent_id,
             run_id=run_id, outcome="error",
             detail=f"{tool}: {type(exc).__name__}: {str(exc)[:200]}"
                    + (f" (log {exc.log_id})" if getattr(exc, "log_id", "") else "")))
         raise
 
     store.put(connector_event(
-        grant.connector_id, "connector.invoked", agent_id=agent_id, run_id=run_id,
+        store.owner_id, grant.connector_id, "connector.invoked", agent_id=agent_id, run_id=run_id,
         detail=f"{tool}" + (f" (log {result.get('logId')})" if result.get("logId") else "")))
     return result

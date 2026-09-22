@@ -355,7 +355,8 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         slug = C.slug_of(body.get("connectorId") or "")
         link = _composio().connect_link(actor.user_id, slug,
                                         callback_url=_return_url(event, slug))
-        store.put(C.connector_event(C.connector_id(slug), "connector.authorization_started",
+        store.put(C.connector_event(store.owner_id, C.connector_id(slug),
+                                    "connector.authorization_started",
                                     actor_user_id=actor.user_id, detail="connect link issued"))
         return _resp(201, link)
 
@@ -365,8 +366,8 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         return _resp(200, {"accounts": _composio().accounts(actor.user_id, toolkit=qs.get("app"))})
 
     if (p := _match(path, "/connectors/{id}")) and method == "GET":
-        row = store.get(K.connector_pk(p[0]), "META")
-        row["log"] = store.query(K.connector_pk(p[0]), sk_prefix="LOG#",
+        row = store.get(K.connector_pk(store.owner_id, p[0]), "META")
+        row["log"] = store.query(K.connector_pk(store.owner_id, p[0]), sk_prefix="LOG#",
                                  limit=50, ascending=False)
         return _resp(200, row)
 
@@ -388,16 +389,17 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         row = C.install(store, cid, name=client.toolkit(slug)["name"], account_id=account["id"],
                         external_user_id=actor.user_id, actor_user_id=actor.user_id)
         granted = C.grant_to_active_agents(store, cid, actor_user_id=actor.user_id)
-        store.put(C.connector_event(cid, "connector.installed", actor_user_id=actor.user_id,
+        store.put(C.connector_event(store.owner_id, cid, "connector.installed",
+                                    actor_user_id=actor.user_id,
                                     detail=f"granted to: {granted or 'no new agents'}"))
         return _resp(201, {**row, "grantedTo": granted})
 
     if (p := _match(path, "/connectors/{id}")) and method == "DELETE":
         actor = _actor(event)
-        store.get(K.connector_pk(p[0]), "META")   # 404 if it is not ours
+        store.get(K.connector_pk(store.owner_id, p[0]), "META")   # 404 if it is not ours
         result = C.revoke(store, p[0])
         store.put(C.connector_event(
-            p[0], "connector.revoked", actor_user_id=actor.user_id,
+            store.owner_id, p[0], "connector.revoked", actor_user_id=actor.user_id,
             detail=f"grants removed from: {result['revokedFrom'] or 'no agents'}"))
         return _resp(200, result)
 

@@ -83,7 +83,7 @@ class TestOneAppEndToEnd:
         assert len(w.executed) == 2
 
         # 10 -- And the sequence is on the record, with no arguments in it.
-        log = store.query(K.connector_pk(SLACK), sk_prefix="LOG#")
+        log = store.query(K.connector_pk("owner-a", SLACK), sk_prefix="LOG#")
         actions = [e["action"] for e in log]
         assert actions[0] == "connector.authorization_started"
         assert actions.count("connector.invoked") == 2
@@ -95,6 +95,6 @@ class TestOneAppEndToEnd:
         w.transport.fail[READ] = "not_in_channel"
         out = w.use(READ, {"channel": "C1"})
         assert "not_in_channel" in out["toolResult"]["error"]
-        log = w.store.query(K.connector_pk(SLACK), sk_prefix="LOG#")
+        log = w.store.query(K.connector_pk("owner-a", SLACK), sk_prefix="LOG#")
         failed = [e for e in log if e["action"] == "connector.invocation_failed"]
         assert failed and "log_failed" in failed[0]["detail"]

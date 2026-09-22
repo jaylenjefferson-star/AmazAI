@@ -25,7 +25,7 @@ yours.
 | Agent | `AGENT#<id>` | `META` | `AGENTS` / `<name>` | — |
 | Memory | `AGENT#<id>` | `MEM#<memId>` | — | — |
 | Grant | `AGENT#<id>` | `GRANT#<connectorId>` | — | `CONNECTOR#<connectorId>` / `AGENT#<id>` |
-| Connector | `CONNECTOR#<id>` | `META` | `CONNECTORS` / `<provider>` | — |
+| Connector | `CONNECTOR#<ownerId>#<id>` | `META` | `CONNECTORS` / `<provider>` | — |
 | Thread | `THREAD#<id>` | `META` | `THREADS` / `<lastActivity>` | — |
 | Message | `THREAD#<id>` | `MSG#<iso>#<rand>` | — | — |
 | Run | `RUN#<id>` | `META` | `RUNS` / `<startedAt>` | `RUNSTATE#<state>` / `<heartbeatAt>` |
@@ -256,3 +256,21 @@ The team model adds:
 No table redesign, no GSI change, no migration of run history. That is the whole
 point of putting `ownerId` on every row now, while there is exactly one value
 for it.
+
+**One exception, already hit.** The "`ownerId` on the row is enough" premise
+assumes every entity's own id is already globally unique -- true for `Run`/
+`Thread`/`Message` (`new_id()`-generated) but not for `Connector`, whose id is
+derived from the app slug (`composio:slack`, identical for every owner who
+connects Slack). A second owner's `install()` used to overwrite the first
+owner's row outright: same pk, an unconditional `put_item`, `ownerId`
+filtering only guarding *reads*. Fixed by putting `ownerId` in the connector
+row's own pk (`CONNECTOR#<ownerId>#<id>`) rather than relying on the field
+alone -- see `keys.connector_pk`.
+
+**The same exception is not yet fixed for `Agent`.** `agentId` is derived from
+the Bot's display name (`normalize_agent_id`), not `new_id()` -- "Engineering"
+always slugs to `eng`, for every owner, including the identical default seat
+roster every new account's onboarding creates. `AGENT#<id>` carries the same
+collision `CONNECTOR#<id>` did, and `agent_pk` is referenced from most of
+`services/amazai/` and `services/handlers/`, so the fix is a larger pass, not
+a one-file change. Tracked as the next thing to fix before opening signups.

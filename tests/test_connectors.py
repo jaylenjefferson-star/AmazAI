@@ -60,15 +60,80 @@ class TestAnyAppCanBeConnected:
                  arguments={"channel": "C1"})
         rows = [json.dumps(r, default=str).lower() for r in store.query_index(
             "gsi1", "gsi1pk", "CONNECTORS", limit=50)]
-        rows += [json.dumps(r, default=str).lower() for r in store.query(K.connector_pk(SLACK))]
+        rows += [json.dumps(r, default=str).lower() for r in store.query(K.connector_pk("owner-a", SLACK))]
         for text in rows:
             assert "ak_" not in text and "token" not in text.replace("accountid", "")
 
     def test_rows_a_previous_provider_left_are_not_connectors_any_more(self, store):
-        store.put({"pk": K.connector_pk("pipedream:slack"), "sk": "META", "entity": "Connector",
+        store.put({"pk": K.connector_pk("owner-a", "pipedream:slack"), "sk": "META", "entity": "Connector",
                    "connectorId": "pipedream:slack", "gsi1pk": "CONNECTORS", "gsi1sk": "Slack",
                    "app": "slack", "status": "installed", "allowedTools": ["slack.read"]})
         assert C.installed(store) == {}
+
+
+class TestTwoOwnersConnectingTheSameApp:
+    """`connector_id` is derived from the app slug, so it is identical for
+    every owner who connects Slack -- unlike a run/agent/thread id, which
+    `new_id()` already makes globally unique. Without `owner_id` in the
+    connector row's own pk, the second owner's `install()` would silently
+    overwrite the first owner's row: same pk/sk, an unconditional `put_item`,
+    no uniqueness check."""
+
+    def test_installing_does_not_touch_the_other_owners_row(self, two_stores):
+        store_a, store_b = two_stores
+        row_a = install(store_a)
+        row_b = C.install(store_b, C.connector_id("slack"), name="Slack B",
+                          account_id="ca_slack_b", external_user_id="owner-b",
+                          actor_user_id="owner-b")
+
+        assert row_a["pk"] != row_b["pk"]
+        fresh_a = store_a.get(K.connector_pk("owner-a", SLACK), "META")
+        assert fresh_a["accountId"] == row_a["accountId"] == "ca_slack"
+        assert fresh_a["externalUserId"] == "owner-a"
+
+    def test_each_owner_sees_only_their_own_install(self, two_stores):
+        store_a, store_b = two_stores
+        install(store_a)
+        C.install(store_b, C.connector_id("slack"), name="Slack B", account_id="ca_slack_b",
+                 external_user_id="owner-b", actor_user_id="owner-b")
+
+        assert SLACK in C.installed(store_a)
+        assert C.installed(store_a)[SLACK]["accountId"] == "ca_slack"
+        assert SLACK in C.installed(store_b)
+        assert C.installed(store_b)[SLACK]["accountId"] == "ca_slack_b"
+
+    def test_revoking_one_owners_connector_leaves_the_others_intact(self, two_stores):
+        store_a, store_b = two_stores
+        install(store_a)
+        C.install(store_b, C.connector_id("slack"), name="Slack B", account_id="ca_slack_b",
+                 external_user_id="owner-b", actor_user_id="owner-b")
+
+        C.revoke(store_a, SLACK)
+
+        assert C.installed(store_a) == {}
+        assert SLACK in C.installed(store_b)
+
+    def test_invocation_logs_do_not_cross_owners(self, two_stores):
+        # Distinct agent ids for the two owners -- agentId is itself a
+        # separate, larger pre-existing collision (K.agent_pk is not
+        # owner-scoped either) that this test is not about; see the
+        # connector-isolation tests above for the bug this class covers.
+        store_a, store_b = two_stores
+        an_agent(store_a, "eng-a")
+        an_agent(store_b, "eng-b")
+        install(store_a)
+        C.install(store_b, C.connector_id("slack"), name="Slack B", account_id="ca_slack_b",
+                 external_user_id="owner-b", actor_user_id="owner-b")
+        grant(store_a, "eng-a")
+        store_b.put(C.grant_row("eng-b", SLACK, actor_user_id="owner-b"))
+
+        C.invoke(store_a, client()[0], agent_id="eng-a", grant=C.granted_apps(store_a, "eng-a")[0],
+                 tool="SLACK_FETCH_CONVERSATION_HISTORY", arguments={"channel": "C1"})
+
+        log_a = store_a.query(K.connector_pk("owner-a", SLACK), sk_prefix="LOG#")
+        log_b = store_b.query(K.connector_pk("owner-b", SLACK), sk_prefix="LOG#")
+        assert len(log_a) == 1
+        assert log_b == []
 
 
 class TestResolution:
@@ -205,7 +270,7 @@ class TestInvocation:
         with pytest.raises(Exception, match="nope"):
             C.invoke(store, c, agent_id="eng", grant=held, tool="SLACK_SEND_MESSAGE",
                      arguments={}, run_id="run_1")
-        log = store.query(K.connector_pk(SLACK), sk_prefix="LOG#")
+        log = store.query(K.connector_pk("owner-a", SLACK), sk_prefix="LOG#")
         by_action = {e["action"]: e for e in log}
         assert "log_ok" in by_action["connector.invoked"]["detail"]
         assert by_action["connector.invocation_failed"]["outcome"] == "error"
@@ -217,7 +282,7 @@ class TestInvocation:
         grant(store, "eng")
         C.invoke(store, client()[0], agent_id="eng", grant=C.granted_apps(store, "eng")[0],
                  tool="SLACK_SEND_MESSAGE", arguments={"text": "the launch is on the 14th"})
-        assert "launch" not in json.dumps(store.query(K.connector_pk(SLACK), sk_prefix="LOG#"))
+        assert "launch" not in json.dumps(store.query(K.connector_pk("owner-a", SLACK), sk_prefix="LOG#"))
 
 
 class TestConnectorRoutes:
