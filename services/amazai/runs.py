@@ -15,6 +15,45 @@ from amazai.store import Store, new_id, now_iso
 DEFAULT_DEADLINE_MINUTES = 15
 
 
+def session_epoch(store: Store, agent_id: str, thread_id: str) -> int:
+    """The epoch this (agent, thread) pair's session is currently on. 0 if it
+    has never had to rotate."""
+    row = store.try_get(K.agent_pk(agent_id), K.session_epoch_sk(thread_id))
+    return int((row or {}).get("epoch") or 0)
+
+
+def mark_session_dirty(store: Store, agent_id: str, thread_id: str) -> int:
+    """Rotate this pair onto a fresh session and return the new epoch.
+
+    Called once, from the one place in `_drive` that already knows a turn is
+    ending with a tool result computed but never sent back to the model --
+    a round/time/budget stop, a stream error, or a cancellation mid-turn. The
+    AgentCore session is left owing an answer it will never get; every future
+    invocation on it fails with `Inline function result is missing toolUseId`
+    regardless of what that invocation itself does. Rotating here is what lets
+    the *next* run on this pair start on a session nothing is owed on, instead
+    of that becoming a standing fault the operator has to notice, diagnose and
+    fix by hand (deleting and re-provisioning the whole shared harness, which
+    is what recovering from this looked like before this existed).
+
+    Idempotent per dirty turn only in effect, not by suppression: calling it
+    twice for the same incident advances the epoch twice, which still leaves
+    the pair on a fresh session -- just one further along than strictly
+    needed. That is a cost of a stray extra call, not a correctness problem,
+    so nothing here tries to detect "already rotated for this."
+    """
+    current = session_epoch(store, agent_id, thread_id)
+    row = store.try_get(K.agent_pk(agent_id), K.session_epoch_sk(thread_id))
+    if row is None:
+        store.put({"pk": K.agent_pk(agent_id), "sk": K.session_epoch_sk(thread_id),
+                  "entity": "SessionEpoch", "agentId": agent_id, "threadId": thread_id,
+                  "epoch": current + 1})
+    else:
+        store.update(K.agent_pk(agent_id), K.session_epoch_sk(thread_id),
+                     {"epoch": current + 1})
+    return current + 1
+
+
 def create(store: Store, *, agent_id: str, thread_id: str, goal: str,
            trigger: dict | None = None, deadline_minutes: int = DEFAULT_DEADLINE_MINUTES,
            run_id: str | None = None) -> dict:
@@ -23,6 +62,7 @@ def create(store: Store, *, agent_id: str, thread_id: str, goal: str,
     retried caller is handed the identifier of a run that never existed."""
     run_id = run_id or new_id("run_")
     deadline = datetime.now(timezone.utc) + timedelta(minutes=deadline_minutes)
+    epoch = session_epoch(store, agent_id, thread_id)
 
     item = {
         "pk": K.run_pk(run_id), "sk": "META",
@@ -33,7 +73,10 @@ def create(store: Store, *, agent_id: str, thread_id: str, goal: str,
         # v2 includes the owner and logical Bot. On an account-level harness a
         # room's thread ID alone would put every parallel Bot in the same
         # microVM. Existing rows keep their v1 ID and are never rewritten.
-        "sessionId": K.bot_session_id(store.owner_id, agent_id, thread_id),
+        # `epoch` is read fresh on every new run, so a pair rotated by
+        # `mark_session_dirty` moves onto the clean session on its very next
+        # run without anything else having to know that happened.
+        "sessionId": K.bot_session_id(store.owner_id, agent_id, thread_id, epoch=epoch),
         "sessionVersion": 2,
         # Set exactly once by standard_runtime.pin_run before the first model
         # call. Retry and approval resume use the pinned ARN even if deployment
