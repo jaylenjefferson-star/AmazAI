@@ -144,6 +144,34 @@ def _fail(store: Store, run: dict, message: str) -> None:
         traceback.print_exc()
 
 
+def _mark_dirty(store: Store, run: dict) -> None:
+    """This run's session may owe AgentCore a tool result it will never get.
+
+    Rotates the (agent, thread) pair onto a fresh session -- see
+    `runs.mark_session_dirty` for why a dangling `toolUseId` has to be fixed
+    at the session, not at the run -- and moves *this run's own row* onto it
+    too, not only future ones.
+
+    That second part is not optional. Bumping the epoch alone only changes
+    what `runs.create` computes, and a retryable stream error does not create
+    a new run: `_reinvoke` re-triggers this same run_id with `resume: True`,
+    and the handler re-fetches this exact row. Leave its `sessionId` pointing
+    at the session that is now owed an answer, and the retry lands on the
+    same poisoned session it is retrying away from -- indistinguishable from
+    this fix doing nothing for the one case it exists to cover.
+
+    Never raised: an exception here must not turn "the model asked for X"
+    into "and now the retry fails too, silently, for a second reason nobody
+    can see."
+    """
+    try:
+        epoch = runs.mark_session_dirty(store, run["agentId"], run["threadId"])
+        fresh = K.bot_session_id(store.owner_id, run["agentId"], run["threadId"], epoch=epoch)
+        store.update(run["pk"], "META", {"sessionId": fresh})
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
 def _record_paused_turn(store: Store, run: dict, approval: dict,
                         calls: list[dict], carried: list[dict]) -> None:
     """Keep the shape of the turn that stopped, so it can be answered in full.
@@ -335,6 +363,19 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     buffer: list[str] = []
     pending_approval: dict | None = None
     stream_error: str | None = None
+    # Set at any exit that abandons a round's `answered` calls without sending
+    # them back to the model -- a stream error, the round/time/budget ceiling,
+    # or every id in a round arriving blank. Never for a pause: `_record_paused_turn`
+    # already carries those forward whole, so that path owes the session nothing.
+    # The AgentCore session tracks outstanding tool-use ids across the whole
+    # (agent, thread) pair, not per run, so leaving one dangling here means the
+    # *next* invocation on this session -- this run's own retry, or an
+    # unrelated run started later -- fails with `Inline function result is
+    # missing toolUseId` regardless of what it does itself. `runs.mark_session_dirty`
+    # is what breaks that: it rotates the pair onto a fresh session, and the
+    # rewrite below moves this run onto it immediately so a same-run retry is
+    # not doomed to repeat the failure it is retrying from.
+    dirty_exit = False
     turn = Turn()
     started_at = now_iso()
 
@@ -464,6 +505,10 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
                     if parsed.kind is EventKind.ERROR:
                         stream_error = parsed.error
+                        # `answered` so far, and anything from an earlier round
+                        # in `carried`, are about to be abandoned rather than
+                        # sent back -- the session is left owing an answer.
+                        dirty_exit = bool(answered) or bool(carried)
                         break
 
                     if parsed.kind is EventKind.TOOL_USE:
@@ -484,6 +529,10 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                 # decide. The pause is finished instead; `_settle_paused_cancel`
                 # is what stops a run that is waiting.
                 if pending_approval is None and runs.is_cancelled(store, run):
+                    # `answered`/`carried` are about to be abandoned by the
+                    # settle below, the same way a stream error abandons them.
+                    if answered or carried:
+                        _mark_dirty(store, run)
                     return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at)
 
             if not stream_error:
@@ -496,6 +545,9 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             if stream_error or pending_approval or not answered:
                 break
             if runs.is_cancelled(store, run):
+                # Reached only once `answered` is known non-empty (the guard
+                # just above already ruled out the empty case).
+                _mark_dirty(store, run)
                 return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at)
             rounds += 1
             out_of_rounds = rounds > MAX_TOOL_ROUNDS
@@ -525,6 +577,10 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                         "warn", f"{agent['name']} stopped mid-task: {money.reason}")
                 buffer.append(note)
                 push.delta(run["runId"], run["threadId"], note)
+                # `answered` -- the results this exact round already computed --
+                # is abandoned here, not sent back. Whatever asked for them is
+                # still owed an answer on this session.
+                dirty_exit = bool(answered)
                 break
             said = "".join(buffer[round_from:])
             round_turns = continuation.tool_round_messages(said.strip(), list(answered))
@@ -532,7 +588,8 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                 # Nothing answerable came back -- every call in the round arrived
                 # without an id (see `continuation._answerable`). Re-invoking with
                 # an unchanged conversation would only ask the same question again,
-                # so the turn ends here with what it has.
+                # so the turn ends here with what it has. Nothing was dropped that
+                # had an id to be dangling, so this is not a dirty exit.
                 break
             # Bounded, so a forty-round turn does not re-upload every earlier
             # round's results on each call to the model. Only what the model has
@@ -545,6 +602,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
     except Exception as exc:  # noqa: BLE001
         stream_error = f"{type(exc).__name__}: {exc}"
+        # Whatever `answer()` had already computed when this was raised --
+        # including a Lambda-level failure with no chance to reach any of the
+        # checks above -- is abandoned along with everything else in this
+        # `except`. If it never had anything to abandon, no session is owed
+        # anything and there is nothing to rotate away from.
+        dirty_exit = bool(answered) or bool(carried)
 
     # Wall clock, not a price. What a harness second costs is not established
     # for this account, so the seconds are recorded and rated at zero rather
@@ -565,6 +628,16 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
         "consecutiveToolErrors": consecutive_errors,
     })
     _write_cost(store, run, agent, spend)
+
+    # A pause is exempt: `_record_paused_turn`, just below, is what carries a
+    # paused turn's calls forward whole, so that session is not left owing
+    # anything. Every other dirty exit rotates now, once, after the state this
+    # run settles into is already decided -- and *before* any retry is queued,
+    # so `_reinvoke`'s same-run_id retry lands on the rotated session rather
+    # than the one it is retrying away from.
+    if dirty_exit and not pending_approval:
+        _mark_dirty(store, run)
+        run = store.get(run["pk"], "META")
 
     # --- settle ------------------------------------------------------------
     if pending_approval:

@@ -192,7 +192,7 @@ def session_id(thread_id: str) -> str:
     return (base + "-" + digest)[:max(MIN_SESSION_ID_LEN, len(base) + 1)]
 
 
-def bot_session_id(owner_id: str, agent_id: str, thread_id: str) -> str:
+def bot_session_id(owner_id: str, agent_id: str, thread_id: str, *, epoch: int = 0) -> str:
     """A stable v2 AgentCore session for one logical Bot in one thread.
 
     A shared harness makes the complete namespace `(owner, Bot, thread)`.
@@ -202,8 +202,22 @@ def bot_session_id(owner_id: str, agent_id: str, thread_id: str) -> str:
     The readable prefix helps operations; the digest carries the untruncated
     triple (including the owner) without exposing the Auth0 subject. Kept under
     AgentCore's 100-character maximum and always above its 33-character floor.
+
+    `epoch` rotates this triple onto an unrelated session without changing
+    anything else about it. It is left out of the hash entirely at its default
+    of 0, so a pair nobody has ever had to rotate gets exactly the id it always
+    got. `runs.mark_session_dirty` is the only writer of a nonzero one --
+    a turn that ends with a tool call's result computed but never sent back
+    (a round or budget ceiling, a stream error, a cancellation) leaves the
+    AgentCore session expecting an answer it will never get, and every
+    invocation after that on the same session fails with `Inline function
+    result is missing toolUseId` whether or not it did anything wrong itself.
+    Rotating the pair is what lets the *next* run start clean rather than
+    inheriting a session that is already broken.
     """
     seed = f"{owner_id}\0{agent_id}\0{thread_id}"
+    if epoch:
+        seed += f"\0{epoch}"
     digest = hashlib.sha256(seed.encode()).hexdigest()[:20]
     agent = _clean(agent_id)[:24].strip("-_") or "bot"
     thread = _clean(thread_id)[:36].strip("-_") or "thread"
@@ -213,6 +227,16 @@ def bot_session_id(owner_id: str, agent_id: str, thread_id: str) -> str:
 
 def is_bot_session_id(value: str) -> bool:
     return bool(value and value.startswith("amazai-v2-"))
+
+
+def session_epoch_sk(thread_id: str) -> str:
+    """Where one (agent, thread) pair's session epoch is kept.
+
+    Lives under the *agent's* partition, alongside its own META row: the pair
+    this counts already has a home there, and a distinct sort key is a
+    distinct item -- no new partition has to be reasoned about for it.
+    """
+    return f"SESSEPOCH#{thread_id}"
 
 
 def schedule_idempotency_key(routine_id: str, scheduled_time: str) -> str:
