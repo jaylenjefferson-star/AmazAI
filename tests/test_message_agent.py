@@ -52,17 +52,32 @@ def a_task(agents):
     return run
 
 
-class TestContextIsRequired:
-    def test_neither_task_id_nor_context_id_is_rejected(self, agents):
-        with pytest.raises(collab.MessagingError):
-            collab.send(agents, sender_agent_id="eng", recipient_agent_id="ops",
-                       args={"text": "hi"})
+class TestEveryMessageIsBoundToOneContext:
+    def test_naming_no_task_and_no_room_is_a_direct_message(self, agents):
+        """Not a refusal. A Bot that names neither is writing to one teammate,
+        and the context that binds it is the obvious one -- the two of them."""
+        result = collab.send(agents, sender_agent_id="eng", recipient_agent_id="ops",
+                            args={"text": "hi"})
+        row = result["message"]
+        assert row["contextKind"] == collab.DIRECT
+        assert row["collaborationContextId"] == collab.direct_thread_id("eng", "ops")
+        assert row["taskId"] is None
+        assert row["policyResult"]["allowed"] is True
+        assert row["policyResult"]["escalated"] is False, "a direct message is not an escalation"
 
     def test_both_task_id_and_context_id_is_rejected(self, agents, room, a_task):
-        with pytest.raises(collab.MessagingError):
+        """A message belongs to one conversation, so naming two is still nothing."""
+        with pytest.raises(collab.MessagingError, match="not both"):
             collab.send(agents, sender_agent_id="eng", recipient_agent_id="ops",
                        args={"text": "hi", "task_id": a_task["runId"],
                              "collaboration_context_id": room})
+
+    def test_a_context_cannot_be_resolved_out_of_nothing_at_all(self, agents):
+        """The structural check survives: with no parties and no ids there is no
+        conversation to bind to, and a message with no binding is the one thing
+        this module exists to refuse."""
+        with pytest.raises(collab.MessagingError):
+            collab.resolve_context(agents)
 
 
 class TestUnauthorizedCrossTaskMessaging:

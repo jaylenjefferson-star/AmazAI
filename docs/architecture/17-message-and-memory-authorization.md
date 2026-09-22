@@ -18,10 +18,37 @@ A message is never open broadcast. It is bound to exactly one of:
   agent plus every agent with an *accepted* `HOFF#` (handoff) row on it.
 - **a collaboration context** — `collaboration_context_id`, naming a Thread
   (a room). Participants are exactly that thread's `agentIds`.
+- **a direct conversation** — neither id given. Participants are exactly the
+  sender and the recipient.
 
-`message_agent` requires one, and only one, of these — see
-`collab.resolve_context`. Supplying neither or both raises
-`collab.MessagingError` before anything is authorized.
+`message_agent` takes at most one of the two ids — see
+`collab.resolve_context`. Supplying both raises `collab.MessagingError` before
+anything is authorized: a message belongs to one conversation.
+
+Supplying **neither** used to raise as well, and that was a mistake worth
+naming, because it made the safe thing impossible rather than hard. A Bot that
+wanted to ask one teammate one question, and shared no task or room with them,
+had no way to send it at all; the only path through was `create_group_chat`,
+which starts a run for *every* member. So "ask Ledger to confirm the Q3
+numbers" cost a room and five turns, or it cost a denied step and silence.
+
+The binding was always the point, not the hoop. So naming neither id now
+resolves the obvious context — the two of them — via `collab.direct_context`:
+
+- Its thread id is **derived** from the pair (`collab.direct_thread_id`,
+  a hash of the two sorted agent ids), not allocated. The same two Bots always
+  get the same conversation, in either direction, with no scan, and two Bots
+  writing to each other in the same second cannot open two of them.
+- It is a **real, listed Thread** (`kind: "room"`, `direct: true`), so the
+  operator reads it like any other. A private channel between two Bots that
+  nobody can see is the one thing `_create_group_chat` already refuses to
+  create, and two participants instead of three does not change that.
+- It starts **no runs**. That is the whole difference from a group chat, and
+  the reason to reach for it: asking a question costs one message, not a turn
+  for every member of a room.
+
+Every check below applies to it unchanged. What was removed was a refusal, not
+a boundary.
 
 The sender and recipient must **both** be participants in the resolved
 context, unless the org's messaging policy explicitly allows cross-context
@@ -48,9 +75,21 @@ organization (`collab.MessagingLimits`, `collab.limits_for_org`):
 - **Messages per task** (`maxMessagesPerTask`, default 200) — a ceiling on
   total messages ever recorded in one context, independent of trace. Guards
   against high-volume chatter that never technically loops.
+- **Direct messages per window** (`maxDirectMessagesPerWindow`, default 60 per
+  `directWindowMinutes`, default 60) — what replaces the ceiling above for a
+  direct conversation, and only for one. A task ends; a direct conversation
+  does not, so a lifetime total read against it would eventually silence two
+  Bots for good on a number neither of them chose. The ceiling exists to stop a
+  runaway, so for a conversation with no end it guards a window instead.
 
-Both breaches are logged via `_log_denied` before raising, for the same
+Every breach is logged via `_log_denied` before raising, for the same
 audit-visibility reason as an authorization denial.
+
+The reads behind these ceilings are bounded by the ceilings themselves
+(`collab._messages_for_context`) and taken newest-first. A fixed
+thousand-row read on every send — allowed or denied — was latency spent on rows
+no check could reach, and taking the *oldest* thousand meant a long
+conversation counted hop depth for traces that had long since ended.
 
 ### 1.3 Priority is a request, never a bypass
 

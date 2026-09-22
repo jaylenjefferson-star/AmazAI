@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
+import { stepLabel } from './lib/tools';
+
 /**
  * Who is doing what, right now.
  *
@@ -252,7 +254,11 @@ export function applyEvent(ev, ctx) {
       break;
     case 'tool':
       recordStep(ev);
-      agents.forEach((a) => put(a, 'working', ev.summary || ev.name || '', ev.runId));
+      // The summary is already a sentence. Falling back to the bare tool name
+      // put an identifier (`agent.find`) where a person reads what a Bot is
+      // doing right now, so the fallback is the labelled name.
+      agents.forEach((a) => put(a, 'working',
+                                ev.summary || stepLabel(ev.name) || '', ev.runId));
       break;
     case 'approval.requested': {
       // A pause closes the trail: the turn that stopped here is saved with its

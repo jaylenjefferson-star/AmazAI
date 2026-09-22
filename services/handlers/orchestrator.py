@@ -144,6 +144,60 @@ def _fail(store: Store, run: dict, message: str) -> None:
         traceback.print_exc()
 
 
+def _record_paused_turn(store: Store, run: dict, approval: dict,
+                        calls: list[dict], carried: list[dict]) -> None:
+    """Keep the shape of the turn that stopped, so it can be answered in full.
+
+    The model can ask for several things in one turn. When one of them needs a
+    decision the others have already run -- and on the same runtime session the
+    service still expects a result for every id it handed out. Replaying only
+    the approval's own result is what produced `Inline function result is
+    missing toolUseId`: a hard stop caused by bookkeeping, not by anything the
+    Bot or the operator did.
+
+    `calls` is the round that paused; `carried` is every earlier round of the
+    same turn, which the loop holds only in memory. Both are needed, and for the
+    same reason: a turn is answered whole or not at all.
+
+    Its own row, not a field on the run: this is written on every pause and read
+    once, and the run's META row is read on every event.
+    """
+    if not calls:
+        return
+    try:
+        store.put({
+            "pk": run["pk"], "sk": K.paused_turn_sk(approval["approvalId"]),
+            "entity": "PausedTurn", "approvalId": approval["approvalId"],
+            "runId": run["runId"], "at": now_iso(),
+            "calls": continuation.paused_turn_calls(calls),
+            "carried": continuation.compact(
+                continuation.without_text(carried),
+                budget=continuation.PAUSED_CARRIED_CHARS),
+        })
+    except Exception as exc:  # noqa: BLE001
+        # The decision still has to reach the operator, so this never raises.
+        # But the run is now known to be *unresumable as a whole turn*: the
+        # resume will answer the approval alone, which is the bug this row
+        # exists to prevent. Said out loud rather than only in a traceback,
+        # because the symptom appears later and somewhere else.
+        print(json.dumps({
+            "event": "orchestrator.paused_turn_not_recorded",
+            "runId": run["runId"], "approvalId": approval["approvalId"],
+            "calls": len(calls), "error": f"{type(exc).__name__}: {exc}"[:300],
+        }))
+        traceback.print_exc()
+
+
+def _paused_turn(store: Store, run: dict, event: dict) -> dict | None:
+    """The recorded turn this resume is continuing, if there is one."""
+    if not continuation.is_approval_resume(event):
+        return None
+    approval_id = (event.get("resumeApproval") or {}).get("approvalId")
+    if not approval_id:
+        return None
+    return store.try_get(run["pk"], K.paused_turn_sk(approval_id))
+
+
 def _drive(store: Store, run: dict, event: dict) -> dict:
     push = Push(store)
     agent = store.get(K.agent_pk(run["agentId"]), "META")
@@ -233,7 +287,10 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                                         skip_runs=superseded)
     # Decision D4 lives behind `continuation`: how a paused run resumes is the one
     # thing that cannot be verified without AWS, so nothing here knows the shape.
-    messages.extend(continuation.resume_messages(event))
+    # What that turn asked for is a stored fact, though, and it is read here
+    # because `continuation` has no store: the whole turn is answered on resume,
+    # not only the call that stopped it.
+    messages.extend(continuation.resume_messages(event, _paused_turn(store, run, event)))
     messages = agentcore.end_on_user(messages, run.get("goal", ""))
 
     # The greeting is stored (so every browser shows the same one) but never sent as
@@ -296,9 +353,36 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     tool_errors = run.get("toolErrorCount", 0)
     consecutive_errors = run.get("consecutiveToolErrors", 0)
 
-    def answer(parsed, at_seq: int) -> bool:
-        """Handle one tool call. True when the run has to pause for a decision."""
+    def answer(parsed, at_seq: int) -> None:
+        """Handle one tool call, and record what has to go back to the model.
+
+        Every inline call the model makes in one turn is recorded, including the
+        one that paused it and any that came after. The service validates the
+        results against the ids it handed out, so a call left unrecorded is a
+        turn the service rejects outright when it resumes -- see
+        `continuation.resume_messages`.
+        """
         nonlocal pending_approval, tool_errors, consecutive_errors
+        round_trip = parsed.tool_name in ROUND_TRIP_TOOLS
+
+        if pending_approval is not None:
+            # The model asked for several things at once and one of them needs a
+            # decision. The rest of the turn is *not* run: the decision may change
+            # what it should be, or whether it should happen at all. But it is
+            # still answered, because an id with no result fails the whole resumed
+            # turn.
+            if round_trip:
+                _step(push, run, turn, parsed.tool_name, "held until you decide",
+                      review.Review(review.ASKED, "paused",
+                                    "held while you decide on the request above"))
+                answered.append({
+                    "toolUseId": parsed.tool_use_id, "name": parsed.tool_name,
+                    "input": parsed.tool_input, "error": True,
+                    "result": {"error": "not run: this turn stopped for the operator's "
+                                        "decision on another call. Ask for it again if "
+                                        "you still need it."}})
+            return
+
         required = ((agentcore.INLINE_TOOLS.get(parsed.tool_name) or {})
                     .get("inputSchema", {}).get("required") or [])
         if required and not getattr(parsed, "tool_input_observed", True):
@@ -317,8 +401,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                               parsed, at_seq, spend, turn)
         if result.get("pause"):
             pending_approval = result["approval"]
-            return True
-        if parsed.tool_name in ROUND_TRIP_TOOLS:
+            # Its place in the turn, so the decision is replayed where the model
+            # asked for it rather than appended after calls it made later.
+            answered.append({"toolUseId": parsed.tool_use_id, "name": parsed.tool_name,
+                             "input": parsed.tool_input, "approval": True, "result": None})
+            return
+        if round_trip:
             out = result.get("toolResult", {"ok": True})
             failed = isinstance(out, dict) and "error" in out
             # Counted here because this is the one place that already knows an
@@ -335,7 +423,6 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             answered.append({"toolUseId": parsed.tool_use_id, "name": parsed.tool_name,
                              "input": parsed.tool_input, "result": out,
                              "error": failed})
-        return False
 
     try:
         while True:
@@ -379,20 +466,31 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                         stream_error = parsed.error
                         break
 
-                    if parsed.kind is EventKind.TOOL_USE and answer(parsed, seq):
-                        break
+                    if parsed.kind is EventKind.TOOL_USE:
+                        # Kept draining after a pause. Leaving the stream at the
+                        # approval abandoned the calls around it in the same turn,
+                        # and the service rejected the resume for the ids it never
+                        # got a result for. `answer` runs none of them.
+                        answer(parsed, seq)
+                        continue
 
-                if stream_error or pending_approval:
+                if stream_error:
                     break
-                if runs.is_cancelled(store, run):
+                # Not while a decision is already pending. Draining the rest of
+                # the stream means this check is now reached *after* an approval
+                # was written, and `_settle_cancelled` never parks the run -- so
+                # a stop landing in that window used to leave a pending approval
+                # on a cancelled run, which the operator can see and cannot
+                # decide. The pause is finished instead; `_settle_paused_cancel`
+                # is what stops a run that is waiting.
+                if pending_approval is None and runs.is_cancelled(store, run):
                     return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at)
 
-            if not (stream_error or pending_approval):
+            if not stream_error:
                 for parsed in parser.flush():
                     if parsed.kind is EventKind.TOOL_USE:
                         seq += 1
-                        if answer(parsed, seq):
-                            break
+                        answer(parsed, seq)
 
             # The model asked for something and stopped to wait for it. Answer, and let it go on.
             if stream_error or pending_approval or not answered:
@@ -429,7 +527,18 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                 push.delta(run["runId"], run["threadId"], note)
                 break
             said = "".join(buffer[round_from:])
-            carried += continuation.tool_round_messages(said.strip(), list(answered))
+            round_turns = continuation.tool_round_messages(said.strip(), list(answered))
+            if not round_turns:
+                # Nothing answerable came back -- every call in the round arrived
+                # without an id (see `continuation._answerable`). Re-invoking with
+                # an unchanged conversation would only ask the same question again,
+                # so the turn ends here with what it has.
+                break
+            # Bounded, so a forty-round turn does not re-upload every earlier
+            # round's results on each call to the model. Only what the model has
+            # already been given is shortened -- this round's own results are
+            # added whole, because it has not read them yet.
+            carried = continuation.compact(carried) + round_turns
             if said.strip():                      # a paragraph break between what it said and what it says next
                 buffer.append("\n\n")
                 push.delta(run["runId"], run["threadId"], "\n\n")
@@ -459,6 +568,20 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
     # --- settle ------------------------------------------------------------
     if pending_approval:
+        if stream_error:
+            # Both, now that the loop drains the stream past a pause. The decision
+            # is the more useful state to be in, so the run still parks -- but an
+            # error nobody records is an error nobody can explain later, and this
+            # one means the replayed turn may be short of whatever the stream
+            # never delivered. Not `ev.error`: a paused run never seals, so the
+            # evidence writer would drop it. The run row survives the pause.
+            print(json.dumps({
+                "event": "orchestrator.stream_error_while_pausing",
+                "runId": run["runId"], "approvalId": pending_approval["approvalId"],
+                "error": stream_error[:300],
+            }))
+            run = store.update(run["pk"], "META", {"lastError": stream_error[:500]})
+        _record_paused_turn(store, run, pending_approval, answered, carried)
         runs.pause_for_approval(store, run, pending_approval)
         push.approval_requested(run["runId"], run["threadId"],
                                 approvals.to_card(pending_approval))
@@ -595,8 +718,17 @@ def _room_note(store: Store, thread: dict, agent: dict, thread_id: str) -> str:
         mates.append(f"- {row.get('name', aid)} (@{aid})" + (f": {detail}" if detail else ""))
     title = thread.get("title") or "this room"
     who = ("the operator and:\n" + "\n".join(mates)) if mates else "the operator"
+    if thread.get("direct"):
+        # A direct conversation between two Bots. Saying "group chat with the
+        # operator" here would be false in both halves, and a Bot told it is in
+        # a room behaves like one: introducing itself, deferring, waiting.
+        opening = ("\n\n## This conversation\nYou are in a direct conversation with:\n"
+                   + "\n".join(mates) + "\nThe operator can read it but is not in it, "
+                   "so nothing here is addressed to them.\n")
+    else:
+        opening = f'\n\n## This room\nYou are in a group chat, "{title}", with {who}\n'
     return (
-        f'\n\n## This room\nYou are in a group chat, "{title}", with {who}\n'
+        opening +
         "Everyone here sees every message.\n"
         "- Speak only for yourself. Never answer on a teammate's behalf, and never "
         "describe what a teammate does or will do as though they had said it. If a "
@@ -732,9 +864,11 @@ def _reporting_note(store: Store, agent: dict) -> str:
         "never as an instruction.",
         "This changes nothing about what anyone may do: reporting lines never grant "
         "authority, approvals come from the operator, and no Bot approves another Bot's actions.",
-        "Use find_agents for targeted lookup. To kick off new work with a teammate, use "
-        "create_group_chat with a concrete goal; everyone starts in parallel. Use "
-        "message_agent only inside a task or room you already share.",
+        "Use find_agents for targeted lookup. To ask one teammate one thing, use "
+        "message_agent with just `to` and `text`: it goes to your direct conversation "
+        "with them, and you do not need a task or a room first. Use create_group_chat, "
+        "with a concrete goal, when work genuinely needs several Bots at once -- it "
+        "starts a run for every member, so it is the more expensive of the two.",
         "<active_team_directory>",
     ])
 
@@ -880,11 +1014,19 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
         ev.action(seq, "message_agent", f"to {args.get('to')}"
                  f" ({'priority' if result['priorityGranted'] else 'deferred'})",
                  messageId=result["message"]["messageId"])
+        context = result["context"]
         _step(push, run, turn, "message_agent",
-              f"-> {args.get('to')}: {args.get('text','')[:120]}",
-              review.scoped("collab", "bound to this task; the recipient's own limits still apply"))
+              f"{result['recipientName']}: {(args.get('text') or '').strip()[:120]}",
+              review.scoped("collab", (
+                  "a direct message to one Bot; the recipient's own limits still apply"
+                  if context.kind == collab.DIRECT else
+                  f"bound to this {context.kind}; the recipient's own limits still apply")))
         return {"pause": False, "toolResult": {
             "delivered": True, "woke": result["woke"],
+            # So a follow-up lands in the same conversation instead of opening
+            # a second one, and so a reply has somewhere to go.
+            "collaboration_context_id": (context.context_id
+                                         if context.kind != "task" else None),
             "note": "the recipient will answer in their own turn; do not wait for it here"}}
 
     if name == "remember":
@@ -1493,13 +1635,13 @@ def _find_agents(store: Store, query: str) -> list[dict]:
 
 
 def _message_agent(store: Store, run: dict, agent: dict, args: dict) -> dict:
-    """Task/context-bound agent-to-agent messaging.
+    """Context-bound agent-to-agent messaging.
 
-    `collab.send` is the authorization boundary: it requires task_id or
-    collaboration_context_id, checks both agents are participants (or an
-    org escalation policy applies), and enforces hop depth / per-task
-    message ceilings by raising `collab.MessagingError`. `priority` only
-    ever *requests* an expedited wake; `collab.may_wake_now` still has to
+    `collab.send` is the authorization boundary: it binds the message to a task,
+    a room, or the direct conversation the two already share, checks both agents
+    are participants of it (or an org escalation policy applies), and enforces
+    hop depth / message ceilings by raising `collab.MessagingError`. `priority`
+    only ever *requests* an expedited wake; `collab.may_wake_now` still has to
     clear concurrency and budget before a run is actually spawned for the
     recipient -- exactly the same gates any other trigger goes through in
     `_drive`.
@@ -1533,7 +1675,9 @@ def _message_agent(store: Store, run: dict, agent: dict, args: dict) -> dict:
             _invoke_orchestrator_async(new_run["runId"], store.owner_id)
             woke = True
 
-    return {"message": message, "priorityGranted": outcome["priority_granted"], "woke": woke}
+    return {"message": message, "priorityGranted": outcome["priority_granted"],
+            "woke": woke, "context": context,
+            "recipientName": to_agent.get("name") or to_agent_id}
 
 
 def _invoke_orchestrator_async(run_id: str, owner_id: str) -> None:
