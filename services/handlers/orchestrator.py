@@ -1919,7 +1919,7 @@ def _persist_message(store: Store, run: dict, agent: dict, text: str, cost: RunC
 def _write_cost(store: Store, run: dict, agent: dict, cost: RunCost) -> None:
     month = now_iso()[:7]
     store.put({
-        "pk": K.cost_pk(agent["agentId"], month),
+        "pk": K.cost_pk(store.owner_id, agent["agentId"], month),
         "sk": K.run_pk(run["runId"]),
         "entity": "Cost", "runId": run["runId"], "agentId": agent["agentId"],
         **cost.to_item(),

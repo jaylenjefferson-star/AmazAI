@@ -168,8 +168,16 @@ def usage_pk(year_month: str) -> str:
     return f"USAGE#{year_month}"
 
 
-def cost_pk(agent_id: str, year_month: str) -> str:
-    return f"COST#{agent_id}#{year_month}"
+def cost_pk(owner_id: str, agent_id: str, year_month: str) -> str:
+    """Owner-scoped for the same reason agent_pk/thread_pk/connector_pk are:
+    `agent_id` is deterministic (the Bot's slugged name, e.g. 'chief' --
+    literally the default first-Bot name), so without the owner baked into
+    the partition key itself, two owners' same-named Bot would share one
+    month's cost ledger. Store's ownerId-field filter alone does not save
+    this: DynamoDB applies Limit before that filter runs, so one owner's
+    rows can crowd the other's out of a shared partition before either is
+    ever compared."""
+    return f"COST#{owner_id}#{agent_id}#{year_month}"
 
 
 def routine_pk(routine_id: str) -> str:

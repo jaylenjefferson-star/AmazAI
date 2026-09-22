@@ -880,7 +880,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         month = qs.get("month") or now_iso()[:7]
         if not agent_id:
             return _resp(400, {"error": "agentId is required"})
-        rows = store.query(K.cost_pk(agent_id, month), limit=500)
+        rows = store.query(K.cost_pk(store.owner_id, agent_id, month), limit=500)
         total = sum(float(r.get("totalUsd", 0.0)) for r in rows)
         return _resp(200, {"agentId": agent_id, "month": month,
                            "totalUsd": round(total, 4), "runs": rows})

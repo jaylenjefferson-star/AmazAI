@@ -347,7 +347,8 @@ class TestSpendIsRecorded:
         world.script([text("Done."), usage(input_tokens=1000, output_tokens=500)])
         world.drive()
         rows = [r for r in world.store.query(
-            K.cost_pk(world.agent_id, world.store.get(world.run["pk"], "META")["createdAt"][:7]))
+            K.cost_pk(world.store.owner_id, world.agent_id,
+                     world.store.get(world.run["pk"], "META")["createdAt"][:7]))
             if r.get("entity") == "Cost"]
         assert rows, "no COST# row was written for the run"
         assert rows[0]["inputTokens"] == 1000
@@ -376,7 +377,8 @@ class TestSpendIsRecorded:
         world.drive()
         row = world.store.get(world.run["pk"], "META")
         assert row["costUsd"] > 0
-        cost_rows = [r for r in world.store.query(K.cost_pk(world.agent_id, row["createdAt"][:7]))
+        cost_rows = [r for r in world.store.query(
+                        K.cost_pk(world.store.owner_id, world.agent_id, row["createdAt"][:7]))
                      if r.get("entity") == "Cost"]
         assert cost_rows[0]["modelCalls"] == 2, "only one round's usage was counted"
         assert cost_rows[0]["inputTokens"] == 1100
@@ -385,7 +387,8 @@ class TestSpendIsRecorded:
         world.script([text("Done."), usage(input_tokens=10, output_tokens=2)])
         world.drive()
         row = world.store.get(world.run["pk"], "META")
-        cost_rows = [r for r in world.store.query(K.cost_pk(world.agent_id, row["createdAt"][:7]))
+        cost_rows = [r for r in world.store.query(
+                        K.cost_pk(world.store.owner_id, world.agent_id, row["createdAt"][:7]))
                      if r.get("entity") == "Cost"]
         assert cost_rows[0]["runtimeSeconds"] >= 0
 
