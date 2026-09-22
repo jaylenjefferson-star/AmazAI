@@ -342,6 +342,54 @@ const OPTIONS = {
 
 // A real account keeps its theme across a reload; the demo's in-memory settings do not, so it
 // remembers the choice the way a server would.
+// --- admin governance fixtures --------------------------------------------
+// The Directory, kill switch and admin audit trail the console's /admin group
+// renders against. Mutated by demoApi.admin.* so a demo session behaves like a
+// real one without a control plane.
+const ADMIN_MEMBERS = [
+  { subject: 'you', role: 'owner', scope: 'org', scopeId: 'demo', state: 'active',
+    invitedBy: null, invitedAt: iso(-864_000_00) },
+  { subject: 'auth0|teammate-avery', role: 'admin', scope: 'org', scopeId: 'demo', state: 'active',
+    invitedBy: 'you', invitedAt: iso(-30 * 86400_000) },
+  { subject: 'auth0|teammate-blair', role: 'member', scope: 'org', scopeId: 'demo', state: 'suspended',
+    invitedBy: 'you', invitedAt: iso(-12 * 86400_000) },
+];
+let ADMIN_KILLSWITCH = { frozen: false, reason: '', setBy: null, setAt: null };
+// A couple of rows so the audit screen has something chronological to render.
+// Append-only in the real control plane; here they seed the trail the /admin
+// actions then extend.
+const ADMIN_AUDIT = [
+  { action: 'member.invited', at: iso(-30 * 86400_000), actorUserId: 'you', actorAgentId: null,
+    correlationId: 'corr_seed01', before: {}, after: { subject: 'auth0|teammate-avery', role: 'admin' },
+    detail: 'invited a teammate as admin', v: 1 },
+  { action: 'member.suspended', at: iso(-2 * 86400_000), actorUserId: 'you', actorAgentId: null,
+    correlationId: 'corr_seed02', before: { state: 'active' }, after: { state: 'suspended' },
+    detail: 'suspended auth0|teammate-blair pending review', v: 1 },
+];
+
+function adminAudit(action, extra = {}) {
+  ADMIN_AUDIT.push({
+    action, at: iso(), actorUserId: 'you', actorAgentId: null,
+    correlationId: `corr_${Math.random().toString(36).slice(2, 8)}`,
+    before: extra.before || {}, after: extra.after || {}, detail: extra.detail || '', v: 1,
+  });
+}
+
+// Fold an operator's typed reason into a demo detail string, mirroring the
+// server's _with_reason so the demo audit trail reads the same way.
+function withReason(base, reason) {
+  return (typeof reason === 'string' && reason.trim())
+    ? `${base} (reason: ${reason.trim()})`
+    : base;
+}
+
+function adminSetState(subject, state, action, detail) {
+  const m = ADMIN_MEMBERS.find((x) => x.subject === subject);
+  if (m) m.state = state;
+  adminAudit(action, { after: { state }, detail: detail || '' });
+  return { member: m, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+}
+
 const demoTheme = () => { try { return localStorage.getItem('amazai.demo.theme'); } catch { return null; } };
 
 export const demoApi = {
@@ -622,6 +670,75 @@ export const demoApi = {
     totalUsd: { eng: 11.42, ops: 4.06, cos: 1.88, res: 0.71, fin: 0 }[agentId] ?? 0,
     runs: [],
   }),
+
+  // The admin governance surface, against fixtures so the console renders
+  // without a control plane. Mirrors live.admin exactly; the ADMIN_* state
+  // below stands in for the org's Directory, kill switch and audit trail.
+  admin: {
+    directory: async () => (await wait(90), { members: [...ADMIN_MEMBERS] }),
+    invite: async (body) => {
+      await wait(90);
+      const member = {
+        subject: body.subject || body.email, role: body.role || 'member',
+        scope: 'org', scopeId: 'demo', state: 'invited',
+        invitedBy: 'you', invitedAt: iso(),
+      };
+      ADMIN_MEMBERS.push(member);
+      adminAudit('member.invited', { after: { subject: member.subject, role: member.role } });
+      return { member, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+    },
+    suspend: async (subject, reason) => (await wait(80),
+      adminSetState(subject, 'suspended', 'member.suspended', withReason(`suspended ${subject}`, reason))),
+    reactivate: async (subject, reason) => (await wait(80),
+      adminSetState(subject, 'active', 'member.reactivated', withReason(`reactivated ${subject}`, reason))),
+    changeRole: async (subject, body) => {
+      await wait(80);
+      const m = ADMIN_MEMBERS.find((x) => x.subject === subject);
+      if (m) m.role = body.role;
+      adminAudit('member.role_changed', {
+        after: { role: body.role },
+        detail: withReason(`role of ${subject} -> ${body.role}`, body.reason),
+      });
+      return { member: m, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+    },
+    killswitch: async () => (await wait(70), { ...ADMIN_KILLSWITCH }),
+    setKillswitch: async (body) => {
+      await wait(80);
+      ADMIN_KILLSWITCH = { frozen: !!body.frozen, reason: body.reason || '',
+                           setBy: 'you', setAt: iso() };
+      adminAudit(body.frozen ? 'org.frozen' : 'org.unfrozen', { after: { frozen: !!body.frozen } });
+      return { ...ADMIN_KILLSWITCH, correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+    },
+    audit: async () => (await wait(90), { audit: [...ADMIN_AUDIT].reverse() }),
+    // reset-onboarding sends NO id -- the server resolves the entrypoint. The
+    // stub resolves it the same way (the one Bot with entrypoint: true), so the
+    // demo exercises the id-less contract the live client uses.
+    resetOnboarding: async (reason) => {
+      await wait(120);
+      const entrypoint = AGENTS.find((a) => a.entrypoint === true);
+      if (!entrypoint) throw new Error('this organization has no entrypoint Bot to reset');
+      adminAudit('onboarding.reset', {
+        detail: withReason(`reset ${entrypoint.agentId} to onboarding`, reason),
+      });
+      return { agentId: entrypoint.agentId, reset: true, clearedMessages: 0,
+               correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+    },
+    // archive-memory takes a REAL agent id. The stub validates it against the
+    // roster (as the live server's K.agent_pk lookup does) rather than ignoring
+    // it, so a regression to sending a user subject fails here with 'no such
+    // agent' instead of silently succeeding.
+    archiveMemory: async (agentId, reason) => {
+      await wait(120);
+      const agent = AGENTS.find((a) => a.agentId === agentId);
+      if (!agent) throw new Error('no such agent');
+      adminAudit('agent.memory_archived', {
+        before: { published: 3 }, after: { published: 0 },
+        detail: withReason(`archived 3 memory rows for ${agentId}`, reason),
+      });
+      return { agentId, revoked: 3, publishedBefore: 3,
+               correlationId: `corr_${Math.random().toString(36).slice(2, 8)}` };
+    },
+  },
 };
 
 /* ------------------------------------------------------------ the socket */

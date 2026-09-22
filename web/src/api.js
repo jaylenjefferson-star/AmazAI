@@ -110,6 +110,35 @@ const live = {
 
   usage: (agentId, month) =>
     call('GET', `/usage?agentId=${encodeURIComponent(agentId)}${month ? `&month=${month}` : ''}`),
+
+  // The admin governance surface (FEAT-003). Every one of these is gated on the
+  // RBAC capability matrix server-side and audited; the client only names the
+  // action. The {subject} in a directory path is the TARGET, never the actor --
+  // the actor is always the verified token.
+  admin: {
+    directory: () => call('GET', '/admin/directory'),
+    invite: (body) => call('POST', '/admin/directory/invites', body),
+    // The typed reason from ConfirmAction rides in the body so the server folds
+    // it into the append-only audit `detail`. The {subject}/{agentId} is the
+    // TARGET from the path; only the free-text reason is body-supplied.
+    suspend: (subject, reason) => call('POST', `/admin/directory/${encodeURIComponent(subject)}/suspend`, { reason }),
+    reactivate: (subject, reason) => call('POST', `/admin/directory/${encodeURIComponent(subject)}/reactivate`, { reason }),
+    changeRole: (subject, body) => call('PATCH', `/admin/directory/${encodeURIComponent(subject)}`, body),
+    killswitch: () => call('GET', '/admin/killswitch'),
+    setKillswitch: (body) => call('POST', '/admin/killswitch', body),
+    audit: () => call('GET', '/admin/audit'),
+    // Put the entrypoint Bot back through onboarding; archive (revoke) a Bot's
+    // accumulated memory. Neither ever deletes an audit/evidence row. The
+    // operator's reason travels in the body into the audit detail.
+    //
+    // reset-onboarding is always about the entrypoint 'Chief', so the console
+    // does not supply an agent id at all -- the server resolves the caller's
+    // own entrypoint Bot. archive-memory targets a SPECIFIC Bot, so it takes a
+    // real agent id from the agent list (see `agents()` above); there is no
+    // subject-as-agent-id path any more.
+    resetOnboarding: (reason) => call('POST', '/admin/agents/entrypoint/reset-onboarding', { reason }),
+    archiveMemory: (agentId, reason) => call('POST', `/admin/agents/${encodeURIComponent(agentId)}/archive-memory`, { reason }),
+  },
 };
 
 // In demo mode the console runs against fixtures instead of the control
