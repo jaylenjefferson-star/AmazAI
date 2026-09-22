@@ -292,9 +292,12 @@ class TestStartCheckout:
         with pytest.raises(ValueError, match="exactly one"):
             B.start_checkout(store, success_url="https://x", cancel_url="https://x")
 
-    def test_a_plan_with_no_stripe_price_yet_refuses_clearly(self, store):
-        # The shipped config has every real plan's stripePriceId: null until
-        # scripts/stripe_setup.py runs against a real Stripe account.
+    def test_a_plan_with_no_stripe_price_yet_refuses_clearly(self, store, monkeypatch):
+        # A plan not yet run through scripts/stripe_setup.py still ships
+        # stripePriceId: null -- simulated here rather than depending on the
+        # current shipped config's state, which is expected to change as
+        # real prices get filled in.
+        monkeypatch.setattr(B, "plan", lambda key: {"stripePriceId": None})
         with pytest.raises(RuntimeError, match="stripe_setup.py"):
             B.start_checkout(store, plan_key="personal",
                              success_url="https://x", cancel_url="https://x")
