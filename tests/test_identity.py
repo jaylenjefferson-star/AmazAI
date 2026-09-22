@@ -129,23 +129,27 @@ class TestTheSubjectComesFromTheToken:
 class TestUserRecord:
     def test_first_sight_creates_the_record(self, store, signing):
         p = I.verify(token(signing))
-        row = I.ensure_user(store, p)
+        row, created = I.ensure_user(store, p)
+        assert created is True
         assert row["userId"] == "auth0|owner-1"
         assert row["provider"] == "auth0"
         assert store.get(K.user_pk(p.user_id), "META")["email"] == "owner@example.com"
 
     def test_a_returning_user_is_not_duplicated(self, store, signing):
         p = I.verify(token(signing))
-        first = I.ensure_user(store, p)
-        second = I.ensure_user(store, p)
+        first, created_first = I.ensure_user(store, p)
+        second, created_second = I.ensure_user(store, p)
+        assert created_first is True
+        assert created_second is False
         assert first["createdAt"] == second["createdAt"]
         assert second["lastSeenAt"] >= first["lastSeenAt"]
 
     def test_a_changed_email_is_refreshed_but_never_keyed_on(self, store, signing):
         I.ensure_user(store, I.verify(token(signing)))
         moved = I.verify(token(signing, email="new@example.com"))
-        row = I.ensure_user(store, moved)
+        row, created = I.ensure_user(store, moved)
 
+        assert created is False
         assert row["email"] == "new@example.com"
         # Same subject, so still one record.
         assert row["pk"] == K.user_pk("auth0|owner-1")

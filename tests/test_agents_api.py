@@ -6,6 +6,7 @@ handler's two-phase path can produce.
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -450,6 +451,87 @@ class TestFirstBot:
         call("POST", "/agents", NEW_AGENT)
         status, body = call("PATCH", "/agents/cloud-operations", {"entrypoint": True})
         assert status == 400 and "not editable" in body["detail"]
+
+
+class _FakeLambda:
+    def __init__(self):
+        self.invocations: list[dict] = []
+
+    def invoke(self, **kwargs):
+        self.invocations.append(kwargs)
+
+
+class TestSignupWarmsTheAccountHarness:
+    """A brand-new Auth0 subject's first authenticated request should start
+    the shared harness Chief will need (see `api._warm_account_harness`),
+    without making that request wait on it -- only through the real handler,
+    since the trigger lives in its dispatch, not in any one route."""
+
+    CONTEXT = SimpleNamespace(
+        invoked_function_arn="arn:aws:lambda:us-west-2:1:function:amazai-api")
+
+    def test_a_brand_new_subject_fires_an_async_self_invoke(self, api_table, monkeypatch):
+        fake = _FakeLambda()
+        monkeypatch.setattr(api.boto3, "client", lambda *_a, **_k: fake)
+
+        resp = api.handler(event("GET", "/agents"), self.CONTEXT)
+
+        assert resp["statusCode"] == 200
+        assert len(fake.invocations) == 1
+        call_kwargs = fake.invocations[0]
+        assert call_kwargs["FunctionName"] == self.CONTEXT.invoked_function_arn
+        assert call_kwargs["InvocationType"] == "Event"
+        assert json.loads(call_kwargs["Payload"]) == {"provisionOwner": "owner-a"}
+
+    def test_a_returning_subject_does_not_refire_it(self, api_table, monkeypatch):
+        fake = _FakeLambda()
+        monkeypatch.setattr(api.boto3, "client", lambda *_a, **_k: fake)
+
+        api.handler(event("GET", "/agents"), self.CONTEXT)
+        api.handler(event("GET", "/agents"), self.CONTEXT)
+
+        assert len(fake.invocations) == 1
+
+    def test_without_a_lambda_context_it_is_a_quiet_no_op(self, api_table, monkeypatch):
+        def refuse(*_a, **_k):
+            raise AssertionError("must not touch Lambda without a real context")
+        monkeypatch.setattr(api.boto3, "client", refuse)
+
+        resp = api.handler(event("GET", "/agents"), None)
+
+        assert resp["statusCode"] == 200
+
+    def test_a_lambda_invoke_failure_never_fails_the_signup_itself(self, api_table, monkeypatch):
+        def boom(*_a, **_k):
+            raise RuntimeError("throttled")
+        monkeypatch.setattr(api.boto3, "client", boom)
+
+        resp = api.handler(event("GET", "/agents"), self.CONTEXT)
+
+        assert resp["statusCode"] == 200
+
+    def test_the_async_branch_provisions_the_owners_shared_harness(self, monkeypatch, table):
+        monkeypatch.setattr(api, "Store", lambda owner_id: Store(owner_id, table=table))
+        monkeypatch.setattr(
+            api.standard_runtime, "ensure_shared_harness",
+            lambda store, **kw: "arn:aws:bedrock-agentcore:us-west-2:1:harness/warm")
+
+        result = api.handler({"provisionOwner": "owner-a"}, None)
+
+        assert result == {"ok": True,
+                          "harnessArn": "arn:aws:bedrock-agentcore:us-west-2:1:harness/warm"}
+
+    def test_a_harness_that_is_not_ready_yet_is_reported_not_raised(self, monkeypatch, table):
+        monkeypatch.setattr(api, "Store", lambda owner_id: Store(owner_id, table=table))
+
+        def not_ready(store, **kw):
+            raise RuntimeError("the account runtime is still being provisioned")
+        monkeypatch.setattr(api.standard_runtime, "ensure_shared_harness", not_ready)
+
+        result = api.handler({"provisionOwner": "owner-a"}, None)
+
+        assert result["ok"] is False
+        assert "RuntimeError" in result["error"]
 
 
 class TestInboxRows:

@@ -157,7 +157,12 @@ def _org_connectors(store: Store) -> dict[str, A.OrgConnector]:
     return provisioning.org_connectors(store)
 
 
-def handler(event, context):  # noqa: ARG001
+def handler(event, context):
+    if "provisionOwner" in event:
+        # An async self-invoke from `_warm_account_harness`, never an API
+        # Gateway event -- those always carry `rawPath`/`requestContext`.
+        return _provision_owner_harness(event["provisionOwner"])
+
     method = (event.get("requestContext", {}).get("http", {}).get("method")
               or event.get("httpMethod") or "GET").upper()
     path = (event.get("rawPath") or event.get("path") or "/").rstrip("/") or "/"
@@ -172,7 +177,9 @@ def handler(event, context):  # noqa: ARG001
     try:
         principal = _principal(event)
         store = Store(principal.user_id)
-        identity.ensure_user(store, principal)
+        _, is_new_signup = identity.ensure_user(store, principal)
+        if is_new_signup:
+            _warm_account_harness(context, store.owner_id)
         return _route(store, method, path, body, event)
     except identity.AuthError:
         return _resp(401, {"error": "unauthorized"})
@@ -1540,3 +1547,43 @@ def _invoke_orchestrator(run_id: str, owner_id: str, *, resume: bool = False,
         FunctionName=fn, InvocationType="Event",
         Payload=json.dumps(payload).encode(),
     )
+
+
+def _warm_account_harness(context, owner_id: str) -> None:
+    """Start this owner's shared AgentCore harness the moment Auth0 creates
+    their first User row, not when they finish the onboarding screens.
+
+    `standard_runtime.ensure_shared_harness` can take longer than fits
+    comfortably in the request that triggers it; firing it here, fire-and-
+    forget, on a fresh 30-second budget of its own, means Chief's own
+    creation later (`_create_agent`, via Onboarding.jsx) usually finds the
+    harness already READY instead of waiting on it inline. It is never the
+    only path there -- `ensure_shared_harness`'s own claim protocol is built
+    for exactly this: two callers for the same owner's harness, one of them
+    a head start.
+
+    `context` is the real Lambda context outside tests and `None` inside
+    most of them; either way, no `invoked_function_arn` means do nothing
+    rather than guess a function name.
+    """
+    fn = getattr(context, "invoked_function_arn", None)
+    if not fn:
+        return
+    try:
+        boto3.client("lambda").invoke(
+            FunctionName=fn, InvocationType="Event",
+            Payload=json.dumps({"provisionOwner": owner_id}).encode(),
+        )
+    except Exception:  # noqa: BLE001 -- a signup must never fail because this did
+        traceback.print_exc()
+
+
+def _provision_owner_harness(owner_id: str) -> dict:
+    """The async-invoked half of `_warm_account_harness`."""
+    store = Store(owner_id)
+    try:
+        harness_arn = standard_runtime.ensure_shared_harness(store)
+        return {"ok": True, "harnessArn": harness_arn}
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
