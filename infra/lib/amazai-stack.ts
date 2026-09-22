@@ -253,6 +253,26 @@ export class AmazaiStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // Stripe's secret key and webhook signing secret, same placeholder-then-
+    // replace pattern as amazai/composio above and for the same reason: a
+    // real key in a CDK property lands in the synthesized template, in
+    // CloudFormation's stored state, and in this repo's history. Replace with:
+    //
+    //   aws secretsmanager put-secret-value --secret-id amazai/stripe \
+    //     --secret-string '{"secret_key":"sk_...","webhook_secret":"whsec_..."}'
+    //
+    // Until then billing.py's Stripe calls fail naming this secret -- the
+    // trial-credit ledger itself (billing.py's grant/spend/has_credit) needs
+    // none of this and works from the moment it deploys; only checkout,
+    // the customer portal, and webhook-driven grants wait on it.
+    const stripeSecret = new secretsmanager.Secret(this, 'StripeSecret', {
+      secretName: 'amazai/stripe',
+      description: 'Stripe secret key and webhook signing secret '
+        + '({"secret_key": "...", "webhook_secret": "..."})',
+      encryptionKey: key,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     const sharedRuntime = String(this.node.tryGetContext('sharedRuntime') ?? 'true').toLowerCase();
     if (!['true', 'false'].includes(sharedRuntime)) {
       throw new Error(`context sharedRuntime must be true or false, got ${sharedRuntime}`);
@@ -346,6 +366,11 @@ export class AmazaiStack extends cdk.Stack {
     for (const fn of [apiFn, orchestratorFn, routineFn]) {
       composioSecret.grantRead(fn);
     }
+
+    // Only the API creates checkout/portal sessions and receives Stripe's
+    // webhook -- the orchestrator and every other function never touch it.
+    stripeSecret.grantRead(apiFn);
+    apiFn.addEnvironment('STRIPE_SECRET_ID', stripeSecret.secretName);
 
     // Runtime creation is shared by the API (a person creates a Bot) and the
     // orchestrator (a Bot creates one at the operator's request). Current AWS

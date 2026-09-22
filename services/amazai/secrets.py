@@ -89,6 +89,22 @@ def composio_api_key() -> str:
     return get_json(secret_id, required=("api_key",))["api_key"]
 
 
+def _stripe_secret() -> dict:
+    secret_id = os.environ.get("STRIPE_SECRET_ID", "amazai/stripe")
+    return get_json(secret_id, required=("secret_key", "webhook_secret"))
+
+
+def stripe_secret_key() -> str:
+    """Stripe's API secret key. Secrets Manager only, same rule as
+    `composio_api_key`."""
+    return _stripe_secret()["secret_key"]
+
+
+def stripe_webhook_secret() -> str:
+    """The signing secret Stripe's webhook events are verified against."""
+    return _stripe_secret()["webhook_secret"]
+
+
 def reset_cache() -> None:
     """Drop cached secrets. For tests, and for a forced re-read after
     rotation."""

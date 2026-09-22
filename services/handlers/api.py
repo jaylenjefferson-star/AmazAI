@@ -20,8 +20,8 @@ import boto3
 
 from amazai import (agentcore, agents as A, approvals, billing, collab, composio,
                     connectors as C, handoffs, identity, keys as K, memory, models,
-                    onboarding, routines as R, runs, schedules, settings as S, skills,
-                    standard_runtime, threads)
+                    onboarding, routines as R, runs, schedules, secrets, settings as S,
+                    skills, standard_runtime, stripe_client, threads)
 from amazai import dispatch, directory as D, govern, org, provisioning
 from amazai.policy import Capability
 from amazai.states import PAUSED, RunState, TERMINAL
@@ -187,6 +187,18 @@ def _return_url(event, slug: str) -> str | None:
     return f"{origin}/marketplace?connected={slug}" if origin in _CONSOLE_ORIGINS else None
 
 
+def _billing_origin(event) -> str | None:
+    """The console origin a Stripe checkout/portal session should return to.
+
+    Read from the request's own Origin header and checked against the same
+    allowlist `_return_url` uses, never taken from the request body -- a
+    client-supplied success/cancel/return URL would be an open redirect
+    through Stripe's own domain.
+    """
+    origin = ((event.get("headers") or {}).get("origin") or "").rstrip("/")
+    return origin if origin in _CONSOLE_ORIGINS else None
+
+
 def _org_connectors(store: Store) -> dict[str, A.OrgConnector]:
     """The organization's installed connectors: the ceiling for every per-agent grant."""
     return provisioning.org_connectors(store)
@@ -203,6 +215,14 @@ def handler(event, context):
     path = (event.get("rawPath") or event.get("path") or "/").rstrip("/") or "/"
     if method == "OPTIONS":
         return _resp(204, {})
+
+    if path == "/billing/webhook" and method == "POST":
+        # Stripe, never Auth0: no bearer token, no per-owner Store until the
+        # verified event itself names one. Handled here, before the JSON
+        # parse below, because signature verification needs the exact raw
+        # bytes Stripe signed -- a parse-then-reserialize round trip is not
+        # guaranteed to reproduce them byte for byte.
+        return _billing_webhook(event)
 
     try:
         body = json.loads(event.get("body") or "{}")
@@ -900,6 +920,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         row = billing.ensure_billing_row(store)
         return _resp(200, {
             "balanceUsd": billing.balance_usd(store),
+            "creditsRemaining": billing.credits_remaining(store),
             "tier": row.get("tier"),
             "subscriptionStatus": row.get("subscriptionStatus"),
             "hasCredit": billing.has_credit(store),
@@ -909,6 +930,46 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         qs = event.get("queryStringParameters") or {}
         limit = min(int(qs.get("limit", 100)), 200)
         return _resp(200, {"entries": billing.ledger(store, limit=limit)})
+
+    if path == "/billing/plans" and method == "GET":
+        # What a plan/top-up costs and whether it can actually be checked
+        # out yet -- a null stripePriceId (scripts/stripe_setup.py has not
+        # run against this account) is shown, never hidden, so the console
+        # can say why a button is disabled instead of just disabling it.
+        plans = billing.load_plans()
+        return _resp(200, plans)
+
+    if path == "/billing/checkout" and method == "POST":
+        origin = _billing_origin(event)
+        if not origin:
+            return _resp(400, {"error": "invalid_request", "detail": "unrecognized origin"})
+        try:
+            url = billing.start_checkout(
+                store, plan_key=body.get("planKey"), top_up_key=body.get("topUpKey"),
+                success_url=f"{origin}/billing?checkout=success",
+                cancel_url=f"{origin}/billing?checkout=cancelled",
+                customer_email=_principal(event).email)
+        except ValueError as exc:
+            return _resp(400, {"error": "invalid_request", "detail": str(exc)})
+        # StripeError before RuntimeError: it is a RuntimeError subclass, so
+        # the reverse order would let this first except swallow it.
+        except stripe_client.StripeError as exc:
+            return _resp(502, {"error": "stripe_unavailable", "detail": str(exc)})
+        except RuntimeError as exc:
+            return _resp(409, {"error": "not_purchasable", "detail": str(exc)})
+        return _resp(200, {"url": url})
+
+    if path == "/billing/portal" and method == "POST":
+        origin = _billing_origin(event)
+        if not origin:
+            return _resp(400, {"error": "invalid_request", "detail": "unrecognized origin"})
+        try:
+            url = billing.start_portal(store, return_url=f"{origin}/billing")
+        except stripe_client.StripeError as exc:
+            return _resp(502, {"error": "stripe_unavailable", "detail": str(exc)})
+        except RuntimeError as exc:
+            return _resp(409, {"error": "no_subscription", "detail": str(exc)})
+        return _resp(200, {"url": url})
 
     # --- admin governance --------------------------------------------------
     # The Directory, the org kill switch, and the admin audit trail. Every
@@ -2255,3 +2316,40 @@ def _provision_owner_harness(owner_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _billing_webhook(event: dict):
+    """Verify and dispatch one Stripe webhook event.
+
+    Always 200s once the signature verifies, even when `handle_webhook_event`
+    reports `handled: False` -- an event type this integration does not act
+    on, or one whose customer cannot yet be resolved, is not a delivery
+    failure, and a non-2xx response here only makes Stripe retry a request
+    that would fail the same way every time. Only a genuinely bad signature,
+    or the secret not being configured yet, is refused.
+    """
+    import base64
+
+    raw = event.get("body") or ""
+    payload = base64.b64decode(raw) if event.get("isBase64Encoded") else raw.encode()
+    sig_header = _header(event, "stripe-signature")
+
+    try:
+        webhook_secret = secrets.stripe_webhook_secret()
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return _resp(503, {"error": "stripe_not_configured", "detail": str(exc)})
+
+    try:
+        verified = stripe_client.verify_webhook(payload, sig_header, webhook_secret)
+    except stripe_client.SignatureVerificationError as exc:
+        return _resp(400, {"error": "invalid_signature", "detail": str(exc)})
+
+    try:
+        result = billing.handle_webhook_event(verified)
+    except Exception as exc:  # noqa: BLE001
+        # A processing failure IS worth a retry -- unlike an unhandled event
+        # type, this is Stripe's own at-least-once delivery doing its job.
+        traceback.print_exc()
+        return _resp(500, {"error": type(exc).__name__, "detail": str(exc)})
+    return _resp(200, result)

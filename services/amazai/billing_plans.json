@@ -1,0 +1,72 @@
+{
+  "_comment": "Real tiers from the marketing pricing page. creditRateUsd is priceUsd/creditsPerMonth for each paid tier -- the real spending power one Amaz Credit represents at that tier, which is why it gets cheaper (more credits per dollar) at higher tiers. Explore has no natural rate of its own ($0/month), so it uses Personal's rate as its reference. stripePriceId is filled in by scripts/stripe_setup.py; a plan with stripePriceId: null cannot be checked out yet, the same way seats.json's modelId: null means a seat cannot be provisioned yet. These stripePriceIds were created 2026-09-22 in the live AmazFlow, LLC Stripe account (acct_1UDwRuC4NrBvP4LB) via the connected Stripe MCP.",
+  "currency": "usd",
+  "plans": {
+    "explore": {
+      "name": "AmazAI Explore",
+      "description": "Build your first AI team. Try skills, agents, and safe tasks.",
+      "priceUsd": 0.0,
+      "creditsPerMonth": 100,
+      "creditRateUsd": 0.019,
+      "interval": "month",
+      "lookupKey": "amazai_explore_monthly",
+      "stripePriceId": "price_1UIc2GC4NrBvP4LBAje0wRQD"
+    },
+    "personal": {
+      "name": "AmazAI Personal",
+      "description": "Your work, delegated. Agent workspace, connected tools, approval-first actions.",
+      "priceUsd": 19.0,
+      "creditsPerMonth": 1000,
+      "creditRateUsd": 0.019,
+      "interval": "month",
+      "lookupKey": "amazai_personal_monthly",
+      "stripePriceId": "price_1UIc2MC4NrBvP4LBa9KfvJcm"
+    },
+    "personal_plus": {
+      "name": "AmazAI Personal+",
+      "description": "More capacity for daily work. More agents, more routines, add-on credits.",
+      "priceUsd": 39.0,
+      "creditsPerMonth": 2500,
+      "creditRateUsd": 0.0156,
+      "interval": "month",
+      "lookupKey": "amazai_personal_plus_monthly",
+      "stripePriceId": "price_1UIc2QC4NrBvP4LBIjmeTR3n"
+    },
+    "pro": {
+      "name": "AmazAI Pro",
+      "description": "For power users. Priority runs, advanced Skills, more connected work.",
+      "priceUsd": 79.0,
+      "creditsPerMonth": 6000,
+      "creditRateUsd": 0.013166666666666667,
+      "interval": "month",
+      "lookupKey": "amazai_pro_monthly",
+      "stripePriceId": "price_1UIc2UC4NrBvP4LBs7EtQpTT"
+    },
+    "power": {
+      "name": "AmazAI Power",
+      "description": "For people who run their work through AmazAI. Maximum capacity, advanced controls, priority support.",
+      "priceUsd": 149.0,
+      "creditsPerMonth": 12000,
+      "creditRateUsd": 0.012416666666666666,
+      "interval": "month",
+      "lookupKey": "amazai_power_monthly",
+      "stripePriceId": "price_1UIc2YC4NrBvP4LBfexRWPRb"
+    }
+  },
+  "creditTopUps": [
+    {
+      "name": "50 Amaz Credits",
+      "priceUsd": 50.0,
+      "creditsUsd": 50.0,
+      "lookupKey": "amazai_credits_50",
+      "stripePriceId": "price_1UIc2cC4NrBvP4LBMe2o7fLT"
+    },
+    {
+      "name": "200 Amaz Credits",
+      "priceUsd": 200.0,
+      "creditsUsd": 200.0,
+      "lookupKey": "amazai_credits_200",
+      "stripePriceId": "price_1UIc2hC4NrBvP4LB4Ws6zG99"
+    }
+  ]
+}
