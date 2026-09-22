@@ -171,9 +171,22 @@ class Store:
         return _decimals_to_native(resp["Attributes"])
 
     def query(self, pk: str, *, sk_prefix: str = "", limit: int = 100,
-              ascending: bool = True) -> list[dict]:
+              ascending: bool = True,
+              sk_between: tuple[str, str] | None = None) -> list[dict]:
+        """Rows in one partition, optionally narrowed by sort key.
+
+        `sk_between` is an inclusive range, used instead of `sk_prefix` when
+        *which* rows matter more than how many. DynamoDB applies `Limit` before
+        anything this client can filter, so a caller that needs a particular kind
+        of row has to narrow the query itself rather than read a page and pick
+        through it -- see `collab._messages_for_context`, where reading a fixed
+        page and filtering afterwards let unrelated rows crowd out the ones a
+        ceiling was counting.
+        """
         cond = Key("pk").eq(pk)
-        if sk_prefix:
+        if sk_between:
+            cond = cond & Key("sk").between(*sk_between)
+        elif sk_prefix:
             cond = cond & Key("sk").begins_with(sk_prefix)
         resp = self._table.query(
             KeyConditionExpression=cond, Limit=limit, ScanIndexForward=ascending

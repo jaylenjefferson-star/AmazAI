@@ -58,6 +58,18 @@ DEFAULT_MAX_CONCURRENT_RUNS_PER_AGENT = 3
 DEFAULT_MAX_DIRECT_MESSAGES_PER_WINDOW = 60
 DEFAULT_DIRECT_WINDOW_MINUTES = 60
 
+#: The window the per-task/room volume ceiling and the hop chain are counted over.
+#: Both were written as "ever", which cannot be read from a bounded query without
+#: lying about either the bound or the count -- and a runaway is a thing that
+#: happens in an hour, not a thing that happens eventually. A chain of replies that
+#: stalls for this long is not a loop; it is a conversation.
+DEFAULT_VOLUME_WINDOW_MINUTES = 60
+DEFAULT_HOP_WINDOW_MINUTES = 60
+
+#: Rows one window read may return. A ceiling refuses long before this, so it is a
+#: backstop against an unbounded read, not a limit anything is expected to reach.
+MAX_WINDOW_MESSAGES = 500
+
 _TERMINAL_VALUES = frozenset(s.value for s in TERMINAL)
 
 
@@ -99,6 +111,8 @@ class MessagingLimits:
     max_concurrent_runs_per_agent: int = DEFAULT_MAX_CONCURRENT_RUNS_PER_AGENT
     max_direct_messages_per_window: int = DEFAULT_MAX_DIRECT_MESSAGES_PER_WINDOW
     direct_window_minutes: int = DEFAULT_DIRECT_WINDOW_MINUTES
+    volume_window_minutes: int = DEFAULT_VOLUME_WINDOW_MINUTES
+    hop_window_minutes: int = DEFAULT_HOP_WINDOW_MINUTES
 
 
 def _context_pk(context: Context) -> str:
@@ -230,6 +244,10 @@ def limits_for_org(store: Store) -> MessagingLimits:
             cfg.get("maxDirectMessagesPerWindow", DEFAULT_MAX_DIRECT_MESSAGES_PER_WINDOW)),
         direct_window_minutes=int(
             cfg.get("directWindowMinutes", DEFAULT_DIRECT_WINDOW_MINUTES)),
+        volume_window_minutes=int(
+            cfg.get("volumeWindowMinutes", DEFAULT_VOLUME_WINDOW_MINUTES)),
+        hop_window_minutes=int(
+            cfg.get("hopWindowMinutes", DEFAULT_HOP_WINDOW_MINUTES)),
     )
 
 
@@ -241,16 +259,34 @@ def authorize(store: Store, *, sender_id: str, recipient_id: str, context: Conte
     return PolicyResult(False, "sender or recipient is not a participant in this context")
 
 
-def _messages_for_context(store: Store, context: Context, *, limit: int) -> list[dict]:
-    """The context's most recent messages, and only as many as a ceiling reads.
+def _agent_messages_since(store: Store, context: Context, *, minutes: int,
+                          now: datetime | None = None) -> list[dict]:
+    """Agent-to-agent messages in this context within the last `minutes`.
 
-    Newest first, bounded by the largest ceiling that looks at them. Reading a
-    fixed thousand rows on every single send -- allowed or denied -- was latency
-    spent on rows no check could reach, and reading the *oldest* thousand meant a
-    long conversation counted hops for traces that had long since ended.
+    Two things this has to get right, and an earlier version of it got both
+    wrong in the same line.
+
+    **It reads a time range, not a page.** Every ceiling below counts messages
+    inside a window, and the window is in the sort key already, so it is a range
+    read. Sizing a page to the ceiling instead meant a busy hour was invisible
+    beyond the first N rows.
+
+    **It counts only `AgentMessage` rows.** `MSG#` is not this module's prefix.
+    Operator messages, assistant replies, routine notices and `threads.event`
+    bookkeeping all share it, and none of them carry a `traceId` or an `at`. A
+    read that was sized by count and then filtered therefore *failed open*: in a
+    thread with enough ordinary conversation, every row a ceiling was counting
+    fell outside the page, hop depth and both windows counted zero, and the
+    guards silently stopped guarding. Narrowing the query is what fixes that;
+    filtering afterwards cannot, because DynamoDB applies its own `Limit` first.
     """
-    return store.query(_context_pk(context), sk_prefix="MSG#",
-                       limit=max(1, limit), ascending=False)
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(minutes=max(1, minutes))).isoformat(
+        timespec="seconds").replace("+00:00", "Z")
+    rows = store.query(_context_pk(context),
+                       sk_between=K.message_sk_since(since),
+                       limit=MAX_WINDOW_MESSAGES, ascending=False)
+    return [r for r in rows if r.get("entity") == "AgentMessage"]
 
 
 def _within_window(stamp: str, minutes: int, *, now: datetime | None = None) -> bool:
@@ -306,11 +342,17 @@ def send(store: Store, *, sender_agent_id: str, recipient_agent_id: str, args: d
     direct = context.kind == DIRECT
     ceiling = (limits.max_direct_messages_per_window if direct
                else limits.max_messages_per_task)
-    existing = _messages_for_context(
-        store, context, limit=max(ceiling, limits.max_hop_depth))
+    window = limits.direct_window_minutes if direct else limits.volume_window_minutes
+
+    # One read, covering the longest window any ceiling below asks about. Every
+    # one of them counts messages within a window, so they all read the same rows.
+    existing = _agent_messages_since(
+        store, context,
+        minutes=max(window, limits.priority_window_minutes, limits.hop_window_minutes))
 
     trace_id = args.get("trace_id") or new_id("trace_")
-    hop_count = sum(1 for r in existing if r.get("traceId") == trace_id)
+    hop_count = sum(1 for r in existing if r.get("traceId") == trace_id
+                    and r.get("at") and _within_window(r["at"], limits.hop_window_minutes))
     if hop_count >= limits.max_hop_depth:
         _log_denied(store, context, sender_id=sender_agent_id, recipient_id=recipient_agent_id,
                    reason="max hop depth exceeded", policy_result=policy_result)
@@ -318,27 +360,25 @@ def send(store: Store, *, sender_agent_id: str, recipient_agent_id: str, args: d
             f"hop depth {hop_count} at or beyond the max of {limits.max_hop_depth} "
             f"for trace {trace_id!r} -- this looks like a loop")
 
-    if direct:
-        # A task ends; a direct conversation does not, so the same ceiling read
-        # as a lifetime total would silence two Bots permanently on a number
-        # neither of them chose. It is a runaway guard, so it guards a window.
-        recent = sum(1 for r in existing if r.get("at")
-                     and _within_window(r["at"], limits.direct_window_minutes))
-        if recent >= ceiling:
-            _log_denied(store, context, sender_id=sender_agent_id,
-                        recipient_id=recipient_agent_id,
-                        reason="direct message ceiling exceeded", policy_result=policy_result)
+    # Volume, per window rather than per lifetime. A runaway happens in time, and
+    # a lifetime total cannot be read from a bounded window without lying about
+    # one or the other. It was already windowed for a direct conversation, which
+    # has no end; a task's messages all happen inside one anyway, so this is the
+    # same guard said once instead of twice.
+    recent = sum(1 for r in existing if r.get("at")
+                 and _within_window(r["at"], window))
+    if recent >= ceiling:
+        _log_denied(store, context, sender_id=sender_agent_id, recipient_id=recipient_agent_id,
+                   reason=("direct message ceiling exceeded" if direct
+                           else "message ceiling exceeded"), policy_result=policy_result)
+        if direct:
             raise MessagingError(
                 f"you and {recipient_agent_id!r} have exchanged {recent} direct messages "
-                f"in the last {limits.direct_window_minutes} minutes, which is the most "
-                f"allowed ({ceiling}); for work this involved, open a group chat or "
-                "bring the operator in")
-    elif len(existing) >= ceiling:
-        _log_denied(store, context, sender_id=sender_agent_id, recipient_id=recipient_agent_id,
-                   reason="message ceiling exceeded", policy_result=policy_result)
+                f"in the last {window} minutes, which is the most allowed ({ceiling}); "
+                "for work this involved, open a group chat or bring the operator in")
         raise MessagingError(
             f"{context.kind} {context.context_id!r} has reached its message ceiling "
-            f"({ceiling})")
+            f"({ceiling} in {window} minutes)")
 
     recent_priority_wakes = sum(
         1 for r in existing
