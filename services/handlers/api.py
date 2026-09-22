@@ -641,6 +641,22 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         items.sort(key=lambda i: i.get("at") or "")
         return _resp(200, {"coordination": items})
 
+    # --- tasks (durable, multi-run coordination) ----------------------
+    # Read-only. The parent/coordinator's own visible "still working"
+    # state while fan-out children are outstanding: `pendingChildren` is the
+    # same counter `handoffs.accept`/`notify_coordinator_if_child` maintain
+    # for the race-free wake -- this route just reads it back.
+    if (p := _match(path, "/tasks/{id}")) and method == "GET":
+        task = store.get(K.task_pk(p[0]), "META")
+        children = store.query(K.task_pk(p[0]), sk_prefix="CHILD#", limit=50)
+        counts = {"active": 0, "done": 0, "failed": 0, "cancelled": 0}
+        for c in children:
+            counts[c.get("status", "active")] = counts.get(c.get("status", "active"), 0) + 1
+        task["pendingChildren"] = max(0, task.get("pendingChildren", 0))
+        task["children"] = children
+        task["counts"] = counts
+        return _resp(200, task)
+
     # --- runs --------------------------------------------------------------
     if (p := _match(path, "/runs/{id}")) and method == "GET":
         run = store.get(K.run_pk(p[0]), "META")

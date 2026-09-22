@@ -1082,7 +1082,7 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
         auto_note = ""
         receiver = store.try_get(K.agent_pk(handoff["toAgentId"]), "META")
         if receiver is not None and receiver.get("status") in A.RUNNABLE:
-            ok, reason = handoffs.can_auto_accept(store, handoff, receiver)
+            ok, reason = handoffs.can_auto_accept(store, handoff, receiver, run)
             if ok:
                 try:
                     accepted = handoffs.accept(store, run, handoff,
@@ -1097,7 +1097,11 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
             else:
                 auto_note = f" (not auto-accepted: {reason})"
 
-        push.handoff(run["runId"], run["threadId"], handoff)
+        # The task's own run id, not necessarily this run's -- `handoff` is
+        # filed there (see `_record_handoff`), and that is the id
+        # `POST /handoffs/{runId}/{hoffId}` needs to find it again.
+        task_id = (run.get("trigger") or {}).get("taskId") or run["runId"]
+        push.handoff(task_id, run["threadId"], handoff)
         _step(push, run, turn, "handoff", f"to {args.get('to')}{auto_note}",
               review.scoped("handoff", "you stay the owner, and no access travels with it"))
         if handoff["status"] == "accepted":
@@ -1647,9 +1651,22 @@ def _capability_for(action: str, agent: dict) -> Capability:
 
 
 def _record_handoff(store: Store, run: dict, args: dict) -> dict:
+    """Propose a handoff, filed under the *task's* own run -- not necessarily
+    this run's own pk.
+
+    A run continuing a task after a child completed (`trigger.type ==
+    "child_completion"`) is not the run the task started as, but a handoff it
+    proposes still belongs to that one task. Filing it anywhere else would
+    strand it from `collab.resolve_context`'s task branch, which always reads
+    handoffs from the task's root run -- exactly the partition
+    `K.task_pk`-scoped state (`ensure_task`, `TaskChild` rows) already uses.
+    One task, one partition its handoffs live in, regardless of which of its
+    runs proposed them.
+    """
     handoff_id = new_id("hoff_")
+    task_id = (run.get("trigger") or {}).get("taskId") or run["runId"]
     return store.put({
-        "pk": run["pk"], "sk": K.handoff_sk(handoff_id),
+        "pk": K.run_pk(task_id), "sk": K.handoff_sk(handoff_id),
         "entity": "Handoff", "handoffId": handoff_id,
         "gsi1pk": "HANDOFFS", "gsi1sk": f"proposed#{now_iso()}",
         "fromAgentId": run["agentId"], "toAgentId": A.agent_ref(args.get("to")),

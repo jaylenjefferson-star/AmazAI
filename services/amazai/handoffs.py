@@ -22,6 +22,13 @@ from __future__ import annotations
 from amazai import agents as A, collab, connectors, keys as K, policy, runs
 from amazai.store import Conflict, Store, now_iso
 
+#: Outstanding children one task may have at once. A task-level analogue of
+#: `collab.MAX_ROOM_MEMBERS`: past this, a fan-out stops being a bounded burst
+#: of parallel work and starts being a way to spend an unbounded amount of
+#: compute from one operator message. Checked against the task's live
+#: `pendingChildren` counter, not a count of `CHILD#` rows -- see `accept`.
+MAX_ACTIVE_CHILDREN_PER_TASK = 6
+
 
 class HandoffError(ValueError):
     """A handoff cannot be decided as asked -- no such recipient, or it was
@@ -48,11 +55,11 @@ def _task_id_for(coordinator_run: dict) -> str:
     return (coordinator_run.get("trigger") or {}).get("taskId") or coordinator_run["runId"]
 
 
-def can_auto_accept(store: Store, handoff: dict, receiver: dict, *,
+def can_auto_accept(store: Store, handoff: dict, receiver: dict, coordinator_run: dict, *,
                     limits: collab.MessagingLimits | None = None) -> tuple[bool, str]:
     """Whether `handoff` may skip the human and wake `receiver` now.
 
-    Three gates, in order of how cheaply they refuse:
+    Four gates, in order of how cheaply they refuse:
 
     1. The requested action, if named, is never on the always-approve floor
        or the never-approvable list -- checked with the exact same
@@ -61,7 +68,10 @@ def can_auto_accept(store: Store, handoff: dict, receiver: dict, *,
     2. If the action names an app (`"slack.post"` -> `slack`), the receiver
        actually holds a grant for it. A freeform action ("review the draft")
        names no app and needs none.
-    3. The receiver is under its own concurrency and budget ceiling -- the
+    3. The task this handoff belongs to is under its own fan-out ceiling --
+       `MAX_ACTIVE_CHILDREN_PER_TASK` outstanding children at once, so one
+       operator message cannot spend unbounded concurrent compute.
+    4. The receiver is under its own concurrency and budget ceiling -- the
        same `collab.may_wake_now` gate a priority `message_agent` wake
        already has to clear.
 
@@ -84,6 +94,12 @@ def can_auto_accept(store: Store, handoff: dict, receiver: dict, *,
             if connectors.grant_for(granted, app_slug) is None:
                 name = receiver.get("name", receiver["agentId"])
                 return False, f"{name} has no grant for {app_slug!r}"
+
+    task = store.try_get(K.task_pk(_task_id_for(coordinator_run)), "META")
+    pending = int((task or {}).get("pendingChildren") or 0)
+    if pending >= MAX_ACTIVE_CHILDREN_PER_TASK:
+        return False, (f"this task already has {pending} handoffs outstanding "
+                       f"(max {MAX_ACTIVE_CHILDREN_PER_TASK} at once)")
 
     limits = limits or collab.limits_for_org(store)
     allowed, reason = collab.may_wake_now(store, receiver, limits)
@@ -109,6 +125,11 @@ def ensure_task(store: Store, task_id: str, coordinator_run: dict) -> dict:
         "threadId": coordinator_run["threadId"],
         "goal": coordinator_run.get("goal", ""),
         "status": "open",
+        # A fan-in reference count, not a log: incremented once per accepted
+        # handoff (`accept`), decremented once per settled child
+        # (`notify_coordinator_if_child`). The settle that brings it to zero
+        # is, unambiguously, the last one -- see `Store.increment`.
+        "pendingChildren": 0,
     }
     try:
         return store.put(item, unique=True)
@@ -133,13 +154,17 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
     second run or double-counts a task's child.
     """
     receiver = _receiver(store, handoff["toAgentId"])
+    task_id = _task_id_for(coordinator_run)
 
-    decided = store.update(coordinator_run["pk"], K.handoff_sk(handoff["handoffId"]), {
+    # `K.run_pk(task_id)`, not `coordinator_run["pk"]`: a handoff proposed by
+    # a continuation run still lives under the task's root run (see
+    # `orchestrator._record_handoff`), and this has to agree with wherever it
+    # was actually written or the conditional update below finds nothing.
+    decided = store.update(K.run_pk(task_id), K.handoff_sk(handoff["handoffId"]), {
         "status": "accepted", "decidedBy": decided_by, "decidedAt": now_iso(),
         "gsi1sk": f"accepted#{now_iso()}",
     }, expect={"status": "proposed"})
 
-    task_id = _task_id_for(coordinator_run)
     ensure_task(store, task_id, coordinator_run)
     trace_id = (coordinator_run.get("trigger") or {}).get("traceId")
 
@@ -166,13 +191,18 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
         "coordinatorRunId": coordinator_run["runId"],
         "status": "active",
     })
+    # After the child row exists, never before: `notify_coordinator_if_child`
+    # queries `CHILD#` rows once this counter reaches zero, and that query
+    # must never be able to find fewer rows than the count promised.
+    store.increment(K.task_pk(task_id), "META", "pendingChildren", 1)
 
     return {"handoff": decided, "child": child, "receiver": receiver}
 
 
 def reject(store: Store, coordinator_run: dict, handoff: dict, *,
           decided_by: str, note: str = "") -> dict:
-    return store.update(coordinator_run["pk"], K.handoff_sk(handoff["handoffId"]), {
+    task_id = _task_id_for(coordinator_run)
+    return store.update(K.run_pk(task_id), K.handoff_sk(handoff["handoffId"]), {
         "status": "rejected", "decidedBy": decided_by, "decidedAt": now_iso(),
         "note": note, "gsi1sk": f"rejected#{now_iso()}",
     }, expect={"status": "proposed"})
@@ -190,19 +220,41 @@ _CHILD_OUTCOME = {
 }
 
 
+def _digest_line(store: Store, child_row: dict) -> str:
+    name = (store.try_get(K.agent_pk(child_row["agentId"]), "META") or {}).get(
+        "name", child_row["agentId"])
+    status = child_row.get("status", "active")
+    summary = (child_row.get("summary") or "").strip()
+    return f"- {name}: {status}" + (f" -- {summary[:300]}" if summary else "")
+
+
 def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
                                 summary: str) -> dict | None:
-    """A run that just settled wakes its coordinator, exactly once, if it was
-    spawned from an accepted handoff.
+    """A run that just settled reports to its coordinator, if it was spawned
+    from an accepted handoff -- but only *wakes* it once every child from the
+    same fan-out has reported in.
 
-    The idempotency guarantee lives entirely in one conditional write: the
-    `TaskChild` row's `status` moves `active` -> its outcome with
-    `expect={"status": "active"}`. A second settle of the *same* run --
-    `_fail` and `_finish` both reachable on one dirty exit, a sweeper sweep
-    racing a live invocation's own settle -- loses that race and returns
-    `None` rather than spawning a second continuation. The caller does the
-    actual wake (an async Lambda invoke); this only ever decides once whether
-    that wake should happen, and prepares what it should say.
+    Two separate guarantees, doing two different jobs:
+
+    1. **This run is reported at most once.** One conditional write: the
+       `TaskChild` row's `status` moves `active` -> its outcome with
+       `expect={"status": "active"}`. A second settle of the *same* run --
+       `_fail` and `_finish` both reachable on one dirty exit, a sweeper
+       sweep racing a live invocation's own settle -- loses that race and
+       returns `None`.
+    2. **The coordinator wakes at most once per completed batch**, not once
+       per child. `Store.increment` decrements the task's `pendingChildren`
+       and hands back the value *this call* left it at; only the call that
+       lands it at zero or below is -- unambiguously, because the decrement
+       is server-side and serialized -- the last sibling to report, and only
+       that call spawns a continuation. Two children finishing a moment apart
+       each still report (step 1, independently), but only one of them wakes
+       anyone, with every sibling's outcome already durably written and read
+       back with a consistent query -- no window where a wake queries before
+       a sibling's own report has landed.
+
+    The caller does the actual wake (an async Lambda invoke); this only ever
+    decides whether one should happen, and prepares what it should say.
     """
     trigger = run.get("trigger") or {}
     coordinator_run_id = trigger.get("coordinatorRunId")
@@ -218,20 +270,32 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
     except Conflict:
         return None
 
+    remaining = store.increment(K.task_pk(task_id), "META", "pendingChildren", -1)
+    if remaining > 0:
+        return None   # siblings still outstanding; whoever finishes last wakes the coordinator
+
     task = store.try_get(K.task_pk(task_id), "META")
     if task is None:
         return None
 
-    agent_name = (store.try_get(K.agent_pk(run["agentId"]), "META") or {}).get(
-        "name", run["agentId"])
-    verb = {"done": "finished", "failed": "hit a problem", "cancelled": "was cancelled"}[outcome]
-    goal = f"{agent_name} {verb} the work you handed off: {(summary or '').strip()[:1200]}".strip()
+    # Consistent, not eventually-consistent: every sibling's own report (step
+    # 1) is durably committed before its own decrement (program order within
+    # that sibling's single invocation), and this decrement only observed
+    # zero because every sibling's decrement already applied -- but an
+    # eventually-consistent read immediately after could still return a
+    # stale snapshot that predates one of those writes reaching this replica.
+    children = store.query(K.task_pk(task_id), sk_prefix="CHILD#", limit=50, consistent=True)
+    done = sum(1 for c in children if c.get("status") == "done")
+    lines = "\n".join(_digest_line(store, c) for c in children)
+    goal = (f"All {len(children)} of the tasks you handed off have finished "
+           f"({done} succeeded). Here's what came back:\n{lines}\n\n"
+           "Continue the task: hand off the next step, or post the result.")
 
     continuation = runs.create(
         store, agent_id=task["coordinatorAgentId"], thread_id=task["threadId"], goal=goal,
         trigger={"type": "child_completion", "taskId": task_id,
                  "childRunId": run["runId"], "childAgentId": run["agentId"],
-                 "outcome": outcome})
+                 "outcome": outcome, "childCount": len(children), "doneCount": done})
 
     store.update(K.task_pk(task_id), "META", {"coordinatorRunId": continuation["runId"]})
     return continuation
