@@ -1,0 +1,40 @@
+{
+  "_comment": "Prices here are placeholders -- change priceUsd/creditsUsd to real numbers before running scripts/stripe_setup.py. stripePriceId is filled in by that script; a plan with stripePriceId: null cannot be checked out yet, the same way seats.json's modelId: null means a seat cannot be provisioned yet.",
+  "currency": "usd",
+  "plans": {
+    "entry": {
+      "name": "AmazAI Entry",
+      "description": "One Bot, connectors, the basics.",
+      "priceUsd": 20.0,
+      "creditsUsd": 20.0,
+      "interval": "month",
+      "lookupKey": "amazai_entry_monthly",
+      "stripePriceId": null
+    },
+    "mid": {
+      "name": "AmazAI Team",
+      "description": "More Bots, more concurrent runs, more credits.",
+      "priceUsd": 60.0,
+      "creditsUsd": 70.0,
+      "interval": "month",
+      "lookupKey": "amazai_mid_monthly",
+      "stripePriceId": null
+    }
+  },
+  "creditTopUps": [
+    {
+      "name": "50 credits",
+      "priceUsd": 50.0,
+      "creditsUsd": 50.0,
+      "lookupKey": "amazai_credits_50",
+      "stripePriceId": null
+    },
+    {
+      "name": "200 credits",
+      "priceUsd": 200.0,
+      "creditsUsd": 200.0,
+      "lookupKey": "amazai_credits_200",
+      "stripePriceId": null
+    }
+  ]
+}

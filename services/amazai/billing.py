@@ -27,8 +27,13 @@ loop's hot path for a precision this MVP does not need.
 
 from __future__ import annotations
 
-from amazai import keys as K
-from amazai.store import Store, new_id, now_iso
+import json
+from pathlib import Path
+
+import boto3
+
+from amazai import keys as K, stripe_client
+from amazai.store import Store, TABLE_NAME, now_iso, ordered_suffix
 from amazai.usage import MICRO
 
 BILLING_SK = "BILLING"
@@ -39,6 +44,15 @@ BILLING_SK = "BILLING"
 TRIAL_GRANT_USD = 5.0
 
 TIER_TRIAL = "trial"
+
+#: Every Stripe customer this platform has ever linked to an owner, in one
+#: fixed, reserved partition -- the one place this module steps outside its
+#: own owner's Store, and for the same reason identity's DB-backed allowlist
+#: and store.discover_owner_ids do: a webhook event carrying only a Stripe
+#: `customer` id has no owner to open a Store for until this is read first.
+PLATFORM_STRIPE_CUSTOMERS_PK = "PLATFORM#STRIPECUSTOMERS"
+
+_PLANS_PATH = Path(__file__).parent / "billing_plans.json"
 
 
 def _pk(store: Store) -> str:
@@ -164,7 +178,7 @@ def _ledger_entry(store: Store, *, kind: str, amount_usd: float,
                   balance_after_usd: float, detail: str = "", run_id: str = "",
                   agent_id: str = "", stripe_event_id: str | None = None) -> dict:
     entry = {
-        "pk": _pk(store), "sk": f"CREDITLEDGER#{now_iso()}#{new_id()[-6:]}",
+        "pk": _pk(store), "sk": f"CREDITLEDGER#{now_iso()}#{ordered_suffix()}",
         "entity": "CreditLedgerEntry",
         "kind": kind, "amountUsd": round(amount_usd, 6),
         "balanceAfterUsd": balance_after_usd,
@@ -185,3 +199,177 @@ def ledger(store: Store, *, limit: int = 100) -> list[dict]:
     """Most recent entries first -- what a billing history screen reads."""
     return store.query(_pk(store), sk_prefix="CREDITLEDGER#", limit=limit,
                        ascending=False)
+
+
+# --- plan config -------------------------------------------------------------
+
+def load_plans() -> dict:
+    """Tier and credit-top-up config, read fresh on every call -- an
+    operator's edit, or `scripts/stripe_setup.py`'s own rewrite of
+    `stripePriceId`, takes effect without a redeploy of anything but this
+    one small file."""
+    return json.loads(_PLANS_PATH.read_text())
+
+
+def plan(key: str) -> dict:
+    plans = load_plans()["plans"]
+    if key not in plans:
+        raise ValueError(f"unknown plan {key!r}")
+    return plans[key]
+
+
+def credit_top_up(lookup_key: str) -> dict:
+    for row in load_plans()["creditTopUps"]:
+        if row["lookupKey"] == lookup_key:
+            return row
+    raise ValueError(f"unknown credit top-up {lookup_key!r}")
+
+
+# --- Stripe: the customer <-> owner link --------------------------------------
+
+def _raw_table(table=None):
+    return table or boto3.resource("dynamodb").Table(TABLE_NAME)
+
+
+def link_stripe_customer(store: Store, customer_id: str, *, table=None) -> None:
+    """Record which owner a Stripe customer belongs to, so a later webhook
+    event carrying only `customer` (a renewal, a cancellation) can still be
+    resolved to the right Store. Called once, the moment a checkout first
+    completes for this owner (`_on_checkout_completed`).
+
+    `ensure_billing_row` first, same defensive reasoning as `grant`: in the
+    real flow `start_checkout` always creates the row before a checkout can
+    even begin, but this must not assume its caller got that sequencing
+    right -- linking a real paying customer's row is not something to skip
+    because a row happened not to exist yet.
+    """
+    ensure_billing_row(store)
+    _raw_table(table).put_item(Item={
+        "pk": PLATFORM_STRIPE_CUSTOMERS_PK, "sk": customer_id,
+        "entity": "StripeCustomerLink", "ownerId": store.owner_id,
+        "linkedAt": now_iso(),
+    })
+    store.update(_pk(store), BILLING_SK, {"stripeCustomerId": customer_id})
+
+
+def owner_for_stripe_customer(customer_id: str, *, table=None) -> str | None:
+    item = _raw_table(table).get_item(
+        Key={"pk": PLATFORM_STRIPE_CUSTOMERS_PK, "sk": customer_id}).get("Item")
+    return item.get("ownerId") if item else None
+
+
+def _store_for_customer(customer_id: str, *, table=None) -> Store | None:
+    owner_id = owner_for_stripe_customer(customer_id, table=table)
+    return Store(owner_id, table=table) if owner_id else None
+
+
+# --- Stripe: starting a checkout or a portal session --------------------------
+
+def start_checkout(store: Store, *, plan_key: str | None = None,
+                   top_up_key: str | None = None, success_url: str,
+                   cancel_url: str, customer_email: str | None = None) -> str:
+    """Return a Stripe Checkout URL for a subscription plan or a one-time
+    credit top-up -- exactly one of `plan_key`/`top_up_key` is given."""
+    if plan_key:
+        row, mode, metadata = plan(plan_key), "subscription", {"planKey": plan_key}
+    elif top_up_key:
+        row, mode, metadata = credit_top_up(top_up_key), "payment", {"topUpKey": top_up_key}
+    else:
+        raise ValueError("exactly one of plan_key or top_up_key is required")
+
+    price_id = row.get("stripePriceId")
+    if not price_id:
+        raise RuntimeError(
+            f"{(plan_key or top_up_key)!r} has no Stripe price yet; "
+            "run scripts/stripe_setup.py against this account first")
+
+    billing_row = ensure_billing_row(store)
+    session = stripe_client.StripeClient().create_checkout_session(
+        mode=mode, price_id=price_id, owner_id=store.owner_id,
+        success_url=success_url, cancel_url=cancel_url,
+        customer_id=billing_row.get("stripeCustomerId"),
+        customer_email=customer_email, metadata=metadata)
+    return session["url"]
+
+
+def start_portal(store: Store, *, return_url: str) -> str:
+    row = ensure_billing_row(store)
+    customer_id = row.get("stripeCustomerId")
+    if not customer_id:
+        raise RuntimeError("this account has no Stripe customer yet; subscribe first")
+    session = stripe_client.StripeClient().create_portal_session(
+        customer_id=customer_id, return_url=return_url)
+    return session["url"]
+
+
+# --- Stripe: webhook events -----------------------------------------------
+
+def handle_webhook_event(event: dict, *, table=None) -> dict:
+    """Route one already-signature-verified Stripe event to its effect.
+
+    Never raises for an event type this doesn't act on -- Stripe sends many
+    more event types than any one integration needs to handle, and an
+    unrecognized type is not a fault, just nothing to do.
+    """
+    kind = event.get("type", "")
+    data = (event.get("data") or {}).get("object") or {}
+    event_id = event.get("id", "")
+
+    if kind == "checkout.session.completed":
+        return _on_checkout_completed(data, event_id, table=table)
+    if kind == "invoice.paid":
+        return _on_invoice_paid(data, event_id, table=table)
+    if kind in ("customer.subscription.updated", "customer.subscription.deleted"):
+        return _on_subscription_changed(data, kind, table=table)
+    return {"handled": False, "type": kind}
+
+
+def _on_checkout_completed(session: dict, event_id: str, *, table=None) -> dict:
+    owner_id = session.get("client_reference_id")
+    customer_id = session.get("customer")
+    if not owner_id or not customer_id:
+        return {"handled": False, "reason": "missing client_reference_id or customer"}
+
+    store = Store(owner_id, table=table)
+    link_stripe_customer(store, customer_id, table=table)
+
+    mode = session.get("mode")
+    amount_total = (session.get("amount_total") or 0) / 100  # Stripe cents -> dollars
+    if mode == "payment":
+        grant(store, amount_total, kind="purchase", detail="credit top-up",
+             stripe_event_id=event_id)
+    elif mode == "subscription":
+        # The subscription's own renewal grant lands separately via
+        # invoice.paid -- Stripe fires that for every period, including this
+        # first one, so granting here too would double-credit it. This only
+        # records which tier was bought, read back from the metadata this
+        # checkout session was created with (see start_checkout).
+        plan_key = (session.get("metadata") or {}).get("planKey")
+        if plan_key:
+            store.update(_pk(store), BILLING_SK, {"tier": plan_key})
+    return {"handled": True, "ownerId": owner_id}
+
+
+def _on_invoice_paid(invoice: dict, event_id: str, *, table=None) -> dict:
+    customer_id = invoice.get("customer")
+    store = _store_for_customer(customer_id, table=table)
+    if not store:
+        return {"handled": False, "reason": "unknown customer"}
+    amount = (invoice.get("amount_paid") or 0) / 100
+    if amount <= 0:
+        return {"handled": False, "reason": "zero-amount invoice"}
+    grant(store, amount, kind="subscription_renewal", detail="subscription period",
+         stripe_event_id=event_id)
+    return {"handled": True, "ownerId": store.owner_id}
+
+
+def _on_subscription_changed(sub: dict, kind: str, *, table=None) -> dict:
+    customer_id = sub.get("customer")
+    store = _store_for_customer(customer_id, table=table)
+    if not store:
+        return {"handled": False, "reason": "unknown customer"}
+    status = "canceled" if kind == "customer.subscription.deleted" else sub.get("status")
+    store.update(_pk(store), BILLING_SK, {
+        "subscriptionStatus": status, "stripeSubscriptionId": sub.get("id"),
+    })
+    return {"handled": True, "ownerId": store.owner_id}
