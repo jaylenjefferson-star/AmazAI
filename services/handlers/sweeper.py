@@ -128,8 +128,25 @@ def _sweep_run(store: Store, push: Push, run: dict, state: RunState,
         result["runsFailed"] += 1
         return
 
-    # No unresolved side effect: safe to resume on the same session, with the
-    # agent's files and git state intact.
+    if runs.deadline_passed(run, now=now):
+        # A stale heartbeat alone is not damning -- the worker may simply be
+        # between invocations, and resuming it is exactly what heals that. But
+        # past its own deadline *too*, another resume is not a second chance,
+        # it is the same failure mode repeating on a timer: five real runs
+        # were found stuck in RETRYING for days, resumed on paper every five
+        # minutes forever because nothing ever asked whether resuming had
+        # actually been working. Declared dead here instead, so a task
+        # waiting on this run as a child
+        # (`handoffs.notify_coordinator_if_child`, wired into `_seal` below)
+        # is told rather than left waiting on a run that will never settle.
+        _seal(store, push, run, RunState.FAILED,
+              "timed out: no heartbeat and past its deadline; presumed stuck "
+              "and stopped rather than resumed indefinitely")
+        result["runsFailed"] += 1
+        return
+
+    # No unresolved side effect and still inside its deadline: safe to
+    # resume on the same session, with the agent's files and git state intact.
     fn = os.environ.get("ORCHESTRATOR_FN_ARN")
     if fn:
         boto3.client("lambda").invoke(
