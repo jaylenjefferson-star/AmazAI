@@ -67,11 +67,25 @@ Two independent ceilings apply per context, both configurable per
 organization (`collab.MessagingLimits`, `collab.limits_for_org`):
 
 - **Hop depth** (`maxHopDepth`, default 3) — the count of prior messages in
-  the same context sharing the same `trace_id`. A caller that does not
-  supply `trace_id` gets a fresh one, so an ordinary one-off message never
-  hits this; a chain of replies that keeps forwarding the same `trace_id`
-  does, and that is exactly the shape of an unintended agent-to-agent loop.
-  Reaching the ceiling raises `MessagingError` — a hard stop, not a warning.
+  the same context sharing the same `trace_id`. A run that starts a
+  conversation gets a fresh trace, so an ordinary one-off message never hits
+  this; a chain of replies carrying the same trace does, and that is exactly
+  the shape of an unintended agent-to-agent loop. Reaching the ceiling raises
+  `MessagingError` — a hard stop, not a warning.
+
+  The trace is a **server-side fact**, decided by `orchestrator._trace_for`
+  from the sending run's own `trigger.traceId` and never read from the tool
+  call. Two reasons it has to be. A wake records the trace it came from, so
+  reading it back is the only thing that makes a chain a chain — until it was
+  read back, every Bot minted a fresh trace, `hopCount` was 0 on every send,
+  and this ceiling could not be reached by any sequence of real messages: A
+  wakes B wakes A ran until the round limit or the budget stopped it, neither
+  of which is the ceiling meant for it. And a Bot that could name its own
+  trace could clear its own hop count, which would make the guard decorative —
+  so `trace_id` is absent from `message_agent`'s schema and overwritten even
+  if a model invents one. `_create_group_chat` carries the trace onto its
+  members' runs for the same reason: a room opened mid-chain must not let
+  everyone in it start counting from zero.
 - **Messages per task** (`maxMessagesPerTask`, default 200) — a ceiling on
   total messages ever recorded in one context, independent of trace. Guards
   against high-volume chatter that never technically loops.
