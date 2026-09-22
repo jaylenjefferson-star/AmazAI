@@ -86,26 +86,49 @@ organization (`collab.MessagingLimits`, `collab.limits_for_org`):
   if a model invents one. `_create_group_chat` carries the trace onto its
   members' runs for the same reason: a room opened mid-chain must not let
   everyone in it start counting from zero.
-- **Messages per task** (`maxMessagesPerTask`, default 200) — a ceiling on
-  total messages ever recorded in one context, independent of trace. Guards
-  against high-volume chatter that never technically loops.
+- **Messages per context** (`maxMessagesPerTask`, default 200 per
+  `volumeWindowMinutes`, default 60) — high-volume chatter that never
+  technically loops.
 - **Direct messages per window** (`maxDirectMessagesPerWindow`, default 60 per
-  `directWindowMinutes`, default 60) — what replaces the ceiling above for a
-  direct conversation, and only for one. A task ends; a direct conversation
-  does not, so a lifetime total read against it would eventually silence two
-  Bots for good on a number neither of them chose. The ceiling exists to stop a
-  runaway, so for a conversation with no end it guards a window instead.
+  `directWindowMinutes`, default 60) — the same ceiling for a direct
+  conversation, which needs its own number because it is the cheapest kind of
+  message to send.
 
 Every breach is logged via `_log_denied` before raising, for the same
 audit-visibility reason as an authorization denial.
 
-The reads behind these ceilings are bounded by the ceilings themselves
-(`collab._messages_for_context`) and taken newest-first. A fixed
-thousand-row read on every send — allowed or denied — was latency spent on rows
-no check could reach, and taking the *oldest* thousand meant a long
-conversation counted hop depth for traces that had long since ended.
+### 1.3 Every ceiling counts a window, and counts only messages
 
-### 1.3 Priority is a request, never a bypass
+Both ceilings above, and the hop chain, are counted **over a window** rather
+than over a lifetime. Two reasons, and the second is the one that forced it.
+
+A runaway is a thing that happens in an hour, not a thing that happens
+eventually — a chain of replies that stalls for an hour is a conversation, and a
+context's two-hundredth message a week later is not a loop. A direct
+conversation made this unavoidable, since it has no end at which a lifetime
+total could be judged; extending it to every kind is the same guard stated once
+instead of twice.
+
+And a lifetime total cannot be read from a bounded query without lying about
+either the bound or the count. `collab._agent_messages_since` is that read, and
+it is narrowed **in the query** on both axes:
+
+- **A time range, not a page.** The stamp is in the sort key
+  (`keys.message_sk_since`), so "the last hour of this thread" is a range read
+  whose size follows the traffic rather than a fixed page whose size has to be
+  guessed.
+- **`AgentMessage` rows only.** `MSG#` is not this module's prefix — operator
+  messages, assistant replies, routine notices and `threads.event` bookkeeping
+  all share it, and none carry a `traceId` or an `at`. This has to be part of
+  the query, because DynamoDB applies its own `Limit` before anything the client
+  can filter: a read sized by count and filtered afterwards **failed open**, and
+  did so only in threads busy enough to need the guard. In a thread with enough
+  ordinary conversation, every row a ceiling was counting fell outside the page,
+  and hop depth, the volume ceiling and the priority window all counted zero.
+  The upper bound of the range also matters: `MSGDENY#` sorts *after* `MSG#`, so
+  an open-ended read would count the denial trail as though refusals were sends.
+
+### 1.4 Priority is a request, never a bypass
 
 `priority: true` asks for an expedited wake. It cannot buy its way past any
 other gate:
@@ -133,7 +156,7 @@ instead of woken. This is the literal implementation of the requirement:
 *priority requests expedited scheduling only; it does not force execution or
 bypass approval, budget, ownership, or concurrency rules.*
 
-### 1.4 Where messages live
+### 1.5 Where messages live
 
 Message rows for both context kinds are written under the context's Thread
 partition (`keys.thread_pk`), never under the Run's own partition. A task's

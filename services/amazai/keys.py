@@ -53,6 +53,22 @@ def message_sk(iso: str, rand: str) -> str:
     return f"MSG#{iso}#{rand}"
 
 
+def message_sk_since(iso: str) -> tuple[str, str]:
+    """An inclusive sort-key range covering every message at or after `iso`.
+
+    The stamp is already in the sort key, so "the last hour of this thread" is a
+    range read rather than a page of rows that has to be sized and then filtered.
+    That distinction is load-bearing where a count decides something: see
+    `collab._messages_for_context`.
+
+    The upper bound is a character above anything `message_sk` can produce
+    (timestamps and `ordered_suffix` are ASCII), which keeps neighbouring
+    prefixes out -- `MSGDENY#` sorts *after* `MSG#`, so an open-ended `>=` read
+    would collect the denial trail as well.
+    """
+    return f"MSG#{iso}", "MSG#\uffff"
+
+
 def run_pk(run_id: str) -> str:
     return f"RUN#{run_id}"
 
