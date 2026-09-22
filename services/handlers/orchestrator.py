@@ -1448,7 +1448,7 @@ def _update_agent_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
     if not _owner_asked(run):
         return refuse("this only works when the operator's own message started the turn; "
                       "ask them for the change instead")
-    target_id = (args.get("agentId") or "").strip()
+    target_id = A.agent_ref(args.get("agentId"))
     target = store.try_get(K.agent_pk(target_id), "META") if target_id else None
     if not target or target.get("parentAgentId") != agent["agentId"]:
         return refuse("you can only refine a Bot you created")
@@ -1546,7 +1546,7 @@ def _record_handoff(store: Store, run: dict, args: dict) -> dict:
         "pk": run["pk"], "sk": K.handoff_sk(handoff_id),
         "entity": "Handoff", "handoffId": handoff_id,
         "gsi1pk": "HANDOFFS", "gsi1sk": f"proposed#{now_iso()}",
-        "fromAgentId": run["agentId"], "toAgentId": args.get("to"),
+        "fromAgentId": run["agentId"], "toAgentId": A.agent_ref(args.get("to")),
         "goal": args.get("goal", ""), "state": args.get("state", ""),
         "constraints": args.get("constraints", []),
         "requestedAction": args.get("requestedAction", ""),
@@ -1576,7 +1576,9 @@ def _create_group_chat(store: Store, run: dict, agent: dict, args: dict) -> dict
     if not isinstance(invited, list) or not all(isinstance(a, str) and a.strip() for a in invited):
         raise ValueError("agentIds must be a list of Bot ids")
 
-    agent_ids = list(dict.fromkeys([agent["agentId"], *(a.strip() for a in invited)]))
+    # `@name` is how every prompt surface writes an id; it is not part of one.
+    agent_ids = list(dict.fromkeys([agent["agentId"], *(A.agent_ref(a) for a in invited)]))
+    agent_ids = [a for a in agent_ids if a]
     if len(agent_ids) < 2:
         raise ValueError("a group chat needs at least one other active Bot")
     if len(agent_ids) > collab.MAX_ROOM_MEMBERS:
@@ -1624,7 +1626,9 @@ def _create_group_chat(store: Store, run: dict, agent: dict, args: dict) -> dict
 
 def _find_agents(store: Store, query: str) -> list[dict]:
     """The small, read-only roster slice a Bot needs to form a task room."""
-    needle = " ".join((query or "").lower().split())
+    # Searched for the way the directory writes it, `@janai-williams`, which is
+    # not how the id is stored. The `@` is dropped rather than matched.
+    needle = " ".join((query or "").lower().replace("@", " ").split())
     words = needle.split()
     rows = store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
     matches = []
@@ -1676,7 +1680,7 @@ def _message_agent(store: Store, run: dict, agent: dict, args: dict) -> dict:
     The trace this message belongs to is decided here, from the run, and never
     read from `args` -- see `_trace_for`.
     """
-    to_agent_id = (args.get("to") or "").strip()
+    to_agent_id = A.agent_ref(args.get("to"))
     if not to_agent_id:
         raise collab.MessagingError("message_agent requires 'to'")
     if to_agent_id == agent["agentId"]:
