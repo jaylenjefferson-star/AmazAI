@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 import boto3
 
-from amazai import approvals, keys as K, runs
+from amazai import approvals, handoffs, keys as K, runs
 from amazai.evidence import EvidenceWriter
 from amazai.push import Push
 from amazai.states import PAUSED, SWEEPABLE, RunState
@@ -152,3 +152,20 @@ def _seal(store: Store, push: Push, run: dict, state: RunState, reason: str) -> 
                  sealSha256=manifest.get("sealSha256"))
     push.run_end(run["runId"], run["threadId"], state.value, reason,
                  run.get("costUsd", 0.0))
+
+    # A swept run can be a coordinator's child too -- the worker that died
+    # mid tool-call, or the run that finally expired past its deadline. Same
+    # idempotent hook `_finish`/`_fail` use, so a duplicate settle here (this
+    # sweep racing a live invocation's own settle of the same run) still
+    # wakes the coordinator at most once.
+    try:
+        fn = os.environ.get("ORCHESTRATOR_FN_ARN")
+        continuation_run = handoffs.notify_coordinator_if_child(store, run, state.value, reason)
+        if continuation_run and fn:
+            boto3.client("lambda").invoke(
+                FunctionName=fn, InvocationType="Event",
+                Payload=json.dumps({"runId": continuation_run["runId"],
+                                    "ownerId": store.owner_id}).encode(),
+            )
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()

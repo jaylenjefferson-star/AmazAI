@@ -19,7 +19,7 @@ import urllib.parse
 import boto3
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors as C,
-                    identity, keys as K, memory, models, routines as R,
+                    handoffs, identity, keys as K, memory, models, routines as R,
                     runs, schedules, settings as S, skills, standard_runtime, threads)
 from amazai import dispatch, org, provisioning
 from amazai.policy import Capability
@@ -622,8 +622,8 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
                           if r.get("entity") == "AgentMessage"]
         thread_runs = [r for r in store.query_index("gsi1", "gsi1pk", "RUNS", limit=500)
                       if r.get("threadId") == p[0]]
-        handoffs = [(r, h) for r in thread_runs
-                   for h in store.query(r["pk"], sk_prefix="HOFF#", limit=200)]
+        handoff_rows = [(r, h) for r in thread_runs
+                       for h in store.query(r["pk"], sk_prefix="HOFF#", limit=200)]
         items = [
             *({"kind": "message", "at": m.get("at") or m.get("createdAt"),
                "fromAgentId": m.get("senderAgentId"), "toAgentId": m.get("recipientAgentId"),
@@ -636,7 +636,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
                "status": h.get("status", "proposed"), "priority": None,
                "summary": h.get("goal", ""), "taskId": r["runId"],
                "collaborationContextId": None,
-              } for r, h in handoffs),
+              } for r, h in handoff_rows),
         ]
         items.sort(key=lambda i: i.get("at") or "")
         return _resp(200, {"coordination": items})
@@ -668,6 +668,14 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
 
     if (p := _match(path, "/approvals/{runId}/{apvId}")) and method == "POST":
         return _decide(store, p[0], p[1], body, _actor(event))
+
+    # --- handoffs ------------------------------------------------------
+    # A human decision on a handoff `_record_handoff` left `proposed` --
+    # most never reach here, because `orchestrator._handle_tool` already
+    # tried `handoffs.can_auto_accept` at the moment it was proposed. This
+    # is the fallback for the ones that could not be resolved automatically.
+    if (p := _match(path, "/handoffs/{runId}/{hoffId}")) and method == "POST":
+        return _decide_handoff(store, p[0], p[1], body, _actor(event))
 
     # --- read state --------------------------------------------------------
     # The inbox orders on lastActivity and has never had anything to compare
@@ -1314,6 +1322,45 @@ def _decide(store: Store, run_id: str, approval_id: str, body: dict,
         result["createdSkill"] = created
     elif created and decided["action"] == "memory.publish":
         result["createdMemory"] = created
+    return _resp(200, result)
+
+
+def _decide_handoff(store: Store, run_id: str, handoff_id: str, body: dict,
+                    actor: A.Actor):
+    """A human's accept/reject on a handoff still `proposed` after the
+    orchestrator's own auto-accept attempt already declined it. Mirrors
+    `_decide`'s shape -- a conditional decision, then a wake -- but the
+    accept path is `handoffs.accept`, shared with the automatic caller so a
+    human's "accept" and the system's produce identically-shaped state.
+    """
+    run_pk = K.run_pk(run_id)
+    run = store.get(run_pk, "META")
+    handoff = store.try_get(run_pk, K.handoff_sk(handoff_id))
+    if handoff is None:
+        return _resp(404, {"error": "no such handoff"})
+    if handoff.get("status") != "proposed":
+        return _resp(409, {"error": "handoff already decided", "status": handoff["status"]})
+
+    approve = bool(body.get("approve"))
+    decided_by = f"user:{actor.user_id}"
+    try:
+        if approve:
+            accepted = handoffs.accept(store, run, handoff, decided_by=decided_by)
+            _invoke_orchestrator(accepted["child"]["runId"], store.owner_id)
+            result = {"handoff": accepted["handoff"], "childRunId": accepted["child"]["runId"]}
+        else:
+            decided = handoffs.reject(store, run, handoff, decided_by=decided_by,
+                                      note=body.get("note", ""))
+            result = {"handoff": decided}
+    except Conflict:
+        return _resp(409, {"error": "handoff already decided"})
+    except (handoffs.HandoffError, collab.MessagingError) as exc:
+        return _resp(422, {"error": str(exc)})
+
+    threads.event(store, run["threadId"],
+                  f'{"Accepted" if approve else "Declined"} the handoff to '
+                  f'{(store.try_get(K.agent_pk(handoff["toAgentId"]), "META") or {}).get("name", handoff["toAgentId"])}',
+                  icon="check" if approve else "x")
     return _resp(200, result)
 
 

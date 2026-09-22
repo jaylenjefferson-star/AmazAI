@@ -24,8 +24,9 @@ import boto3
 from dataclasses import dataclass, field
 
 from amazai import (agentcore, agents as A, approvals, collab, composio, connectors,
-                    continuation, cost, keys as K, memory, onboarding, org, policy, provisioning,
-                    redact, review, router, routines, runs, skills, standard_runtime, threads)
+                    continuation, cost, handoffs, keys as K, memory, onboarding, org, policy,
+                    provisioning, redact, review, router, routines, runs, skills,
+                    standard_runtime, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
@@ -140,6 +141,7 @@ def _fail(store: Store, run: dict, message: str) -> None:
                      summary=message, sealSha256=manifest.get("sealSha256"))
         Push(store).run_end(fresh["runId"], fresh["threadId"],
                             RunState.FAILED.value, message, fresh.get("costUsd", 0.0))
+        _wake_coordinator_if_child(store, fresh, RunState.FAILED.value, message)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
@@ -1069,12 +1071,43 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
     if name == "handoff":
         handoff = _record_handoff(store, run, args)
         ev.action(seq, "handoff", f"to {args.get('to')}", handoffId=handoff["handoffId"])
+
+        # Auto-accept, right where the handoff is proposed: a handoff this
+        # Bot's own receiver already has the grant/budget/policy clearance
+        # for should not sit waiting for a human to notice and click accept.
+        # Anything `can_auto_accept` cannot resolve cleanly -- and anything
+        # `accept` itself refuses (hop depth, a task volume ceiling) -- just
+        # leaves `status: "proposed"` exactly as before; nothing here can
+        # make a handoff *less* likely to reach a human.
+        auto_note = ""
+        receiver = store.try_get(K.agent_pk(handoff["toAgentId"]), "META")
+        if receiver is not None and receiver.get("status") in A.RUNNABLE:
+            ok, reason = handoffs.can_auto_accept(store, handoff, receiver)
+            if ok:
+                try:
+                    accepted = handoffs.accept(store, run, handoff,
+                                               decided_by="system:auto-accept")
+                except (collab.MessagingError, handoffs.HandoffError) as exc:
+                    auto_note = f" (not auto-accepted: {exc})"
+                else:
+                    handoff = accepted["handoff"]
+                    _invoke_orchestrator_async(accepted["child"]["runId"], store.owner_id)
+                    receiver_name = accepted["receiver"].get("name", handoff["toAgentId"])
+                    auto_note = f" -- accepted automatically; {receiver_name} is on it"
+            else:
+                auto_note = f" (not auto-accepted: {reason})"
+
         push.handoff(run["runId"], run["threadId"], handoff)
-        _step(push, run, turn, "handoff", f"to {args.get('to')}",
+        _step(push, run, turn, "handoff", f"to {args.get('to')}{auto_note}",
               review.scoped("handoff", "you stay the owner, and no access travels with it"))
+        if handoff["status"] == "accepted":
+            note = ("accepted automatically and started; no access travels with a "
+                    "handoff -- the receiving Bot works under its own grants")
+        else:
+            note = "recorded and shown to the operator; no access travels with a handoff"
         return {"pause": False, "toolResult": {
-            "ok": True, "handoffId": handoff["handoffId"],
-            "note": "recorded and shown to the operator; no access travels with a handoff"}}
+            "ok": True, "handoffId": handoff["handoffId"], "status": handoff["status"],
+            "note": note}}
 
     if name == "message_agent":
         try:
@@ -1874,6 +1907,27 @@ def _finish(store: Store, run: dict, state: RunState, summary: str, push: Push,
                  sealSha256=manifest.get("sealSha256"))
     push.run_end(fresh["runId"], fresh["threadId"], state.value, summary[:2000],
                  fresh.get("costUsd", 0.0))
+    _wake_coordinator_if_child(store, fresh, state.value, summary)
+
+
+def _wake_coordinator_if_child(store: Store, run: dict, state_value: str, summary: str) -> None:
+    """A run's terminal settle, seen by whoever handed it the work.
+
+    The one place every terminal exit already funnels through (`_finish` for
+    a normal settle, `_fail` for the top-level exception path) -- so this is
+    the one place a completion needs to be reported from, rather than one
+    check per exit branch. Best-effort and never allowed to turn a run that
+    *did* settle correctly into a failure to report that it did: the
+    idempotent conditional write inside `notify_coordinator_if_child` is what
+    actually decides whether a wake happens, not this wrapper.
+    """
+    try:
+        continuation_run = handoffs.notify_coordinator_if_child(
+            store, run, state_value, summary)
+        if continuation_run:
+            _invoke_orchestrator_async(continuation_run["runId"], store.owner_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
 
 
 def _reinvoke(run_id: str, owner_id: str, *, delay_note: str = "") -> None:

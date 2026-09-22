@@ -145,6 +145,15 @@ def task_pk(task_id: str) -> str:
     return f"TASK#{task_id}"
 
 
+def task_child_sk(run_id: str) -> str:
+    """A run spawned from an accepted handoff, tracked under its task's own
+    partition. `task_pk` already holds that task's `MEM#` rows; a `CHILD#`
+    row's own conditional status transition (`active` -> an outcome) is what
+    makes a child's completion wake its coordinator exactly once -- see
+    `amazai.handoffs.notify_coordinator_if_child`."""
+    return f"CHILD#{run_id}"
+
+
 def connection_pk(connection_id: str) -> str:
     return f"CONN#{connection_id}"
 
