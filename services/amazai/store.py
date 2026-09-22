@@ -76,6 +76,35 @@ def _decimals_to_native(obj: Any) -> Any:
     return obj
 
 
+def discover_owner_ids(table=None) -> list[str]:
+    """Every distinct owner with at least one Bot, read with no owner filter.
+
+    The one place `ownerId` is deliberately *not* enforced. Everywhere else a
+    caller already knows who it is (a request's principal, a run's own
+    `ownerId`) and `Store` exists to hold it to that. A scheduled sweep has no
+    request to read one from, so it has to find out who exists before it can
+    open a `Store` for any of them -- see `services/handlers/sweeper.py`.
+    Scoped to the `AGENTS` index because every real owner has at least one
+    Bot; an owner with none is not yet a tenant a sweep needs to protect.
+    """
+    tbl = table or boto3.resource("dynamodb").Table(TABLE_NAME)
+    owners: set[str] = set()
+    start = None
+    while True:
+        request: dict[str, Any] = {
+            "IndexName": "gsi1",
+            "KeyConditionExpression": Key("gsi1pk").eq("AGENTS"),
+        }
+        if start:
+            request["ExclusiveStartKey"] = start
+        resp = tbl.query(**request)
+        owners.update(raw["ownerId"] for raw in resp.get("Items", []) if raw.get("ownerId"))
+        start = resp.get("LastEvaluatedKey")
+        if not start:
+            break
+    return sorted(owners)
+
+
 class NotFound(LookupError):
     pass
 

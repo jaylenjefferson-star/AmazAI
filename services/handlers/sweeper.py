@@ -25,16 +25,48 @@ from amazai import approvals, keys as K, runs
 from amazai.evidence import EvidenceWriter
 from amazai.push import Push
 from amazai.states import PAUSED, SWEEPABLE, RunState
-from amazai.store import Store
+from amazai.store import Store, discover_owner_ids
 
 STALE_MINUTES = 10
 
+_RESULT_KEYS = ("approvalsExpired", "runsResumed", "runsFailed", "runsExpired")
+
 
 def handler(event, context):  # noqa: ARG001
-    store = Store(os.environ.get("OWNER_ID", "owner"))
-    push = Push(store)
+    """Sweep every owner, not one hardcoded default.
+
+    A scheduled invocation carries no request principal, so there is no
+    `ownerId` to read the way `api.py` reads one from the Auth0 token. The
+    previous shape -- `Store(os.environ.get("OWNER_ID", "owner"))` -- silently
+    fell back to the literal string `"owner"`, which matches no real tenant's
+    id (a Google/Auth0 subject like `google-oauth2|...`); every query it made
+    was owner-filtered against a value nothing was ever written under, so
+    every sweep, forever, resumed and expired nothing. `event.get("ownerId")`
+    still lets a manual or test invocation target one owner; otherwise every
+    owner with at least one Bot is discovered and swept in turn.
+    """
     now = datetime.now(timezone.utc)
-    result = {"approvalsExpired": 0, "runsResumed": 0, "runsFailed": 0, "runsExpired": 0}
+    explicit = event.get("ownerId") or os.environ.get("OWNER_ID")
+    owner_ids = [explicit] if explicit else discover_owner_ids()
+
+    total = {"owners": len(owner_ids), **{k: 0 for k in _RESULT_KEYS}}
+    for owner_id in owner_ids:
+        store = Store(owner_id)
+        push = Push(store)
+        try:
+            result = _sweep_owner(store, push, now)
+        except Exception:  # noqa: BLE001 -- one owner's failure must not stop the rest
+            traceback.print_exc()
+            continue
+        for key in _RESULT_KEYS:
+            total[key] += result[key]
+
+    print(json.dumps(total))
+    return total
+
+
+def _sweep_owner(store: Store, push: Push, now: datetime) -> dict:
+    result = {k: 0 for k in _RESULT_KEYS}
 
     # 1. Approvals past their deadline.
     for approval in approvals.due_for_expiry(store, now=now):
@@ -69,7 +101,6 @@ def handler(event, context):  # noqa: ARG001
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
 
-    print(json.dumps(result))
     return result
 
 
