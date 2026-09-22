@@ -342,6 +342,42 @@ const OPTIONS = {
 
 // A real account keeps its theme across a reload; the demo's in-memory settings do not, so it
 // remembers the choice the way a server would.
+// --- billing fixtures ------------------------------------------------------
+// Mirrors the live shape (services/amazai/billing.py, billing_plans.json)
+// exactly -- same field names, same five real tiers -- so wiring this screen
+// to the real ledger is replacing the fixture calls, not redesigning it.
+let DEMO_BILLING = {
+  balanceUsd: 14.32, creditsRemaining: 754, tier: 'personal',
+  subscriptionStatus: 'active', hasCredit: true,
+};
+const DEMO_LEDGER = [
+  { sk: 'l1', kind: 'subscription_renewal', amountUsd: 19.0, balanceAfterUsd: 19.0,
+    detail: 'subscription period', createdAt: iso(-3 * 86400_000) },
+  { sk: 'l2', kind: 'spend', amountUsd: -2.14, balanceAfterUsd: 16.86,
+    detail: 'run run_8f2a', createdAt: iso(-2 * 86400_000) },
+  { sk: 'l3', kind: 'spend', amountUsd: -2.54, balanceAfterUsd: 14.32,
+    detail: 'run run_c710', createdAt: iso(-3_600_000) },
+];
+const DEMO_PLANS = {
+  currency: 'usd',
+  plans: {
+    explore: { name: 'AmazAI Explore', description: 'Build your first AI team.',
+      priceUsd: 0, creditsPerMonth: 100, interval: 'month' },
+    personal: { name: 'AmazAI Personal', description: 'Your work, delegated.',
+      priceUsd: 19, creditsPerMonth: 1000, interval: 'month' },
+    personal_plus: { name: 'AmazAI Personal+', description: 'More capacity for daily work.',
+      priceUsd: 39, creditsPerMonth: 2500, interval: 'month' },
+    pro: { name: 'AmazAI Pro', description: 'For power users.',
+      priceUsd: 79, creditsPerMonth: 6000, interval: 'month' },
+    power: { name: 'AmazAI Power', description: 'For people who run their work through AmazAI.',
+      priceUsd: 149, creditsPerMonth: 12000, interval: 'month' },
+  },
+  creditTopUps: [
+    { name: '50 Amaz Credits', priceUsd: 50, lookupKey: 'amazai_credits_50' },
+    { name: '200 Amaz Credits', priceUsd: 200, lookupKey: 'amazai_credits_200' },
+  ],
+};
+
 // --- admin governance fixtures --------------------------------------------
 // The Directory, kill switch and admin audit trail the console's /admin group
 // renders against. Mutated by demoApi.admin.* so a demo session behaves like a
@@ -670,6 +706,18 @@ export const demoApi = {
     totalUsd: { eng: 11.42, ops: 4.06, cos: 1.88, res: 0.71, fin: 0 }[agentId] ?? 0,
     runs: [],
   }),
+
+  // Mirrors live.billing exactly. checkout/portal return a fake URL rather
+  // than throwing -- the screen still redirects to it, which just changes
+  // the hash and does nothing harmful, so the real click-through flow is
+  // exercised in demo mode too rather than special-cased around.
+  billing: {
+    get: async () => (await wait(80), { ...DEMO_BILLING }),
+    ledger: async () => (await wait(80), { entries: [...DEMO_LEDGER].reverse() }),
+    plans: async () => (await wait(60), DEMO_PLANS),
+    checkout: async () => (await wait(200), { url: '#demo-checkout' }),
+    portal: async () => (await wait(200), { url: '#demo-portal' }),
+  },
 
   // The admin governance surface, against fixtures so the console renders
   // without a control plane. Mirrors live.admin exactly; the ADMIN_* state

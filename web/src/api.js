@@ -111,6 +111,18 @@ const live = {
   usage: (agentId, month) =>
     call('GET', `/usage?agentId=${encodeURIComponent(agentId)}${month ? `&month=${month}` : ''}`),
 
+  // The account's own credit balance and subscription -- self-service, one
+  // account's own view of itself. checkout/portal each return a Stripe-
+  // hosted URL to redirect the browser to; there is no in-app checkout form,
+  // deliberately -- AmazAI never touches a card number.
+  billing: {
+    get: () => call('GET', '/billing'),
+    ledger: (limit) => call('GET', `/billing/ledger${limit ? `?limit=${limit}` : ''}`),
+    plans: () => call('GET', '/billing/plans'),
+    checkout: (body) => call('POST', '/billing/checkout', body),
+    portal: () => call('POST', '/billing/portal', {}),
+  },
+
   // The admin governance surface (FEAT-003). Every one of these is gated on the
   // RBAC capability matrix server-side and audited; the client only names the
   // action. The {subject} in a directory path is the TARGET, never the actor --

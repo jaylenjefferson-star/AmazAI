@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import Companion from '../characters/Companion';
+import BillingSummary from '../components/BillingSummary';
 import { fixtureAgents } from '../fixtures';
 import { DEMO_DATA } from '../fixtures';
 
@@ -65,9 +66,10 @@ export default function Usage() {
     return (
       <div className="page">
         <header className="page-head">
-          <div><h1>Usage</h1><p>Token and cost records from your live ledger.</p></div>
+          <div><h1>Billing</h1><p>Your balance, plan, and token and cost records from your live ledger.</p></div>
           <span className="state-chip cc-tone-ok"><i className="cc-dot" aria-hidden="true" />Live</span>
         </header>
+        <BillingSummary />
         <div className="empty">
           <strong>No usage recorded yet</strong>
           <span>Usage will appear here after a live agent completes a model call. AmazAI never substitutes projected or sample spend for real billing data.</span>
@@ -91,13 +93,15 @@ export default function Usage() {
     <div className="page">
       <header className="page-head">
         <div>
-          <h1>Usage</h1>
-          <p>Tokens and cost for {s.month}.</p>
+          <h1>Billing</h1>
+          <p>Your balance, plan, and tokens and cost for {s.month}.</p>
         </div>
         <span className="state-chip cc-tone-warn">
           <i className="cc-dot" aria-hidden="true" />Demo data
         </span>
       </header>
+
+      <BillingSummary />
 
       <div className="demo-banner">
         <strong>Nothing here has been spent.</strong>

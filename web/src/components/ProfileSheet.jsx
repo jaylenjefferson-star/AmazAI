@@ -53,7 +53,7 @@ export default function ProfileSheet({ onClose }) {
         <SheetRow icon="users" title="Org chart" hint="Who reports to whom" onClick={() => go('/org')} />
         <SheetRow icon="plug" title="Integrations" hint="Apps your agents can use" onClick={() => setView('tools')} />
         <SheetRow icon="sliders" title="Preferences" hint="Notifications and defaults" onClick={() => setView('acct-prefs')} />
-        <SheetRow icon="card" title="Billing" hint="Usage and spend" onClick={() => go('/usage')} />
+        <SheetRow icon="card" title="Billing" hint="Balance, plan, and spend" onClick={() => go('/billing')} />
       </div>
 
       <div className="sx-group">

@@ -191,7 +191,13 @@ function Router() {
         <Route path="/routines/new" element={<Routines />} />
         <Route path="/artifacts" element={<Artifacts />} />
         <Route path="/settings" element={<Settings />} />
+        {/* /billing is the route Stripe's checkout/portal sessions redirect
+            back to (services/handlers/api.py builds that URL server-side,
+            never from client input); /usage is the same page under its
+            older name, kept so existing links and history entries still
+            resolve. */}
         <Route path="/usage" element={<Usage />} />
+        <Route path="/billing" element={<Usage />} />
         <Route path="/characters" element={<Gallery />} />
       </Route>
 
