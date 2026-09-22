@@ -29,6 +29,14 @@ from amazai.store import Conflict, Store, now_iso
 #: `pendingChildren` counter, not a count of `CHILD#` rows -- see `accept`.
 MAX_ACTIVE_CHILDREN_PER_TASK = 6
 
+#: Non-terminal runs one thread (room or DM) may have outstanding at once,
+#: across every task in it. Wider than `MAX_ACTIVE_CHILDREN_PER_TASK`
+#: deliberately: a task's own counter resets once it settles, so a
+#: coordinator that keeps starting fresh tasks in the same room is not
+#: bounded by that alone -- this is the ceiling that actually stops a room
+#: from spending unbounded concurrent compute over time.
+MAX_ACTIVE_RUNS_PER_ROOM = 12
+
 
 class HandoffError(ValueError):
     """A handoff cannot be decided as asked -- no such recipient, or it was
@@ -59,7 +67,7 @@ def can_auto_accept(store: Store, handoff: dict, receiver: dict, coordinator_run
                     limits: collab.MessagingLimits | None = None) -> tuple[bool, str]:
     """Whether `handoff` may skip the human and wake `receiver` now.
 
-    Four gates, in order of how cheaply they refuse:
+    Five gates, in order of how cheaply they refuse:
 
     1. The requested action, if named, is never on the always-approve floor
        or the never-approvable list -- checked with the exact same
@@ -71,7 +79,11 @@ def can_auto_accept(store: Store, handoff: dict, receiver: dict, coordinator_run
     3. The task this handoff belongs to is under its own fan-out ceiling --
        `MAX_ACTIVE_CHILDREN_PER_TASK` outstanding children at once, so one
        operator message cannot spend unbounded concurrent compute.
-    4. The receiver is under its own concurrency and budget ceiling -- the
+    4. The room this task lives in is under its own ceiling --
+       `MAX_ACTIVE_RUNS_PER_ROOM` runs in flight across every task the room
+       has, not just this one, so a coordinator cannot get around gate 3 by
+       simply starting a fresh task each time the last one settles.
+    5. The receiver is under its own concurrency and budget ceiling -- the
        same `collab.may_wake_now` gate a priority `message_agent` wake
        already has to clear.
 
@@ -100,6 +112,11 @@ def can_auto_accept(store: Store, handoff: dict, receiver: dict, coordinator_run
     if pending >= MAX_ACTIVE_CHILDREN_PER_TASK:
         return False, (f"this task already has {pending} handoffs outstanding "
                        f"(max {MAX_ACTIVE_CHILDREN_PER_TASK} at once)")
+
+    room_active = collab.active_run_count_for_thread(store, coordinator_run["threadId"])
+    if room_active >= MAX_ACTIVE_RUNS_PER_ROOM:
+        return False, (f"this room already has {room_active} runs in flight "
+                       f"(max {MAX_ACTIVE_RUNS_PER_ROOM} at once)")
 
     limits = limits or collab.limits_for_org(store)
     allowed, reason = collab.may_wake_now(store, receiver, limits)

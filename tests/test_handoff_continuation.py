@@ -198,6 +198,35 @@ class TestCanAutoAccept:
         assert not ok
         assert "outstanding" in reason
 
+    def test_a_room_at_its_run_ceiling_does_not_auto_accept(
+            self, agents, coordinator_run, proposed_handoff):
+        """Wider than the per-task ceiling on purpose: a coordinator cannot
+        route around gate 3 by starting a fresh task in the same room each
+        time the last one settles -- this counts every run on the thread,
+        not just this task's own children."""
+        for _ in range(handoffs.MAX_ACTIVE_RUNS_PER_ROOM):
+            runs.create(agents, agent_id="ops", thread_id=coordinator_run["threadId"], goal="busy")
+        receiver = agents.get(K.agent_pk("ops"), "META")
+
+        ok, reason = handoffs.can_auto_accept(agents, proposed_handoff, receiver, coordinator_run)
+
+        assert not ok
+        assert "in flight" in reason
+
+    def test_a_room_under_its_run_ceiling_still_auto_accepts(
+            self, agents, coordinator_run, proposed_handoff):
+        # Filler runs are `eng`'s, not the receiver's -- this must exercise
+        # only the room-wide ceiling, not the receiver's own concurrency one.
+        # coordinator_run itself already counts as one active run on the
+        # thread, so this leaves the room one run short of the ceiling.
+        for _ in range(handoffs.MAX_ACTIVE_RUNS_PER_ROOM - 2):
+            runs.create(agents, agent_id="eng", thread_id=coordinator_run["threadId"], goal="busy")
+        receiver = agents.get(K.agent_pk("ops"), "META")
+
+        ok, reason = handoffs.can_auto_accept(agents, proposed_handoff, receiver, coordinator_run)
+
+        assert ok, reason
+
 
 class TestAccept:
     def test_accepting_spawns_a_child_run_and_binds_it_to_a_task(
