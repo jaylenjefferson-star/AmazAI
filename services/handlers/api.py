@@ -479,7 +479,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
                                 created_by=_owner(event))
         # Saved *from* a conversation (the console's "Save as skill" on a message):
         # the history line is written by the save itself, in that conversation.
-        if isinstance(source, str) and store.try_get(K.thread_pk(source), "META"):
+        if isinstance(source, str) and store.try_get(K.thread_pk(store.owner_id, source), "META"):
             threads.event(store, source, f"Saved as a skill: {created['name']}", icon="file")
         return _resp(201, created)
 
@@ -554,7 +554,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         # in the same second as the marker counts as read -- the alternative,
         # `>=`, makes a read never clear anything.
         for thread in rows:
-            marker = store.try_get(K.thread_pk(thread["threadId"]), "READ") or {}
+            marker = store.try_get(K.thread_pk(store.owner_id, thread["threadId"]), "READ") or {}
             thread["readAt"] = marker.get("readAt")
             thread["unread"] = bool(
                 thread.get("lastActivity")
@@ -576,7 +576,7 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         session = ({"sessionId": K.bot_session_id(store.owner_id, agent_ids[0], thread_id)}
                    if len(agent_ids) == 1 else {})
         return _resp(201, store.put({
-            "pk": K.thread_pk(thread_id), "sk": "META",
+            "pk": K.thread_pk(store.owner_id, thread_id), "sk": "META",
             "entity": "Thread", "threadId": thread_id,
             "gsi1pk": "THREADS", "gsi1sk": now_iso(),
             "kind": body.get("kind", "dm"),
@@ -595,13 +595,13 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         return _patch_room(store, p[0], body)
 
     if (p := _match(path, "/threads/{id}")) and method == "GET":
-        thread = store.get(K.thread_pk(p[0]), "META")
+        thread = store.get(K.thread_pk(store.owner_id, p[0]), "META")
         # Agent-to-agent traffic (`AgentMessage`) is a coordination event, not
         # a chat turn -- see /threads/{id}/coordination. Mixing it into
         # `messages` would render it as an ordinary bubble in the room the
         # owner reads, which is exactly the "looks like a shared DM" framing
         # this route must not produce.
-        rows = store.query(K.thread_pk(p[0]), sk_prefix="MSG#", limit=200)
+        rows = store.query(K.thread_pk(store.owner_id, p[0]), sk_prefix="MSG#", limit=200)
         thread["messages"] = [r for r in rows if r.get("entity") != "AgentMessage"]
         return _resp(200, thread)
 
@@ -619,8 +619,8 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     # write path: sender/recipient are the only agents who may address one
     # another here, and the owner is a reader, not a third participant.
     if (p := _match(path, "/threads/{id}/coordination")) and method == "GET":
-        store.get(K.thread_pk(p[0]), "META")   # 404 if the thread is not ours
-        agent_messages = [r for r in store.query(K.thread_pk(p[0]), sk_prefix="MSG#", limit=200)
+        store.get(K.thread_pk(store.owner_id, p[0]), "META")   # 404 if the thread is not ours
+        agent_messages = [r for r in store.query(K.thread_pk(store.owner_id, p[0]), sk_prefix="MSG#", limit=200)
                           if r.get("entity") == "AgentMessage"]
         thread_runs = [r for r in store.query_index("gsi1", "gsi1pk", "RUNS", limit=500)
                       if r.get("threadId") == p[0]]
@@ -702,10 +702,10 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     # derived on read rather than stored, so it cannot drift from the
     # activity it describes.
     if (p := _match(path, "/threads/{id}/read")) and method == "POST":
-        thread = store.get(K.thread_pk(p[0]), "META")   # 404 if not ours
+        thread = store.get(K.thread_pk(store.owner_id, p[0]), "META")   # 404 if not ours
         at = body.get("at") or thread.get("lastActivity") or now_iso()
         marker = store.put({
-            "pk": K.thread_pk(p[0]), "sk": "READ",
+            "pk": K.thread_pk(store.owner_id, p[0]), "sk": "READ",
             "entity": "ReadMarker", "threadId": p[0], "readAt": at,
         })
         return _resp(200, {"threadId": p[0], "readAt": marker["readAt"]})
@@ -982,7 +982,7 @@ def _post_message(store: Store, thread_id: str, body: dict):
     if not text:
         return _resp(400, {"error": "text is required"})
 
-    thread = store.get(K.thread_pk(thread_id), "META")
+    thread = store.get(K.thread_pk(store.owner_id, thread_id), "META")
     explicit = body.get("agentId")
     targets = [explicit] if explicit else dispatch.targets_for(thread, text)
     if not targets:
@@ -1006,11 +1006,11 @@ def _post_message(store: Store, thread_id: str, body: dict):
                 break
 
     store.put({
-        "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
+        "pk": K.thread_pk(store.owner_id, thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "user", "author": "you", "text": text,
         **({"skill": skill["name"]} if skill else {}),
     })
-    store.update(K.thread_pk(thread_id), "META", threads.touch(text, "user"))
+    store.update(K.thread_pk(store.owner_id, thread_id), "META", threads.touch(text, "user"))
 
     names = {}
     if len(targets) > 1:
@@ -1092,7 +1092,7 @@ def _event_in_dm(store: Store, agent_id: str, text: str, *, icon: str = "check",
     turn a success into an error."""
     thread_id = f"dm-{agent_id}"
     try:
-        if store.try_get(K.thread_pk(thread_id), "META"):
+        if store.try_get(K.thread_pk(store.owner_id, thread_id), "META"):
             threads.event(store, thread_id, text, icon=icon, **extra)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
@@ -1105,7 +1105,7 @@ def _patch_room(store: Store, thread_id: str, body: dict):
     check are the same ones creating a room applies -- membership is not a way
     round either.
     """
-    thread = store.get(K.thread_pk(thread_id), "META")
+    thread = store.get(K.thread_pk(store.owner_id, thread_id), "META")
     if thread.get("kind") != "room":
         return _resp(400, {"error": "invalid_request",
                            "detail": "only a room's members can be changed"})
@@ -1142,7 +1142,7 @@ def _patch_room(store: Store, thread_id: str, body: dict):
     if not changes:
         raise A.ValidationError("no editable fields supplied")
 
-    updated = store.update(K.thread_pk(thread_id), "META", changes)
+    updated = store.update(K.thread_pk(store.owner_id, thread_id), "META", changes)
 
     def name(agent_id: str) -> str:
         return (store.try_get(K.agent_pk(store.owner_id, agent_id), "META") or {}).get("name", agent_id)
@@ -1175,7 +1175,7 @@ def _exec(store: Store, thread_id: str, body: dict):
     if not command:
         return _resp(400, {"error": "command is required"})
 
-    thread = store.get(K.thread_pk(thread_id), "META")
+    thread = store.get(K.thread_pk(store.owner_id, thread_id), "META")
     agent_ids = thread.get("agentIds") or []
     if not agent_ids:
         return _resp(400, {"error": "no agent assigned to this thread"})

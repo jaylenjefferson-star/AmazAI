@@ -31,7 +31,7 @@ PREFILL = (
 
 
 def put(world, ts, role, body, **extra):
-    world.store.put({"pk": K.thread_pk(world.run["threadId"]), "sk": K.message_sk(ts, "x"),
+    world.store.put({"pk": K.thread_pk(world.store.owner_id, world.run["threadId"]), "sk": K.message_sk(ts, "x"),
                      "entity": "Message", "role": role,
                      "author": "you" if role == "user" else "Comms", "text": body, **extra})
 

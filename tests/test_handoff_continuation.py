@@ -249,7 +249,7 @@ class TestAccept:
     def test_accepting_writes_a_visible_message_in_the_task(
             self, agents, coordinator_run, proposed_handoff):
         handoffs.accept(agents, coordinator_run, proposed_handoff, decided_by="system:auto-accept")
-        messages = [r for r in agents.query(K.thread_pk(coordinator_run["threadId"]), sk_prefix="MSG#")
+        messages = [r for r in agents.query(K.thread_pk(agents.owner_id, coordinator_run["threadId"]), sk_prefix="MSG#")
                    if r.get("entity") == "AgentMessage"]
         assert len(messages) == 1
         assert messages[0]["senderAgentId"] == "eng"

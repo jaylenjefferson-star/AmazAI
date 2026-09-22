@@ -251,7 +251,7 @@ def fire(store, routine: dict, *, invoke, trigger_type: str | None = None,
     if not thread_id:
         thread_id = new_id("th_")
         store.put({
-            "pk": K.thread_pk(thread_id), "sk": "META",
+            "pk": K.thread_pk(store.owner_id, thread_id), "sk": "META",
             "entity": "Thread", "threadId": thread_id,
             "gsi1pk": "THREADS", "gsi1sk": now_iso(),
             "kind": "routine", "title": routine.get("name", "Routine"),
@@ -264,7 +264,7 @@ def fire(store, routine: dict, *, invoke, trigger_type: str | None = None,
     from amazai.store import ordered_suffix
     prompt = routine.get("prompt") or routine.get("purpose", "")
     store.put({
-        "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
+        "pk": K.thread_pk(store.owner_id, thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "user", "author": "routine",
         "routineId": routine_id, "text": prompt,
     })

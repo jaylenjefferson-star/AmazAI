@@ -115,13 +115,13 @@ class MessagingLimits:
     hop_window_minutes: int = DEFAULT_HOP_WINDOW_MINUTES
 
 
-def _context_pk(context: Context) -> str:
+def _context_pk(owner_id: str, context: Context) -> str:
     """Message history for both kinds of context lives in a Thread row: a
     `room` context's own thread, or the task's owning run's thread -- so a
     priority-woken recipient's run (spawned onto that same threadId) sees
     the conversation with no separate lookup, and the console's task-bound
     room is just this thread."""
-    return K.thread_pk(context.thread_id)
+    return K.thread_pk(owner_id, context.thread_id)
 
 
 def direct_thread_id(one: str, other: str) -> str:
@@ -146,7 +146,7 @@ def direct_context(store: Store, *, sender_id: str, recipient_id: str) -> Contex
     costs one message rather than a turn for every member of a room.
     """
     thread_id = direct_thread_id(sender_id, recipient_id)
-    pk = K.thread_pk(thread_id)
+    pk = K.thread_pk(store.owner_id, thread_id)
     existing = store.try_get(pk, "META")
     if existing is not None:
         return Context(kind=DIRECT, context_id=thread_id, thread_id=thread_id,
@@ -210,7 +210,7 @@ def resolve_context(store: Store, *, task_id: str | None = None,
         return Context(kind="task", context_id=task_id, thread_id=run["threadId"],
                        participants=frozenset(participants))
 
-    thread = store.try_get(K.thread_pk(collaboration_context_id), "META")
+    thread = store.try_get(K.thread_pk(store.owner_id, collaboration_context_id), "META")
     if thread is None:
         raise MessagingError(f"no such collaboration context {collaboration_context_id!r}")
     return Context(kind="room", context_id=collaboration_context_id,
@@ -283,7 +283,7 @@ def _agent_messages_since(store: Store, context: Context, *, minutes: int,
     now = now or datetime.now(timezone.utc)
     since = (now - timedelta(minutes=max(1, minutes))).isoformat(
         timespec="seconds").replace("+00:00", "Z")
-    rows = store.query(_context_pk(context),
+    rows = store.query(_context_pk(store.owner_id, context),
                        sk_between=K.message_sk_since(since),
                        limit=MAX_WINDOW_MESSAGES, ascending=False)
     return [r for r in rows if r.get("entity") == "AgentMessage"]
@@ -299,7 +299,7 @@ def _log_denied(store: Store, context: Context, *, sender_id: str, recipient_id:
                 reason: str, policy_result: PolicyResult) -> None:
     stamp = now_iso()
     store.put({
-        "pk": _context_pk(context), "sk": f"MSGDENY#{stamp}#{ordered_suffix()}",
+        "pk": _context_pk(store.owner_id, context), "sk": f"MSGDENY#{stamp}#{ordered_suffix()}",
         "entity": "AgentMessageDenied",
         "gsi1pk": "MESSAGES", "gsi1sk": f"{stamp}#denied",
         "senderAgentId": sender_id, "recipientAgentId": recipient_id,
@@ -388,7 +388,7 @@ def send(store: Store, *, sender_agent_id: str, recipient_agent_id: str, args: d
     stamp = now_iso()
     message_id = new_id("msg_")
     row = {
-        "pk": _context_pk(context), "sk": K.message_sk(stamp, ordered_suffix()),
+        "pk": _context_pk(store.owner_id, context), "sk": K.message_sk(stamp, ordered_suffix()),
         "entity": "AgentMessage", "messageId": message_id,
         "gsi1pk": "MESSAGES", "gsi1sk": f"{stamp}#{message_id}",
         "senderAgentId": sender_agent_id, "recipientAgentId": recipient_agent_id,

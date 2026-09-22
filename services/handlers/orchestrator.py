@@ -275,12 +275,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     ))
 
     # --- conversation ------------------------------------------------------
-    thread = store.get(K.thread_pk(run["threadId"]), "META")
+    thread = store.get(K.thread_pk(store.owner_id, run["threadId"]), "META")
     # The *newest* MAX_HISTORY rows, oldest first. Asking DynamoDB for `limit=40` in
     # ascending order returns the first 40 ever written, so past 40 rows the model
     # would stop seeing the conversation's end -- including the message it is
     # being asked to answer.
-    history = list(reversed(store.query(K.thread_pk(run["threadId"]), sk_prefix="MSG#",
+    history = list(reversed(store.query(K.thread_pk(store.owner_id, run["threadId"]), sk_prefix="MSG#",
                                         limit=MAX_HISTORY, ascending=False)))
     # The *newest* MAX_MEMORY rows, for the same reason the history above is read
     # backwards: `mem_` ids carry a millisecond timestamp (store.new_id), so MEM#
@@ -1734,7 +1734,7 @@ def _create_group_chat(store: Store, run: dict, agent: dict, args: dict) -> dict
 
     thread_id = new_id("th_")
     store.put({
-        "pk": K.thread_pk(thread_id), "sk": "META",
+        "pk": K.thread_pk(store.owner_id, thread_id), "sk": "META",
         "entity": "Thread", "threadId": thread_id,
         "gsi1pk": "THREADS", "gsi1sk": now_iso(),
         "kind": "room", "title": title, "agentIds": agent_ids,
@@ -1880,7 +1880,7 @@ def _persist_message(store: Store, run: dict, agent: dict, text: str, cost: RunC
     ones.
     """
     row = {
-        "pk": K.thread_pk(run["threadId"]),
+        "pk": K.thread_pk(store.owner_id, run["threadId"]),
         "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "assistant",
         "author": agent.get("name"), "agentId": agent["agentId"],
@@ -1901,7 +1901,7 @@ def _persist_message(store: Store, run: dict, agent: dict, text: str, cost: RunC
     # opened could never make it unread. Cosmetic to the run, so a failure
     # here is logged and never allowed to fail the run that just succeeded.
     try:
-        store.update(K.thread_pk(run["threadId"]), "META", threads.touch(text, "assistant"))
+        store.update(K.thread_pk(store.owner_id, run["threadId"]), "META", threads.touch(text, "assistant"))
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 

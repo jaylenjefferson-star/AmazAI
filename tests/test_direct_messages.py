@@ -50,7 +50,7 @@ def dm(agents, text="can you confirm the Q3 numbers?", sender="eng", to="ops", *
 
 
 def thread(agents, sender="eng", to="ops"):
-    return agents.try_get(K.thread_pk(collab.direct_thread_id(sender, to)), "META")
+    return agents.try_get(K.thread_pk(agents.owner_id, collab.direct_thread_id(sender, to)), "META")
 
 
 class TestTheConversationTwoBotsShare:
@@ -81,7 +81,7 @@ class TestTheConversationTwoBotsShare:
         dm(agents, "first")
         dm(agents, "second", sender="ops", to="eng")
         said = [m["text"] for m in agents.query(
-            K.thread_pk(collab.direct_thread_id("eng", "ops")), sk_prefix="MSG#")]
+            K.thread_pk(agents.owner_id, collab.direct_thread_id("eng", "ops")), sk_prefix="MSG#")]
         assert said == ["first", "second"]
 
     def test_the_operator_can_read_it(self, agents):
@@ -189,7 +189,7 @@ class TestThroughTheToolTheModelCalls:
 
 class TestNamingASharedContextStillSendsIntoIt:
     def test_a_room_message_goes_to_the_room_not_to_a_direct_conversation(self, agents):
-        agents.put({"pk": K.thread_pk("room-1"), "sk": "META", "entity": "Thread",
+        agents.put({"pk": K.thread_pk(agents.owner_id, "room-1"), "sk": "META", "entity": "Thread",
                     "kind": "room", "agentIds": ["eng", "ops"]})
         row = dm(agents, "status", collaboration_context_id="room-1")["message"]
         assert row["contextKind"] == "room"

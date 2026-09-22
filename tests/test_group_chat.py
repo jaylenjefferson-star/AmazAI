@@ -158,7 +158,7 @@ class TestABotOpeningATaskRoom:
         })["toolResult"]
 
         assert result["created"] is True and result["agentIds"] == [chief, ops]
-        room = world.store.get(K.thread_pk(result["threadId"]), "META")
+        room = world.store.get(K.thread_pk(world.store.owner_id, result["threadId"]), "META")
         assert room["kind"] == "room" and room["createdBy"] == f"agent:{chief}"
         created_runs = [r for r in world.store.query_index("gsi1", "gsi1pk", "RUNS", limit=20)
                         if r["threadId"] == result["threadId"]]

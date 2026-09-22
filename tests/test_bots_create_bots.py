@@ -268,7 +268,7 @@ class TestBriefingTheNewBot:
     def test_the_assigned_task_is_the_first_timeline_item_not_a_generic_greeting(self, world, woken):  # noqa: F811
         task = "Summarise the rivals."
         create(world, firstTask=task)
-        rows = world.store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")
+        rows = world.store.query(K.thread_pk(world.store.owner_id, "dm-scout"), sk_prefix="MSG#")
         assert len(rows) == 1
         assert rows[0]["role"] == "user" and rows[0]["kind"] == "briefing"
         assert rows[0]["text"] == task
@@ -279,7 +279,7 @@ class TestBriefingTheNewBot:
 
     def test_the_briefing_is_the_unread_thread_preview(self, world, woken):  # noqa: F811
         create(world, firstTask="Summarise the rivals.")
-        thread = world.store.get(K.thread_pk("dm-scout"), "META")
+        thread = world.store.get(K.thread_pk(world.store.owner_id, "dm-scout"), "META")
         assert thread["preview"] == "Summarise the rivals."
         assert thread["previewRole"] == "briefing"
         assert thread["previewAuthor"] == world.agent["name"]
@@ -287,7 +287,7 @@ class TestBriefingTheNewBot:
     def test_without_a_first_task_it_waits_and_keeps_the_normal_starter(self, world, woken):  # noqa: F811
         out = create(world)["toolResult"]
         assert out["briefed"] is False and "waiting" in out["briefing"] and woken == []
-        rows = world.store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")
+        rows = world.store.query(K.thread_pk(world.store.owner_id, "dm-scout"), sk_prefix="MSG#")
         assert len(rows) == 1 and rows[0].get("starter") is True
         assert "good to meet you" in rows[0]["text"]
 
@@ -296,7 +296,7 @@ class TestBriefingTheNewBot:
         out = create(world, firstTask="Go.")["toolResult"]
         assert out["created"] is True and out["briefed"] is False and "over budget" in out["briefing"]
         assert woken == []
-        rows = world.store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")
+        rows = world.store.query(K.thread_pk(world.store.owner_id, "dm-scout"), sk_prefix="MSG#")
         assert [(r.get("kind"), r["text"]) for r in rows] == [("briefing", "Go.")]
 
     def test_the_new_bot_is_asked_its_job_as_its_whole_conversation(self, world, woken, monkeypatch):  # noqa: F811
@@ -664,7 +664,7 @@ class TestApprovedProposalFirstTask:
         assert launch["status"] == "started" and started == [(launch["runId"], "owner-a")]
         run = store.get(K.run_pk(launch["runId"]), "META")
         assert run["goal"] == "Summarise the rivals."
-        rows = store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")
+        rows = store.query(K.thread_pk(store.owner_id, "dm-scout"), sk_prefix="MSG#")
         assert [(r.get("kind"), r.get("starter"), r["text"]) for r in rows] == [
             ("briefing", None, "Summarise the rivals.")]
         assert rows[0]["fromAgentId"] == parent["agentId"]
@@ -690,7 +690,7 @@ class TestApprovedProposalFirstTask:
 
         assert launch == {"status": "deferred", "reason": "over budget"}
         assert store.query_index("gsi1", "gsi1pk", "RUNS") == []
-        assert store.query(K.thread_pk("dm-scout"), sk_prefix="MSG#")[0]["kind"] == "briefing"
+        assert store.query(K.thread_pk(store.owner_id, "dm-scout"), sk_prefix="MSG#")[0]["kind"] == "briefing"
 
     def test_invoke_failure_leaves_a_recoverable_queued_run(self, api_table, monkeypatch):  # noqa: F811
         from amazai.store import Store

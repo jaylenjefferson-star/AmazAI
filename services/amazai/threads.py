@@ -57,7 +57,7 @@ def event(store, thread_id: str, text: str, *, icon: str = "check", **extra) -> 
     from amazai import keys as K
     from amazai.store import ordered_suffix
     return store.put({
-        "pk": K.thread_pk(thread_id),
+        "pk": K.thread_pk(store.owner_id, thread_id),
         "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "system", "kind": "event",
         "author": "system", "text": text[:240], "icon": icon, **extra,

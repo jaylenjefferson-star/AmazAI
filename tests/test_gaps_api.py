@@ -107,7 +107,7 @@ def test_activity_after_the_marker_makes_it_unread_again(api_table):
     # the marker and the test would pass or fail on timing rather than on the
     # rule it is checking.
     store = Store("owner-a")
-    store.update(K.thread_pk(thread["threadId"]), "META",
+    store.update(K.thread_pk(store.owner_id, thread["threadId"]), "META",
                  {"lastActivity": "2099-01-01T00:00:00Z"})
 
     _, listed = call("GET", "/threads")

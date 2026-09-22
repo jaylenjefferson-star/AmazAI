@@ -72,7 +72,7 @@ def _default(store: Store, event: dict) -> dict:
     if not thread_id or not text:
         return {"statusCode": 400, "body": "threadId and text are required"}
 
-    thread = store.get(K.thread_pk(thread_id), "META")
+    thread = store.get(K.thread_pk(store.owner_id, thread_id), "META")
     # An @mention wins in a room; otherwise the thread's first agent. One rule,
     # shared with the HTTP path (`dispatch.targets_for`); this entry point wakes
     # only the first target -- the console sends over HTTP, where a room's
@@ -83,10 +83,10 @@ def _default(store: Store, event: dict) -> dict:
         return {"statusCode": 400, "body": "no agent assigned to this thread"}
 
     store.put({
-        "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
+        "pk": K.thread_pk(store.owner_id, thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
         "entity": "Message", "role": "user", "author": "you", "text": text,
     })
-    store.update(K.thread_pk(thread_id), "META", threads.touch(text, "user"))
+    store.update(K.thread_pk(store.owner_id, thread_id), "META", threads.touch(text, "user"))
 
     run = runs.create(store, agent_id=agent_id, thread_id=thread_id, goal=text)
 

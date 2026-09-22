@@ -42,7 +42,7 @@ def chatter(store, thread_id, count):
     Bot replies, what the system notes. All `MSG#`, none of it agent-to-agent."""
     for i in range(count):
         store.put({
-            "pk": K.thread_pk(thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
+            "pk": K.thread_pk(store.owner_id, thread_id), "sk": K.message_sk(now_iso(), ordered_suffix()),
             "entity": "Message", "role": "user" if i % 2 else "assistant",
             "author": "you" if i % 2 else "eng", "text": f"ordinary message {i}",
         })
@@ -127,7 +127,7 @@ class TestTheReadItself:
     def test_a_message_older_than_the_window_falls_out_of_it(self, agents):
         context = collab.direct_context(agents, sender_id="eng", recipient_id="ops")
         agents.put({
-            "pk": K.thread_pk(thread_id()),
+            "pk": K.thread_pk(agents.owner_id, thread_id()),
             "sk": K.message_sk("2020-01-01T00:00:00Z", ordered_suffix()),
             "entity": "AgentMessage", "text": "last year", "at": "2020-01-01T00:00:00Z",
         })

@@ -81,7 +81,7 @@ def world(api_table, monkeypatch):
     w.script = script
     w.drive = lambda event=None: orch._drive(w.store, w.store.get(w.run["pk"], "META"),
                                              event or {"runId": w.run["runId"]})
-    w.messages = lambda: w.store.query(K.thread_pk(w.run["threadId"]), sk_prefix="MSG#")
+    w.messages = lambda: w.store.query(K.thread_pk(w.store.owner_id, w.run["threadId"]), sk_prefix="MSG#")
     w.state = lambda: w.store.get(w.run["pk"], "META")["state"]
     return w
 
@@ -177,11 +177,11 @@ class TestAWriteIsHeldThenResumed:
 
     def test_a_greeting_is_never_sent_to_the_model(self, world):
         from amazai import threads
-        world.store.put({"pk": K.thread_pk(world.run["threadId"]),
+        world.store.put({"pk": K.thread_pk(world.store.owner_id, world.run["threadId"]),
                          "sk": K.message_sk("2026-01-01T00:00:00Z", "a"),
                          "entity": "Message", "role": "assistant", "author": "Comms",
                          "text": "Hey — good to meet you.", "starter": True})
-        world.store.put({"pk": K.thread_pk(world.run["threadId"]),
+        world.store.put({"pk": K.thread_pk(world.store.owner_id, world.run["threadId"]),
                          "sk": K.message_sk("2026-01-01T00:00:01Z", "b"),
                          "entity": "Message", "role": "user", "author": "you", "text": "post it"})
         fake = world.script([text("ok")])
@@ -191,7 +191,7 @@ class TestAWriteIsHeldThenResumed:
 
     def test_a_history_line_is_never_sent_to_the_model(self, world):
         from amazai import threads
-        world.store.put({"pk": K.thread_pk(world.run["threadId"]),
+        world.store.put({"pk": K.thread_pk(world.store.owner_id, world.run["threadId"]),
                          "sk": K.message_sk("2026-01-01T00:00:01Z", "b"),
                          "entity": "Message", "role": "user", "author": "you", "text": "post it"})
         threads.event(world.store, world.run["threadId"], "Routine created: X", icon="clock")
