@@ -178,7 +178,7 @@ def principal_from_event(event: dict) -> Principal:
 
 # --- the internal user record -----------------------------------------------
 
-def ensure_user(store: Store, principal: Principal) -> dict:
+def ensure_user(store: Store, principal: Principal) -> tuple[dict, bool]:
     """Map an Auth0 subject to an internal user row, creating it on first sight.
 
     The row exists so everything else can key on a stable internal id and so
@@ -187,6 +187,12 @@ def ensure_user(store: Store, principal: Principal) -> dict:
 
     Email is stored as a convenience and refreshed on each call, because it
     can change at the identity provider. Nothing keys on it.
+
+    Returns the row and whether this call is the one that created it --
+    `get_or_create`-shaped, because that boolean is the one honest signal
+    that this request is an Auth0 signup rather than a returning sign-in
+    (see `api._warm_account_harness`), and re-deriving it from timestamps
+    would be guessing at clock precision instead of just saying so.
     """
     pk = K.user_pk(principal.user_id)
     existing = store.try_get(pk, "META")
@@ -196,9 +202,9 @@ def ensure_user(store: Store, principal: Principal) -> dict:
         if principal.email and existing.get("email") != principal.email:
             changes["email"] = principal.email
             changes["emailVerified"] = principal.email_verified
-        return store.update(pk, "META", changes)
+        return store.update(pk, "META", changes), False
 
-    return store.put({
+    row = store.put({
         "pk": pk, "sk": "META",
         "entity": "User", "userId": principal.user_id,
         "gsi1pk": "USERS", "gsi1sk": now_iso(),
@@ -207,6 +213,7 @@ def ensure_user(store: Store, principal: Principal) -> dict:
         "emailVerified": principal.email_verified,
         "createdAt": now_iso(), "lastSeenAt": now_iso(),
     })
+    return row, True
 
 
 # --- the owner allowlist ----------------------------------------------------
