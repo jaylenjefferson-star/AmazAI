@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import traceback
 
@@ -92,6 +93,41 @@ def _leaves_session_owing(error_text: str) -> bool:
     dolly-kelly and several other Bots' shared-harness sessions).
     """
     return _DANGLING_TOOL_USE_MARKER in (error_text or "").lower()
+
+
+#: A reply's own last sentence promising imminent action ("Let me pull that
+#: now", "I'll do all of them now") -- see `_looks_unfulfilled`. Excludes
+#: "let me know", the common benign closer, so a genuinely finished reply
+#: that happens to end that way is not mistaken for one that is not.
+_UNFULFILLED_COMMITMENT = re.compile(
+    r"(?:^|[.!?]\s+)(let me|i'?ll|i will|i'?m going to)\s+(?!know\b)\S",
+    re.IGNORECASE,
+)
+
+
+def _looks_unfulfilled(text: str) -> bool:
+    """Whether a turn's own words say it is about to act, right after it
+    stopped having acted on nothing.
+
+    Added after a real, repeated pattern: asked to do something, a Bot would
+    answer with only a description of what it was about to do -- "Let me
+    update every agent's role... I'll do all of them now." -- and end its
+    turn there, having called no tool at all. `_persistence_note` in the
+    system prompt already asks a Bot not to do this; this is the code-level
+    backstop for when the guidance alone does not hold, and it is deliberately
+    narrow: only the turn's *own last sentence* is checked (an "I'll" used
+    mid-explanation, followed by a reply that genuinely finishes, is left
+    alone), and it is only ever consulted when this turn made zero tool
+    calls -- see the `rounds == 0` guard at the call site. A wrong read here
+    costs one bounded extra turn (`MAX_AUTO_CONTINUES`), not a loop: worst
+    case the model replies that it already has nothing further to add.
+    """
+    tail = text.strip()
+    if not tail:
+        return False
+    sentences = re.split(r"(?<=[.!?])\s+", tail)
+    last = sentences[-1] if sentences else tail
+    return bool(_UNFULFILLED_COMMITMENT.search(last))
 
 
 @dataclass
@@ -466,9 +502,10 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # rewrite below moves this run onto it immediately so a same-run retry is
     # not doomed to repeat the failure it is retrying from.
     dirty_exit = False
-    # Set only inside the round/time ceiling branch below; read after the loop
-    # to decide whether to queue the next leg automatically instead of ending
-    # on "ask me to carry on."
+    # Set inside the round/time ceiling branch, or the zero-tool-call natural
+    # exit when the reply itself looks unfinished (see `_looks_unfulfilled`);
+    # read after the loop to decide whether to queue the next leg
+    # automatically instead of ending on "ask me to carry on" or nothing at all.
     auto_continuing = False
     turn = Turn()
     started_at = now_iso()
@@ -641,6 +678,17 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
             # The model asked for something and stopped to wait for it. Answer, and let it go on.
             if stream_error or pending_approval or not answered:
+                if not stream_error and not pending_approval and rounds == 0:
+                    # `rounds` only advances past a round that had tool calls to
+                    # answer (just below); still 0 here means this whole turn
+                    # made none. That shape is indistinguishable from a genuine
+                    # "nothing more to do" finish by `answered` alone -- both are
+                    # empty -- so `_looks_unfulfilled` is what tells the two apart.
+                    consecutive = int((run.get("trigger") or {}).get("autoContinued", 0) or 0)
+                    auto_continuing = (
+                        consecutive < MAX_AUTO_CONTINUES
+                        and _looks_unfulfilled("".join(buffer[round_from:]))
+                    )
                 break
             if runs.is_cancelled(store, run):
                 # Reached only once `answered` is known non-empty (the guard
@@ -1000,18 +1048,26 @@ def _persistence_note() -> str:
     deliver" -- proof the model could do the work in one turn the whole time,
     it just had not been told that stopping to narrate intent is not a
     finished turn.
+
+    This alone did not fully hold: the identical shape recurred later,
+    verbatim ("I'll do all of them now." -- and then nothing, no tool called).
+    `_looks_unfulfilled` is the code-level backstop for exactly that turn
+    shape now, bounded the same way a round-ceiling auto-continue is. This
+    note stays regardless -- catching it a turn late still costs a delay the
+    operator notices, so the better fix is still not doing it in the first place.
     """
     return (
         "\n\n## Finish the task\n"
         "If you say you are about to do something, do it now, in this same "
         "turn, with your tools -- do not end your turn having only described "
         "an intention and wait to be told to continue. A turn that says "
-        "\"let me pull the data\" or \"I'll take a look\" and stops there is "
-        "not a finished turn; keep calling tools and working until you have "
-        "an actual result to give, or you hit a real blocker you cannot "
-        "resolve yourself (missing access, a decision only the operator can "
-        "make, information nobody has given you). State the blocker plainly "
-        "when that happens; otherwise, finish it."
+        "\"let me pull the data\", \"I'll take a look\", or \"I'll do that "
+        "now\" and stops there, with no tool actually called, is not a "
+        "finished turn; keep calling tools and working until you have an "
+        "actual result to give, or you hit a real blocker you cannot resolve "
+        "yourself (missing access, a decision only the operator can make, "
+        "information nobody has given you). State the blocker plainly when "
+        "that happens; otherwise, finish it."
     )
 
 

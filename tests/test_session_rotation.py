@@ -265,6 +265,54 @@ class TestTheRoundCeilingAutoContinues:
         assert epoch_of(world) == before + 1
 
 
+class TestAnUnfulfilledCommitmentAutoContinues:
+    """A reply that promises action and calls no tool is indistinguishable
+    from a genuinely finished one by `answered` alone -- both are empty, and
+    no ceiling fires to explain it. Confirmed in production, twice, against
+    the identical shape: "I'll do all of them now." and then nothing."""
+
+    def _continuation(self, world):  # noqa: F811
+        rows = world.store.query_index(
+            "gsi1", "gsi1pk", "RUNS",
+            predicate=lambda r: (r.get("trigger") or {}).get("redirectOf") == world.run["runId"])
+        return rows
+
+    def test_a_reply_that_promises_action_and_calls_nothing_auto_continues(self, world):  # noqa: F811
+        world.script([text("Let me update every agent's description to reflect that. "
+                           "I'll do all of them now.")])
+
+        world.drive()
+
+        rows = self._continuation(world)
+        assert len(rows) == 1
+        assert rows[0]["trigger"]["autoContinued"] == 1
+        assert rows[0]["trigger"]["type"] == "user"
+
+    def test_a_genuinely_finished_reply_does_not_auto_continue(self, world):  # noqa: F811
+        world.script([text("Done -- the audit is above. Let me know what you'd like to prioritize.")])
+        world.drive()
+        assert self._continuation(world) == []
+
+    def test_an_i_will_used_mid_explanation_does_not_trigger_if_the_reply_still_finishes(self, world):  # noqa: F811
+        world.script([text("I'll note that this is a known limitation. "
+                           "For now, the workaround is asking the operator directly.")])
+        world.drive()
+        assert self._continuation(world) == []
+
+    def test_calling_a_tool_at_all_rules_it_out_regardless_of_the_closing_line(self, world):  # noqa: F811
+        world.script([*tool_use("remember", {"title": "t", "body": "b"}),
+                      text(" I'll do the rest now.")])
+        world.drive()
+        assert self._continuation(world) == []
+
+    def test_stops_at_the_bound_like_the_ceiling_case_does(self, world):  # noqa: F811
+        world.store.update(world.run["pk"], "META",
+                           {"trigger": {"type": "user", "autoContinued": orch.MAX_AUTO_CONTINUES}})
+        world.script([text("Let me do that now.")])
+        world.drive()
+        assert self._continuation(world) == []
+
+
 class TestNothingOutsideTheseFourPathsRotates:
     def test_the_round_that_naturally_runs_out_of_tool_calls_does_not_rotate(self, world):  # noqa: F811
         """A model that stops calling tools on its own -- the ordinary end of a
