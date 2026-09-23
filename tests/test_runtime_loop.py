@@ -252,6 +252,10 @@ class TestCardsComeFromToolCalls:
         assert world.last["review"]["decision"] == review.ALLOWED
 
     def test_a_routine_proposal_becomes_a_card_and_creates_nothing(self, world):
+        # A Bot's own initiative, not a direct ask -- see
+        # TestBotsCreateTheirOwnRoutines for the owner-asked direct-create path.
+        world.store.update(world.run["pk"], "META", {"trigger": {"type": "routine"}})
+        world.run = world.store.get(world.run["pk"], "META")
         world.handle("propose_routine", {"name": "Weekday planning", "schedule": "weekday-9",
                                          "prompt": "Draft the day."})
         assert world.turn.cards == [{"type": "routine", "name": "Weekday planning",
@@ -287,6 +291,8 @@ class TestCardsComeFromToolCalls:
 class TestWhatTheTurnLeavesBehind:
     def test_steps_and_cards_are_stored_on_the_message(self, world):
         world.use(READ, {"channel": "C123"})
+        world.store.update(world.run["pk"], "META", {"trigger": {"type": "routine"}})
+        world.run = world.store.get(world.run["pk"], "META")
         world.handle("propose_routine", {"name": "Digest", "schedule": "daily-730", "prompt": "Summarise."})
         orch._persist_message(world.store, world.run, world.agent, "Here you go.", world.cost,
                               steps=world.turn.steps, cards=world.turn.cards,

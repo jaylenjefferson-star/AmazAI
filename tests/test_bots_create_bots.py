@@ -356,17 +356,67 @@ class TestRefiningABot:
         row = agent_row(world, "scout")
         assert (row["budget"]["perMonthUsd"], row["status"]) == (20.0, "active")
 
-    def test_reportsTo_is_not_something_it_can_touch_either(self, world, woken):  # noqa: F811
+    def test_reportsTo_can_be_moved_when_the_operator_asked(self, world, woken):  # noqa: F811
+        """Organization metadata, not a grant: org.resolve's own docstring says
+        a reporting line "never grant[s] authority", and this path is still
+        gated on _owner_asked -- the operator's own instruction, relayed
+        through whichever Bot they are talking to, is what authorizes it."""
         create(world)
-        before = agent_row(world, "scout").get("reportsTo")
         out = self.refine(world, reportsTo="operator")
-        assert "nothing to change" in out["error"]                       # not a field it accepts
-        assert agent_row(world, "scout").get("reportsTo") == before
+        assert out == {"updated": ["reportsTo"], "agentId": "scout"}
+        assert agent_row(world, "scout")["reportsTo"] == "operator"
+
+    def test_reportsTo_still_refuses_a_self_reference(self, world, woken):  # noqa: F811
+        create(world)
+        out = world.handle("update_agent", {"agentId": "scout", "reportsTo": "scout"})["toolResult"]
+        assert "cannot report to itself" in out["error"]
 
     def test_a_refusal_says_why(self, world, woken):  # noqa: F811
         create(world)
         assert "nothing to change" in self.refine(world)["error"]
         assert "no such Bot" in world.handle("update_agent", {"agentId": "ghost", "title": "x"})["toolResult"]["error"]
+
+
+class TestPausingABot:
+    """The one status change a Bot may make on another -- reversible, and
+    never archival or deletion, which stay operator-only (see
+    docs/architecture/16, "Delete stays user-only")."""
+
+    def test_pauses_when_the_operator_asked(self, world, woken):  # noqa: F811
+        create(world)
+        out = world.handle("pause_agent", {"agentId": "scout"})["toolResult"]
+        assert out == {"agentId": "scout", "status": "paused"}
+        assert agent_row(world, "scout")["status"] == "paused"
+
+    def test_resumes_with_paused_false(self, world, woken):  # noqa: F811
+        create(world)
+        world.handle("pause_agent", {"agentId": "scout"})
+        out = world.handle("pause_agent", {"agentId": "scout", "paused": False})["toolResult"]
+        assert out == {"agentId": "scout", "status": "active"}
+        assert agent_row(world, "scout")["status"] == "active"
+
+    def test_it_only_works_when_the_operators_own_message_started_the_turn(self, world, woken):  # noqa: F811
+        create(world)
+        started_by(world, {"type": "routine"})
+        out = world.handle("pause_agent", {"agentId": "scout"})["toolResult"]
+        assert "operator's own message" in out["error"]
+        assert agent_row(world, "scout")["status"] == "active"
+
+    def test_refuses_a_no_op(self, world, woken):  # noqa: F811
+        create(world)
+        out = world.handle("pause_agent", {"agentId": "scout", "paused": False})["toolResult"]
+        assert "already active" in out["error"]
+
+    def test_an_archived_bot_cannot_be_paused_or_resumed(self, world, woken):  # noqa: F811
+        create(world)
+        world.store.update(K.agent_pk(world.store.owner_id, "scout"), "META",
+                           {"status": "archived", "state": "archived"})
+        out = world.handle("pause_agent", {"agentId": "scout"})["toolResult"]
+        assert "archived" in out["error"]
+
+    def test_a_refusal_says_why(self, world, woken):  # noqa: F811
+        create(world)
+        assert "no such Bot" in world.handle("pause_agent", {"agentId": "ghost"})["toolResult"]["error"]
 
 
 class TestAToolsAnswerGoesBackToTheModel:

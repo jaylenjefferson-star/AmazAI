@@ -88,6 +88,10 @@ def world(api_table, monkeypatch):
 
 class TestDeliverFirstThenOffer:
     def test_the_result_is_said_and_the_offer_comes_after_it_as_a_card(self, world):
+        # A Bot's own initiative, not a direct ask -- propose_routine only
+        # creates a card here; see TestBotsCreateTheirOwnRoutines for the
+        # owner-asked direct-create path.
+        world.store.update(world.run["pk"], "META", {"trigger": {"type": "routine"}})
         world.script([
             text("Here is your plan for the week."),
             *tool_use("propose_routine", {"name": "Weekday planning", "schedule": "weekday-9",

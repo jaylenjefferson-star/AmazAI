@@ -124,18 +124,24 @@ class TestValidate:
         assert org.validate("", "eng", self.ROWS) == "eng"
 
 
-class TestOnlyAPersonDrawsTheLine:
+class TestAReportingLineIsOrganizationMetadataNotAGrant:
+    """`reportsTo` used to sit in `PRIVILEGED_FIELDS` alongside budget, grants
+    and access -- but org.resolve's own docstring is explicit that a
+    reporting line "never grant[s] authority", and the tool that reaches this
+    (`update_agent`) is gated on `_owner_asked` regardless: the operator's own
+    instruction, relayed through whichever Bot they are talking to, is what
+    authorizes the move either way. So it was carved out of
+    `assert_no_self_escalation`'s block, unlike budget/grants/access/status,
+    which stay a person-only change (`TestOnlyAPersonDrawsTheLine` below)."""
     EXISTING = {"agentId": "eng", "status": "active"}
 
-    def test_an_agent_cannot_change_who_anyone_reports_to(self):
+    def test_an_agent_can_move_a_reporting_line(self):
         actor = A.Actor(user_id="u", org_id="org-1", agent_id="chief")
-        with pytest.raises(A.Escalation):
-            A.plan_update(self.EXISTING, {"reportsTo": "chief"}, actor)
-        # ...including its own line, or a peer's: the same rule grants and budgets follow.
-        with pytest.raises(A.Escalation):
-            A.plan_update({"agentId": "chief", "status": "active"}, {"reportsTo": "owner"}, actor)
+        changes, events = A.plan_update(self.EXISTING, {"reportsTo": "chief"}, actor)
+        assert changes == {"reportsTo": "chief"}
+        assert "agent.reporting_changed" in [e["action"] for e in events]
 
-    def test_a_person_can_and_it_is_audited_as_its_own_event(self):
+    def test_a_person_can_too_and_it_is_audited_as_its_own_event(self):
         actor = A.Actor(user_id="owner-a", org_id="org-1")
         changes, events = A.plan_update(self.EXISTING, {"reportsTo": "chief"}, actor)
         assert changes == {"reportsTo": "chief"}
