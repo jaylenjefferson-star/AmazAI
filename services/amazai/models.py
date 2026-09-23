@@ -18,17 +18,27 @@ with and the ladder the resolver uses cannot drift apart.
 from __future__ import annotations
 
 #: Preference order per tier, most capable first.
+#:
+#: A model earns a place here the moment it exists in the region's catalog,
+#: but catalog presence and this account's invoke-access grant are two
+#: different things (`scripts/resolve_models.py`'s `invokable` check is what
+#: tells them apart) -- so within each tier, a newer release that this
+#: account has not been granted access to yet is listed *after* the older
+#: one it would otherwise shadow, not before it. `claude-sonnet-5` and
+#: `claude-opus-5` are known-inaccessible on this account as of 2026-09-22;
+#: keep them present (a later grant should not need a code change to take
+#: effect) but behind the 4.6 generation everywhere they'd otherwise sit first.
 TIERS: dict[str, list[str]] = {
     "frontier": [
-        "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7",
-        "claude-opus-4-6", "claude-sonnet-5",
+        "claude-opus-4-6", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7",
+        "claude-sonnet-4-6", "claude-sonnet-5",
     ],
     "balanced": [
-        "claude-sonnet-5", "claude-opus-5", "claude-sonnet-4-6",
+        "claude-sonnet-4-6", "claude-sonnet-5", "claude-opus-5",
         "claude-haiku-4-5",
     ],
     "fast": [
-        "claude-haiku-4-5", "claude-sonnet-5", "claude-sonnet-4-6",
+        "claude-haiku-4-5", "claude-sonnet-4-6", "claude-sonnet-5",
     ],
 }
 
