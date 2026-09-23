@@ -39,7 +39,7 @@ from amazai.states import RunState
 from tests.fake_composio import WRITE
 from tests.loop_world import POST
 from tests.test_agents_api import api_table, call  # noqa: F401
-from tests.test_drive_loop import FakeCore, text, tool_use, world  # noqa: F401
+from tests.test_drive_loop import FakeCore, text, tool_use, usage, world  # noqa: F401
 
 
 def session_of(world):  # noqa: F811
@@ -157,10 +157,105 @@ class TestTheRoundCeilingRotates:
         result = world.drive()
 
         assert result["state"] == RunState.COMPLETED.value   # the run itself still settles cleanly
-        assert "more tool calls than one turn allows" in [
-            m for m in world.messages() if m["role"] == "assistant"][-1]["text"]
         assert epoch_of(world) == before + 1, (
             "the last round's results were computed and never sent back")
+
+    def test_hitting_the_round_limit_with_auto_continues_exhausted_still_rotates(self, world, monkeypatch):  # noqa: F811
+        """Rotation is about the abandoned tool results, not about whether the
+        ceiling note gets said out loud -- must hold whichever text path runs."""
+        monkeypatch.setattr(orch, "MAX_TOOL_ROUNDS", 2)
+        world.store.update(world.run["pk"], "META",
+                           {"trigger": {"type": "user", "autoContinued": orch.MAX_AUTO_CONTINUES}})
+        before = epoch_of(world)
+        forever = [lambda kw, i=i: tool_use("remember", {"title": f"t{i}", "body": "b"}, f"tu-{i}")
+                   for i in range(6)]
+        world.script(*forever)
+
+        result = world.drive()
+
+        assert result["state"] == RunState.COMPLETED.value
+        assert "more tool calls than one turn allows" in [
+            m for m in world.messages() if m["role"] == "assistant"][-1]["text"]
+        assert epoch_of(world) == before + 1
+
+
+class TestTheRoundCeilingAutoContinues:
+    """A round/time ceiling is friction, not a stop: the task picks itself back
+    up instead of waiting for the operator to say "continue" -- bounded to
+    `MAX_AUTO_CONTINUES` in a row so a task that genuinely cannot finish does
+    not run away with cost on its own."""
+
+    def _continuation(self, world):  # noqa: F811
+        rows = world.store.query_index(
+            "gsi1", "gsi1pk", "RUNS",
+            predicate=lambda r: (r.get("trigger") or {}).get("redirectOf") == world.run["runId"])
+        assert len(rows) == 1, "expected exactly one queued continuation"
+        return rows[0]
+
+    def test_a_fresh_ceiling_hit_queues_a_continuation_instead_of_asking(self, world, monkeypatch):  # noqa: F811
+        monkeypatch.setattr(orch, "MAX_TOOL_ROUNDS", 2)
+        forever = [lambda kw, i=i: tool_use("remember", {"title": f"t{i}", "body": "b"}, f"tu-{i}")
+                   for i in range(6)]
+        world.script(*forever)
+
+        world.drive()
+
+        cont = self._continuation(world)
+        assert cont["agentId"] == world.agent_id and cont["threadId"] == world.run["threadId"]
+        assert cont["trigger"]["type"] == "user"          # still owner-asked; see _owner_asked
+        assert cont["trigger"]["autoContinued"] == 1
+
+    def test_the_continuation_count_climbs_and_stops_at_the_bound(self, world, monkeypatch):  # noqa: F811
+        monkeypatch.setattr(orch, "MAX_TOOL_ROUNDS", 2)
+        world.store.update(world.run["pk"], "META",
+                           {"trigger": {"type": "user", "autoContinued": orch.MAX_AUTO_CONTINUES - 1}})
+        forever = [lambda kw, i=i: tool_use("remember", {"title": f"t{i}", "body": "b"}, f"tu-{i}")
+                   for i in range(6)]
+        world.script(*forever)
+
+        world.drive()
+
+        cont = self._continuation(world)
+        assert cont["trigger"]["autoContinued"] == orch.MAX_AUTO_CONTINUES
+
+    def test_at_the_bound_it_stops_and_asks_instead_of_queuing_another(self, world, monkeypatch):  # noqa: F811
+        monkeypatch.setattr(orch, "MAX_TOOL_ROUNDS", 2)
+        world.store.update(world.run["pk"], "META",
+                           {"trigger": {"type": "user", "autoContinued": orch.MAX_AUTO_CONTINUES}})
+        forever = [lambda kw, i=i: tool_use("remember", {"title": f"t{i}", "body": "b"}, f"tu-{i}")
+                   for i in range(6)]
+        world.script(*forever)
+
+        world.drive()
+
+        rows = world.store.query_index(
+            "gsi1", "gsi1pk", "RUNS",
+            predicate=lambda r: (r.get("trigger") or {}).get("redirectOf") == world.run["runId"])
+        assert rows == []
+        assert "more tool calls than one turn allows" in [
+            m for m in world.messages() if m["role"] == "assistant"][-1]["text"]
+
+    def test_the_budget_ceiling_never_auto_continues(self, world, monkeypatch):  # noqa: F811
+        """A budget stop is a real stop, never friction to smooth over -- auto
+        continuing past it would spend past the ceiling it exists to enforce.
+
+        Starts at $0 (so the start-of-run check passes) and crosses a tiny
+        per-run ceiling once a round's usage event is parsed, exercising the
+        in-loop `money.should_stop` path specifically."""
+        monkeypatch.setattr(orch, "_budget_for", lambda agent: orch.Budget(
+            per_run_usd=0.0000001, per_month_usd=100.0, on_ceiling="hard_stop"))
+        forever = [lambda kw, i=i: [*tool_use("remember", {"title": f"t{i}", "body": "b"}, f"tu-{i}"),
+                                    usage(input_tokens=1000, output_tokens=1000)]
+                   for i in range(3)]
+        world.script(*forever)
+
+        world.drive()
+
+        rows = world.store.query_index(
+            "gsi1", "gsi1pk", "RUNS",
+            predicate=lambda r: (r.get("trigger") or {}).get("redirectOf") == world.run["runId"])
+        assert rows == []
+        assert "I stopped here" in [m for m in world.messages() if m["role"] == "assistant"][-1]["text"]
 
     def test_the_time_ceiling_rotates_the_same_way(self, world, monkeypatch):  # noqa: F811
         monkeypatch.setattr(orch, "ROUND_BUDGET_SECONDS", -1)
