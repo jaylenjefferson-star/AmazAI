@@ -456,8 +456,26 @@ class TestAToolsAnswerGoesBackToTheModel:
         world.drive()
         assert len(fake.calls) == 1 and world.state() == "RETRYING"
 
-    def test_a_loop_of_tool_calls_is_stopped_and_says_so(self, world, monkeypatch):  # noqa: F811
+    def test_a_loop_of_tool_calls_is_stopped_and_auto_continues_instead_of_asking(self, world, monkeypatch):  # noqa: F811
+        """The default now: a round ceiling is friction, not a stop, as long as
+        auto-continues remain -- see TestTheRoundCeilingAutoContinues below for
+        the full behaviour. Here, only that the old "ask me to carry on" text
+        no longer appears when nothing has exhausted the budget yet."""
         monkeypatch.setattr(orch, "MAX_TOOL_ROUNDS", 3)
+        forever = [lambda kw, i=i: tool_use("remember", {"title": f"t{i}", "body": "b"}, f"tu-{i}")
+                   for i in range(10)]
+        fake = world.script(*forever)
+
+        world.drive()
+
+        assert len(fake.calls) == 4                                                  # the first ask and three rounds
+        assert world.state() == "COMPLETED"
+        assert "more tool calls than one turn allows" not in self.said(world)["text"]
+
+    def test_a_loop_of_tool_calls_says_so_once_auto_continues_are_exhausted(self, world, monkeypatch):  # noqa: F811
+        monkeypatch.setattr(orch, "MAX_TOOL_ROUNDS", 3)
+        world.store.update(world.run["pk"], "META",
+                           {"trigger": {"type": "user", "autoContinued": orch.MAX_AUTO_CONTINUES}})
         forever = [lambda kw, i=i: tool_use("remember", {"title": f"t{i}", "body": "b"}, f"tu-{i}")
                    for i in range(10)]
         fake = world.script(*forever)
@@ -470,6 +488,8 @@ class TestAToolsAnswerGoesBackToTheModel:
 
     def test_a_turn_that_has_run_as_long_as_one_may_stops_cleanly_before_the_worker_is_killed(self, world, monkeypatch):  # noqa: F811
         monkeypatch.setattr(orch, "ROUND_BUDGET_SECONDS", -1)
+        world.store.update(world.run["pk"], "META",
+                           {"trigger": {"type": "user", "autoContinued": orch.MAX_AUTO_CONTINUES}})
         fake = world.script([*tool_use("remember", {"title": "t", "body": "b"})], [text("never asked for")])
 
         world.drive()
