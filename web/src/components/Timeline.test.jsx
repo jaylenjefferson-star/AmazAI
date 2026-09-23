@@ -160,6 +160,30 @@ describe('safe Markdown in chat', () => {
     expect(container.textContent).not.toContain('---');
   });
 
+  it('renders a GFM table as an actual table, not mushed pipes and dashes', () => {
+    const table = [
+      '| Priority | What | Why |',
+      '|---|---|---|',
+      '| 1 | Observability | Cannot manage what is not measured |',
+      '| 2 | Delegation tiers | Batch operations need fewer gates |',
+    ].join('\n');
+    const { container } = render(<Body text={table} />);
+
+    expect(container.querySelector('table')).toBeTruthy();
+    expect([...container.querySelectorAll('th')].map((n) => n.textContent))
+      .toEqual(['Priority', 'What', 'Why']);
+    const rows = [...container.querySelectorAll('tbody tr')]
+      .map((r) => [...r.querySelectorAll('td')].map((c) => c.textContent));
+    expect(rows).toEqual([
+      ['1', 'Observability', 'Cannot manage what is not measured'],
+      ['2', 'Delegation tiers', 'Batch operations need fewer gates'],
+    ]);
+    // The raw syntax -- and specifically the header separator row, the exact
+    // shape that used to render as a literal line of dashes -- is gone.
+    expect(container.textContent).not.toContain('|');
+    expect(container.textContent).not.toContain('---');
+  });
+
   it('renders paragraphs, hard breaks, emphasis and code semantically', () => {
     const { container } = render(<Body text={'First soft\nline.\n\nSecond hard  \nbreak with *careful* **bold** and `code`.'} />);
     expect(container.querySelectorAll('p')).toHaveLength(2);
@@ -201,8 +225,15 @@ describe('safe Markdown in chat', () => {
             ids={['example', 'ops', 'janeisha']} onContact={() => {}} />);
     expect(container.querySelectorAll('button.mention')).toHaveLength(2);
     expect(container.querySelector('code')?.textContent).toBe('@janeisha');
-    expect(container.querySelector('a')?.textContent).toBe('@janeisha');
-    expect(container.querySelector('a button')).toBeNull();
+    // The one intentional markdown link stays a plain link, not a mention
+    // action -- found by its href, not by assuming it is the first <a>: GFM
+    // (enabled for tables) also autolinks the bare emails below into their
+    // own <a mailto:...>, which is a real, separate, still-safe link
+    // (mailto: is already in safeUrl's allowlist), never a mention action.
+    const intentionalLink = container.querySelector('a[href="https://example.com"]');
+    expect(intentionalLink?.textContent).toBe('@janeisha');
+    expect(intentionalLink?.querySelector('button')).toBeNull();
+    expect(container.querySelectorAll('a button')).toHaveLength(0);
     expect(container.textContent).toContain('person@example.com');
     expect(container.textContent).toContain('alerts+@ops.com');
     expect(container.textContent).toContain('@nobody');

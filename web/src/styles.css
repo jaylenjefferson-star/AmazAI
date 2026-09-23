@@ -501,6 +501,26 @@ input:focus, textarea:focus {
   color: inherit; text-decoration: underline; text-underline-offset: 2px;
   text-decoration-thickness: 1px;
 }
+.msg .body--markdown .md-table-wrap {
+  margin: .65em 0; max-width: 100%; overflow-x: auto;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: 10px;
+}
+.msg .body--markdown table {
+  width: 100%; border-collapse: collapse; font-size: .92em;
+}
+.msg .body--markdown th,
+.msg .body--markdown td {
+  padding: .5em .7em; text-align: left; vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  white-space: normal;
+}
+.msg .body--markdown tr:last-child th,
+.msg .body--markdown tr:last-child td { border-bottom: 0; }
+.msg .body--markdown th {
+  font-weight: 650;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
 .msg .body--streaming { position: relative; padding-inline-end: 24px; }
 .msg .body--streaming .cursor { position: absolute; right: 10px; bottom: 13px; }
 
