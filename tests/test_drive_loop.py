@@ -86,6 +86,38 @@ def world(api_table, monkeypatch):
     return w
 
 
+class TestRoomWakeStagger:
+    """Production evidence: a five-member room wake fired five concurrent
+    InvokeHarness calls at the one shared harness in the same second, and
+    four came back ReadTimeoutError/502 (see WAKE_STAGGER_SECONDS in
+    orchestrator.py). `wakeIndex` -- this run's position in the wake, set by
+    `api._post_message` -- is what spreads the harness calls out instead."""
+
+    def test_a_wake_index_sleeps_before_the_harness_is_called(self, world, monkeypatch):
+        slept = []
+        monkeypatch.setattr(orch.time, "sleep", slept.append)
+        world.store.update(world.run["pk"], "META", {"trigger": {"type": "user", "wakeIndex": 2}})
+        world.script([text("done")])
+        world.drive()
+        assert slept == [2 * orch.WAKE_STAGGER_SECONDS]
+
+    def test_no_wake_index_never_sleeps(self, world, monkeypatch):
+        slept = []
+        monkeypatch.setattr(orch.time, "sleep", slept.append)
+        world.script([text("done")])
+        world.drive()
+        assert slept == []
+
+    def test_the_stagger_is_capped_so_a_large_room_does_not_wait_forever(self, world, monkeypatch):
+        slept = []
+        monkeypatch.setattr(orch.time, "sleep", slept.append)
+        world.store.update(world.run["pk"], "META",
+                           {"trigger": {"type": "user", "wakeIndex": 10}})
+        world.script([text("done")])
+        world.drive()
+        assert slept == [orch.MAX_WAKE_STAGGER_SLOTS * orch.WAKE_STAGGER_SECONDS]
+
+
 class TestDeliverFirstThenOffer:
     def test_the_result_is_said_and_the_offer_comes_after_it_as_a_card(self, world):
         # A Bot's own initiative, not a direct ask -- propose_routine only
