@@ -119,6 +119,56 @@ def _wait_for_other(store: Store, role_arn: str, seconds: float) -> str | None:
     return None
 
 
+def _adopt_if_actually_ready(store: Store, row: dict, role_arn: str,
+                             core: agentcore.AgentCore) -> str | None:
+    """A live second opinion on the harness the row currently names, before
+    `_take_claim` decides whether to rotate past it.
+
+    The row's own `state`/`rotateName` are a cache, and a real gap opened
+    between what they say and what AWS actually did: `_wait_until_ready`'s
+    budget (`HARNESS_READY_SECONDS`, 18s) is shorter than harness creation
+    sometimes genuinely takes, so a Lambda invocation can time out and mark
+    the row FAILED while the harness it was waiting on keeps provisioning in
+    the background and reaches READY seconds later -- unseen by anyone,
+    because nothing ever looked again before rotating past it. Confirmed in
+    production twice: an account stuck retrying through three generations of
+    harness while the second one sat READY and unused the whole time.
+
+    One live check closes that gap: ask AWS about the name the row already
+    has, and adopt it if AWS says it is healthy, before ever minting a new
+    one. Best-effort in every direction -- any failure here (the harness
+    genuinely gone, a network error, a losing race against another adopter)
+    just falls through to the normal claim/rotate/create path, exactly as if
+    this check had never run.
+    """
+    name = row.get("harnessName")
+    if not name or row.get("state") == PROVISIONING:
+        return None
+    try:
+        harness_arn = core.find_harness(name)
+        if not harness_arn:
+            return None
+        record = _harness(core.get_harness(harness_arn))
+        if record.get("executionRoleArn") not in (None, role_arn):
+            return None
+        if str(record.get("status") or "").upper() not in {"READY", "ACTIVE"}:
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        store.update(_pk(store), _sk(), {
+            "state": READY, "harnessArn": harness_arn, "harnessName": name,
+            "executionRoleArn": role_arn, "readyAt": now_iso(),
+            "error": None, "rotateName": False,
+        }, expect={"claimToken": row.get("claimToken"), "state": row.get("state")})
+        return harness_arn
+    except Conflict:
+        # Someone else already moved the row on since it was read -- adopt
+        # whatever they left rather than fight over which write wins.
+        fresh = store.try_get(_pk(store), _sk(), consistent=True)
+        return _ready_arn(fresh, role_arn) if fresh else None
+
+
 def _take_claim(store: Store, role_arn: str) -> tuple[str, str]:
     """Return `(claim_token, harness_name)` for the one request allowed to create.
 
@@ -229,11 +279,15 @@ def ensure_shared_harness(
     discovers that harness through ListHarnesses instead of leaking another.
     """
     role = _role(role_arn)
+    core = client or agentcore.AgentCore()
     row = store.try_get(_pk(store), _sk())
     if row:
         ready = _ready_arn(row, role)
         if ready:
             return ready
+        recovered = _adopt_if_actually_ready(store, row, role, core)
+        if recovered:
+            return recovered
 
     token, name = _take_claim(store, role)
     if token == "":
@@ -250,7 +304,6 @@ def ensure_shared_harness(
         raise RuntimeUnavailable(
             "the account runtime is still being provisioned; retry this request")
 
-    core = client or agentcore.AgentCore()
     try:
         harness_arn = core.find_harness(name)
         if not harness_arn:

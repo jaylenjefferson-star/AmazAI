@@ -314,9 +314,126 @@ def test_a_terminal_provider_harness_rotates_to_a_new_generation(store):
 
     retry = Core()
     assert RT.ensure_shared_harness(store, client=retry, wait_seconds=0) == ARN
-    assert retry.finds[0] == RT.shared_harness_name(store.owner_id, 2)
+    # The first find is _adopt_if_actually_ready's own live check on the name
+    # the row still has (generation 1) -- a real AWS call, correctly finding
+    # nothing here since this fake reports no existing harness. The name
+    # actually created is generation 2, confirmed unambiguously by the one
+    # create_harness call this run makes.
+    assert retry.finds[0] == RT.shared_harness_name(store.owner_id, 1)
+    assert retry.creates[0]["name"] == RT.shared_harness_name(store.owner_id, 2)
     ready = store.get(K.user_pk(store.owner_id), K.runtime_sk())
     assert ready["generation"] == 2 and ready["state"] == RT.READY
+
+
+class TestARowThatSaysFailedIsNotAlwaysStillFailed:
+    """`_wait_until_ready`'s own budget (HARNESS_READY_SECONDS) is shorter
+    than real harness creation sometimes takes, so a Lambda invocation can
+    time out and mark the row FAILED while the harness it was waiting on
+    keeps provisioning in the background and reaches READY moments later --
+    unseen by anyone, because nothing looked again before rotating past it.
+    Confirmed in production against a real account stuck retrying through
+    three harness generations while the second one sat READY and unused.
+    """
+
+    def _stuck_row(self, store, *, rotate_name: bool) -> None:
+        """A row the way one looks right after a wait timeout or a genuine
+        HarnessRejected: FAILED, still naming generation 1, with rotateName
+        set however that earlier failure classified itself."""
+        store.put({
+            "pk": K.user_pk(store.owner_id), "sk": K.runtime_sk(),
+            "entity": "AccountRuntime", "runtimeKind": "standard",
+            "state": RT.FAILED, "harnessName": RT.shared_harness_name(store.owner_id, 1),
+            "generation": 1, "harnessArn": None, "executionRoleArn": ROLE,
+            "claimToken": "rtclaim_stuck", "claimedAt": "2026-09-23T05:03:25Z",
+            "failedAt": "2026-09-23T05:03:26Z", "rotateName": rotate_name,
+            "error": "RuntimeUnavailable: the account harness is still CREATING",
+        }, unique=True)
+
+    def test_adopts_a_harness_that_became_ready_after_the_row_gave_up(self, store):
+        self._stuck_row(store, rotate_name=False)
+        core = Core(existing=ARN, status="READY")
+
+        result = RT.ensure_shared_harness(store, client=core, wait_seconds=0)
+
+        assert result == ARN
+        assert core.creates == [], "adopted the existing harness; never created a new one"
+        row = store.get(K.user_pk(store.owner_id), K.runtime_sk())
+        assert (row["state"], row["generation"], row["harnessArn"], row["rotateName"]) == (
+            RT.READY, 1, ARN, False)
+
+    def test_adopts_it_even_when_rotateName_was_left_stuck_true(self, store):
+        """The exact production shape: an earlier *genuine* HarnessRejected
+        set rotateName True once, and nothing ever cleared it -- so every
+        retry since has rotated on sight instead of checking whether the
+        harness it already had was fine. The live check does not care what
+        rotateName says; it asks AWS directly."""
+        self._stuck_row(store, rotate_name=True)
+        core = Core(existing=ARN, status="READY")
+
+        result = RT.ensure_shared_harness(store, client=core, wait_seconds=0)
+
+        assert result == ARN
+        assert core.creates == []
+        row = store.get(K.user_pk(store.owner_id), K.runtime_sk())
+        assert row["generation"] == 1, "adopted generation 1 -- never rotated to 2"
+
+    def test_falls_through_to_the_normal_path_when_it_really_is_gone(self, store):
+        self._stuck_row(store, rotate_name=True)
+        core = Core(existing=None)  # AWS has no memory of generation 1 at all
+
+        result = RT.ensure_shared_harness(store, client=core, wait_seconds=0)
+
+        assert result == ARN
+        assert core.creates[0]["name"] == RT.shared_harness_name(store.owner_id, 2)
+
+    def test_falls_through_when_the_named_harness_is_still_failed(self, store):
+        """Unit-level on purpose: the fake `Core` returns one ARN for both a
+        pre-existing and a freshly-created harness, so it cannot represent
+        "generation 1 permanently dead, generation 2 healthy" through the
+        full call -- `test_a_terminal_provider_harness_rotates_to_a_new_generation`
+        already covers that fall-through end to end with two real calls. The
+        decline itself is what belongs to this class."""
+        self._stuck_row(store, rotate_name=True)
+        row = store.get(K.user_pk(store.owner_id), K.runtime_sk())
+        core = Core(existing=ARN, status="CREATE_FAILED")
+
+        recovered = RT._adopt_if_actually_ready(store, row, ROLE, core)
+
+        assert recovered is None
+        untouched = store.get(K.user_pk(store.owner_id), K.runtime_sk())
+        assert untouched["state"] == RT.FAILED and untouched["harnessArn"] is None
+
+    def test_never_adopts_a_harness_on_the_wrong_execution_role(self, store):
+        """Unit-level on purpose: the fake `Core` models one ARN, so it cannot
+        also represent "generation 2, freshly created with the right role" to
+        exercise the full fall-through in the same call. The decline itself
+        is exactly what `_adopt_if_actually_ready` owns, so check it directly."""
+        self._stuck_row(store, rotate_name=False)
+        row = store.get(K.user_pk(store.owner_id), K.runtime_sk())
+        core = Core(existing=ARN, status="READY", role="arn:aws:iam::1:role/some-other-role")
+
+        recovered = RT._adopt_if_actually_ready(store, row, ROLE, core)
+
+        assert recovered is None
+        untouched = store.get(K.user_pk(store.owner_id), K.runtime_sk())
+        assert untouched["state"] == RT.FAILED and untouched["harnessArn"] is None
+
+    def test_a_currently_provisioning_row_is_left_to_the_normal_wait_path(self, store):
+        """Not this check's business: a row someone else is actively working
+        on goes through `_wait_for_other`, unchanged."""
+        store.put({
+            "pk": K.user_pk(store.owner_id), "sk": K.runtime_sk(),
+            "entity": "AccountRuntime", "runtimeKind": "standard",
+            "state": RT.PROVISIONING, "harnessName": RT.shared_harness_name(store.owner_id, 1),
+            "generation": 1, "harnessArn": None, "executionRoleArn": ROLE,
+            "claimToken": "rtclaim_live", "claimedAt": RT.now_iso(), "rotateName": False,
+        }, unique=True)
+        core = Core(existing=ARN, status="READY")
+
+        with pytest.raises(RT.RuntimeUnavailable, match="still being provisioned"):
+            RT.ensure_shared_harness(store, client=core, wait_seconds=0)
+
+        assert core.finds == [], "the live-adopt check must not fire while a claim is active"
 
 
 def test_duplicate_worker_adopts_the_first_runtime_pin(store, monkeypatch):
