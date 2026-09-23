@@ -62,6 +62,30 @@ ROUND_BUDGET_SECONDS = 11 * 60
 #: `propose_agent` is the name a harness made before `create_agent` still carries.
 ROUND_TRIP_TOOLS = frozenset(agentcore.INLINE_TOOLS) | {"propose_agent"}
 
+#: AgentCore's own words for "this session already owes a toolResult it will
+#: never get" -- see `_leaves_session_owing`.
+_DANGLING_TOOL_USE_MARKER = "missing tooluseid"
+
+
+def _leaves_session_owing(error_text: str) -> bool:
+    """Whether an error is AgentCore itself reporting a dangling tool call.
+
+    `dirty_exit` elsewhere in this module is computed from *this
+    invocation's own* `answered`/`carried` -- what the Lambda itself just
+    abandoned. That is the right signal for a stream error or a round
+    ceiling hit mid-turn. It is the wrong signal here: "Inline function
+    result is missing toolUseId" means some *earlier* turn on this session
+    already left a call unanswered, and this invocation may be failing
+    before it has parsed a single event of its own -- `answered` and
+    `carried` are empty not because nothing is owed, but because this
+    attempt never got the chance to see what is. Treating that as "nothing
+    to rotate" is why a session in this state never recovers on its own:
+    every retry repeats the identical failure, forever, because nothing
+    ever calls `runs.mark_session_dirty` (confirmed in production against
+    dolly-kelly and several other Bots' shared-harness sessions).
+    """
+    return _DANGLING_TOOL_USE_MARKER in (error_text or "").lower()
+
 
 @dataclass
 class Turn:
@@ -566,7 +590,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                         # `answered` so far, and anything from an earlier round
                         # in `carried`, are about to be abandoned rather than
                         # sent back -- the session is left owing an answer.
-                        dirty_exit = bool(answered) or bool(carried)
+                        # `_leaves_session_owing` catches the other direction:
+                        # AgentCore saying the session was *already* owing one,
+                        # from before this invocation parsed anything at all.
+                        dirty_exit = (bool(answered) or bool(carried)
+                                     or _leaves_session_owing(stream_error))
                         break
 
                     if parsed.kind is EventKind.TOOL_USE:
@@ -664,8 +692,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
         # including a Lambda-level failure with no chance to reach any of the
         # checks above -- is abandoned along with everything else in this
         # `except`. If it never had anything to abandon, no session is owed
-        # anything and there is nothing to rotate away from.
-        dirty_exit = bool(answered) or bool(carried)
+        # anything and there is nothing to rotate away from -- unless the
+        # error itself is `_leaves_session_owing`: AgentCore reporting that a
+        # *prior* turn left this session owing an answer, which this attempt
+        # can be failing to discover before it has parsed anything of its own.
+        dirty_exit = (bool(answered) or bool(carried)
+                     or _leaves_session_owing(stream_error))
 
     # Wall clock, not a price. What a harness second costs is not established
     # for this account, so the seconds are recorded and rated at zero rather

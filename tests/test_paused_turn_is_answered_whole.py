@@ -424,3 +424,82 @@ class TestAGateThatFiresBeforeTheHarnessRotatesAnAbandonedResume:
 
         assert out == {"ok": False, "reason": "org frozen"}
         assert runs.session_epoch(world.store, world.agent_id, f"dm-{world.agent_id}") == 0
+
+
+class TestADanglingToolUseErrorRotatesEvenWithNothingLocallyAbandoned:
+    """A session can arrive at `_drive` already owing AgentCore an answer from
+    some *earlier* turn -- shipped in production against dolly-kelly and
+    several other Bots sharing the standard harness, 2026-09-22/23. The
+    invocation that discovers this fails on literally its first call, before
+    `answer()` has run even once: `answered` and `carried` are empty not
+    because nothing is owed, but because this attempt never got the chance to
+    see what already was. The old `dirty_exit = bool(answered) or bool(carried)`
+    read that as "nothing to rotate" and left the session exactly as poisoned
+    as it found it -- so every retry, and every later run on the same
+    (agent, thread) pair, repeated the identical failure forever. Confirmed
+    against real run history: two consecutive runs on the same freshly
+    rotated session, neither of which had rotated anything, both dying on the
+    identical `tooluse_...` id from a run that had already completed cleanly.
+
+    `_leaves_session_owing` is the fix: AgentCore's own error text is treated
+    as authoritative proof the session needs to rotate, independent of what
+    this invocation happened to see.
+    """
+
+    def test_the_session_rotates_on_the_first_call_with_nothing_yet_answered(self, world):  # noqa: F811
+        from amazai import runs
+
+        def dangling(_):
+            raise RuntimeError(
+                "An error occurred (runtimeClientError) when calling the "
+                "InvokeHarness operation: Inline function result is missing "
+                "toolUseId 'tooluse_R2jHN31dBZoqH8BHeV1NaD'.")
+
+        world.script(dangling)
+        world.drive()
+
+        assert runs.session_epoch(world.store, world.agent_id, f"dm-{world.agent_id}") == 1
+
+    def test_the_same_error_arriving_as_a_stream_event_also_rotates(self, world):  # noqa: F811
+        """The identical text can arrive as a `runtimeClientError` event inside
+        the stream rather than a raised exception -- the other branch that
+        computes `dirty_exit`, covered separately so both paths stay fixed."""
+        from amazai import runs
+
+        world.script([{"runtimeClientError": {
+            "message": "Inline function result is missing toolUseId 'tooluse_abc'."}}])
+        world.drive()
+
+        assert runs.session_epoch(world.store, world.agent_id, f"dm-{world.agent_id}") == 1
+
+    def test_an_unrelated_error_with_nothing_answered_does_not_rotate(self, world):  # noqa: F811
+        """The guard is specific to this one error, not "rotate on any
+        failure" -- an ordinary transient error with nothing locally abandoned
+        has no session debt to fix, and must stay a no-op rotation-wise."""
+        from amazai import runs
+
+        def unavailable(_):
+            raise RuntimeError("service unavailable")
+
+        world.script(unavailable)
+        world.drive()
+
+        assert runs.session_epoch(world.store, world.agent_id, f"dm-{world.agent_id}") == 0
+
+    def test_a_retry_after_rotating_lands_on_the_fresh_session(self, world):  # noqa: F811
+        """The point of rotating immediately, not just eventually: the
+        automatic single retry this error class gets (`NEEDS_REPLAN`, one
+        re-plan) must land on the session `_mark_dirty` just moved this run's
+        own row onto, not the one it is retrying away from."""
+        from amazai import keys as K
+
+        def dangling(_):
+            raise RuntimeError("Inline function result is missing toolUseId 'tooluse_x'.")
+
+        world.script(dangling)
+        out = world.drive()
+
+        assert out["state"] == RunState.RETRYING.value
+        fresh = K.bot_session_id(world.store.owner_id, world.agent_id,
+                                 f"dm-{world.agent_id}", epoch=1)
+        assert world.store.get(world.run["pk"], "META")["sessionId"] == fresh
