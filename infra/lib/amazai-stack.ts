@@ -397,6 +397,13 @@ export class AmazaiStack extends cdk.Stack {
       // the first time in production: CREATE_FAILED, "not authorized to
       // perform: bedrock-agentcore:CreateWorkloadIdentity".
       'bedrock-agentcore:CreateWorkloadIdentity',
+      // Same shape, same discovery path, a second Get call: CreateHarness
+      // wraps an underlying AgentRuntime resource (see get-harness's own
+      // nested agentCoreRuntimeEnvironment block), and standard_runtime's
+      // readiness wait reads it directly -- GetHarness alone was not enough.
+      // CREATE_FAILED again, this time on a real new signup (Tracy Barrett,
+      // 2026-09-23): "not authorized to perform: bedrock-agentcore:GetAgentRuntime".
+      'bedrock-agentcore:GetAgentRuntime',
     ];
     for (const fn of [apiFn, orchestratorFn]) {
       fn.addToRolePolicy(new iam.PolicyStatement({
