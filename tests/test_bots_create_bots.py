@@ -314,7 +314,7 @@ class TestBriefingTheNewBot:
         assert "You already opened this conversation" not in prompt
 
 
-class TestRefiningABotYouMade:
+class TestRefiningABot:
     def refine(self, world, **args):  # noqa: F811
         return world.handle("update_agent", {"agentId": "scout", **args})["toolResult"]
 
@@ -330,12 +330,16 @@ class TestRefiningABotYouMade:
         self.refine(world, role="Finds sources and cites them.")
         assert "agent.updated" in [a["action"] for a in world.store.query(K.agent_pk(world.store.owner_id, "scout"), sk_prefix="AUDIT#")]
 
-    def test_only_a_bot_it_created_can_be_refined(self, world, woken):  # noqa: F811
+    def test_a_bot_it_did_not_create_can_also_be_refined_when_the_operator_asked(self, world, woken):  # noqa: F811
+        """Parentage used to gate this and blocked real requests: an operator
+        asking whichever Bot they are talking to for a correction on a
+        *different* Bot -- an org audit's finding, a relayed fix -- is still
+        the operator's own instruction. `_owner_asked` is the actual gate."""
         status, other = call("POST", "/agents", {"name": "Ledger", "role": "Keeps the books."})
         assert status == 201
         out = world.handle("update_agent", {"agentId": "ledger", "description": "Now works for me."})["toolResult"]
-        assert "only refine a Bot you created" in out["error"]
-        assert agent_row(world, "ledger")["description"] != "Now works for me."
+        assert out == {"updated": ["description"], "agentId": "ledger"}
+        assert agent_row(world, "ledger")["description"] == "Now works for me."
 
     def test_it_only_works_when_the_operators_own_message_started_the_turn(self, world, woken):  # noqa: F811
         create(world)
@@ -352,10 +356,17 @@ class TestRefiningABotYouMade:
         row = agent_row(world, "scout")
         assert (row["budget"]["perMonthUsd"], row["status"]) == (20.0, "active")
 
+    def test_reportsTo_is_not_something_it_can_touch_either(self, world, woken):  # noqa: F811
+        create(world)
+        before = agent_row(world, "scout").get("reportsTo")
+        out = self.refine(world, reportsTo="operator")
+        assert "nothing to change" in out["error"]                       # not a field it accepts
+        assert agent_row(world, "scout").get("reportsTo") == before
+
     def test_a_refusal_says_why(self, world, woken):  # noqa: F811
         create(world)
         assert "nothing to change" in self.refine(world)["error"]
-        assert "only refine a Bot you created" in world.handle("update_agent", {"agentId": "ghost", "title": "x"})["toolResult"]["error"]
+        assert "no such Bot" in world.handle("update_agent", {"agentId": "ghost", "title": "x"})["toolResult"]["error"]
 
 
 class TestAToolsAnswerGoesBackToTheModel:
