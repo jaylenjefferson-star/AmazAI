@@ -429,87 +429,45 @@ class TestSpendIsRecorded:
         assert cost_rows[0]["runtimeSeconds"] >= 0
 
 
-class TestBudgetStopsARunawayTurn:
-    """The ceiling that holds *inside* one invocation.
+class TestPerAgentBudgetsAreNoLongerEnforced:
+    """Per-agent spend/tool-call/error ceilings were removed in favour of a
+    single account-level credit gate (`billing.has_credit`, checked earlier
+    in `_drive`, ahead of tool resolution -- not tested here). A Bot's own
+    `budget` fields (perRunUsd, perMonthUsd, onCeiling, ...) are no longer
+    read by `_drive` at all; this is a lock against that check quietly
+    coming back, not a defense of a policy still in force."""
 
-    The budget check at the top of `_drive` runs once and knows only what
-    earlier runs spent. A turn may call the model up to `MAX_TOOL_ROUNDS`
-    times after passing it, so without a check between rounds the per-run
-    ceiling is advisory. The World fixture's Bot has perRunUsd = 1.00.
-    """
-
-    def test_a_turn_that_blows_the_per_run_ceiling_stops_between_rounds(self, world):
+    def test_a_turn_that_reports_huge_spend_still_calls_every_scripted_round(self, world):
         fake = world.script(
-            # Round one asks for a tool and reports spend well past $1.00.
+            # The World fixture's Bot has perRunUsd = 1.00; this round alone
+            # reports spend far past it, and used to stop the turn there.
             [*tool_use("find_agents", {"query": "ops"}), usage(output_tokens=200_000)],
-            # Round two must never be requested.
             [text("still going")],
         )
-        out = world.drive()
-        assert len(fake.calls) == 1, "the loop kept spending after the ceiling was reached"
-        assert out["state"] == RunState.COMPLETED.value
+        world.drive()
+        assert len(fake.calls) == 2, "a huge reported spend stopped the run between rounds"
         reply = [m for m in world.messages() if m["role"] == "assistant"][-1]
-        assert "I stopped here" in reply["text"]
-        assert "budget" in reply["text"]
+        assert reply["text"] == "still going"
 
-    def test_the_operator_is_told_why_it_stopped(self, world, monkeypatch):
-        # `_drive` builds its own Push; hand it the recording one so the
-        # notification the operator would receive is inspectable.
-        monkeypatch.setattr(orch, "Push", lambda *a, **k: world.push)
-        world.script(
-            [*tool_use("find_agents", {"query": "ops"}), usage(output_tokens=200_000)],
-            [text("still going")],
-        )
-        world.drive()
-        warnings = [e for e in world.push.sent
-                    if e["type"] == "notification" and e.get("level") == "warn"]
-        assert any("budget" in e.get("message", "") for e in warnings), \
-            "the run stopped for money and said nothing about it"
-
-    def test_a_turn_inside_its_budget_carries_on(self, world):
-        fake = world.script(
-            [*tool_use("find_agents", {"query": "ops"}), usage(input_tokens=100, output_tokens=20)],
-            [text("Found them."), usage(input_tokens=120, output_tokens=30)],
-        )
-        world.drive()
-        assert len(fake.calls) == 2, "a cheap turn was stopped as though it were expensive"
-
-    def test_warn_mode_reports_the_ceiling_without_stopping(self, world):
-        # D7: a ceiling stops a run only when the Bot is set to hard_stop.
-        world.store.update(K.agent_pk(world.store.owner_id, world.agent_id), "META",
-                           {"budget": {"perRunUsd": 1.0, "perMonthUsd": 10.0,
-                                       "onCeiling": "warn"}})
-        fake = world.script(
-            [*tool_use("find_agents", {"query": "ops"}), usage(output_tokens=200_000)],
-            [text("carrying on"), usage(input_tokens=10, output_tokens=2)],
-        )
-        world.drive()
-        assert len(fake.calls) == 2, "warn mode stopped the run instead of reporting"
-
-    def test_a_resumed_run_that_already_spent_its_budget_does_not_start(self, world):
-        # Spend now lands on the run row, so the check at the top of `_drive`
-        # finally has a non-zero number to refuse on.
+    def test_a_resumed_run_that_already_spent_a_lot_still_starts(self, world):
         world.store.update(world.run["pk"], "META", {"costUsd": 5.0})
-        fake = world.script([text("should never be asked")])
+        fake = world.script([text("carrying on")])
         out = world.drive()
-        assert out["ok"] is False
-        assert "budget" in out["reason"]
-        assert fake.calls == []
+        assert out["ok"] is True
+        assert fake.calls, "a high recorded spend refused to start the run"
 
 
 
-class TestARepeatedToolFailureStopsTheTurn:
-    """The other half of the nine-denials failure.
-
-    `runs.create` initialises `toolErrorCount` and `consecutiveToolErrors` and
-    nothing ever incremented them, so `cost.check`'s two error ceilings could
-    not be reached by any input. A model that failed the same call with the
-    same arguments could keep failing it until MAX_TOOL_ROUNDS ran out -- forty
-    model calls, now billed, to accomplish nothing.
+class TestARepeatedToolFailureNoLongerStopsTheTurn:
+    """`toolErrorCount`/`consecutiveToolErrors` are still recorded on the run
+    row (see the tests below), but nothing ceilings on them any more --
+    per-agent error ceilings were removed along with the rest of the
+    per-agent budget (see TestPerAgentBudgetsAreNoLongerEnforced). The round
+    ceiling (MAX_TOOL_ROUNDS = 40) is the only thing left that would end a
+    model repeatedly failing the same call, and this script is well under it.
     """
 
-    def test_three_failures_in_a_row_end_the_turn(self, world):
-        # The World's Bot allows 3 consecutive tool errors.
+    def test_repeated_failures_do_not_end_the_turn_early(self, world):
         bad = {"scope": "nonsense", "body": "x"}     # `remember` refuses the scope
         fake = world.script(
             [*tool_use("remember", bad, "t1"), usage(output_tokens=10)],
@@ -519,8 +477,8 @@ class TestARepeatedToolFailureStopsTheTurn:
             [text("still going")],
         )
         world.drive()
-        assert len(fake.calls) <= 3, \
-            f"the same failing call was retried {len(fake.calls)} times"
+        assert len(fake.calls) == 5, \
+            f"the turn ended after {len(fake.calls)} calls instead of running the whole script"
 
     def test_the_run_records_the_failures(self, world):
         bad = {"scope": "nonsense", "body": "x"}

@@ -143,16 +143,27 @@ real usage decide.
 
 ---
 
-### D7 · Budget ceiling behaviour ⚠️ needs your call
-**Default:** hard stop at 100%, warn at 80%.
+### D7 · Budget ceiling behaviour ✅ decided
+**Decided:** no per-agent ceiling. `agent.budget`'s `perRunUsd`/`perMonthUsd`/
+`maxToolCallsPerRun`/`onCeiling` are no longer read by `_drive` or
+`collab.may_wake_now` at all -- a Bot's own spend, tool-call count, and
+consecutive tool errors are recorded on the run row (still useful data) but
+never stop it. `maxConcurrentRuns` is unaffected; that is a concurrency
+guard, not a spend ceiling, and stays enforced.
 
-**The tension:** stopping an agent halfway through a deployment is its own kind
-of bad. The alternatives are warn-only (risks a runaway bill) or hard-stop with
-a one-click "grant $X more" (best of both, more UI).
+**Why:** the original tension -- hard-stop mid-task is its own kind of bad,
+and warn-only risks a runaway bill -- turned out to have a third answer once
+it actually happened in production: an agent-level ceiling stopped a Bot
+mid-deployment with no way for the operator to see it coming or raise it in
+the moment, which was worse than either alternative this doc considered. The
+one ceiling still enforced before a token is spent is account-wide
+(`billing.has_credit`), checked once per run ahead of tool resolution.
 
-**Recommendation:** hard stop for routines (unattended, where runaway cost is the
-real risk), grant-more for interactive runs (you are present to decide).
-Confirm before M2.
+**Open follow-up, not blocking:** an account-level budget (a real ceiling on
+top of the credit gate, replacing what the per-agent one used to do) is not
+built yet. `services/amazai/cost.py`'s `Budget`/`check`/`budget_for_agent`
+are left in place, unused by any live gate, as the shape that check would
+reuse.
 
 ---
 
@@ -229,7 +240,6 @@ many logical Bots](20-account-runtime-and-logical-bots.md).
 | | Decision | Why it matters now |
 |---|---|---|
 | 1 | **D2** — model per seat, and re-baselining cost | Changes the cost model and every seat config. Blocks `seats.json`. |
-| 2 | **D7** — hard stop vs grant-more | Changes the orchestrator's budget path and the approval UI. |
-| 3 | **D1** — desktop shell timing | Changes the M1 build target. |
+| 2 | **D1** — desktop shell timing | Changes the M1 build target. |
 
 The rest have defaults I'm comfortable building on unless you say otherwise.
