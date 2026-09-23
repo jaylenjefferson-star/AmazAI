@@ -437,7 +437,7 @@ def active_run_count_for_thread(store: Store, thread_id: str) -> int:
 
 
 def may_wake_now(store: Store, recipient_agent: dict, limits: MessagingLimits) -> tuple[bool, str]:
-    """The concurrency + budget gate a priority wake must still pass.
+    """The concurrency gate a priority wake must still pass.
 
     This runs in addition to the rate-window check already folded into
     `send()`'s `priority_granted`; failing here demotes an already-granted
@@ -446,20 +446,15 @@ def may_wake_now(store: Store, recipient_agent: dict, limits: MessagingLimits) -
     recipient's own `budget.maxConcurrentRuns` (validated at agent-create
     time in `agents.validate_limits`) rather than a second, looser ceiling,
     so a priority wake is held to exactly the same concurrency limit a
-    normal trigger already is.
+    normal trigger already is. There is deliberately no per-agent spend
+    check here any more -- per-agent budgets were removed in favour of a
+    single account-level credit gate (`billing.has_credit`, checked in
+    `_drive` itself, not here).
     """
-    from amazai import cost as C
-
     max_concurrent = int((recipient_agent.get("budget") or {}).get(
         "maxConcurrentRuns", limits.max_concurrent_runs_per_agent))
     active = active_run_count_for_agent(store, recipient_agent["agentId"])
     if active >= max_concurrent:
         return False, f"recipient at its concurrency ceiling ({max_concurrent})"
-
-    budget = C.budget_for_agent(recipient_agent)
-    spent_month = C.spent_this_month(store, recipient_agent["agentId"])
-    verdict = C.check(budget, spent_this_run=0.0, spent_this_month=spent_month)
-    if verdict.should_stop:
-        return False, f"recipient over budget: {verdict.reason}"
 
     return True, "ok"

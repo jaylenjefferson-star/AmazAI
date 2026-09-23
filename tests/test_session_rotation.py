@@ -235,28 +235,6 @@ class TestTheRoundCeilingAutoContinues:
         assert "more tool calls than one turn allows" in [
             m for m in world.messages() if m["role"] == "assistant"][-1]["text"]
 
-    def test_the_budget_ceiling_never_auto_continues(self, world, monkeypatch):  # noqa: F811
-        """A budget stop is a real stop, never friction to smooth over -- auto
-        continuing past it would spend past the ceiling it exists to enforce.
-
-        Starts at $0 (so the start-of-run check passes) and crosses a tiny
-        per-run ceiling once a round's usage event is parsed, exercising the
-        in-loop `money.should_stop` path specifically."""
-        monkeypatch.setattr(orch, "_budget_for", lambda agent: orch.Budget(
-            per_run_usd=0.0000001, per_month_usd=100.0, on_ceiling="hard_stop"))
-        forever = [lambda kw, i=i: [*tool_use("remember", {"title": f"t{i}", "body": "b"}, f"tu-{i}"),
-                                    usage(input_tokens=1000, output_tokens=1000)]
-                   for i in range(3)]
-        world.script(*forever)
-
-        world.drive()
-
-        rows = world.store.query_index(
-            "gsi1", "gsi1pk", "RUNS",
-            predicate=lambda r: (r.get("trigger") or {}).get("redirectOf") == world.run["runId"])
-        assert rows == []
-        assert "I stopped here" in [m for m in world.messages() if m["role"] == "assistant"][-1]["text"]
-
     def test_the_time_ceiling_rotates_the_same_way(self, world, monkeypatch):  # noqa: F811
         monkeypatch.setattr(orch, "ROUND_BUDGET_SECONDS", -1)
         before = epoch_of(world)

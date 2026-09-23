@@ -29,7 +29,7 @@ from amazai import (agentcore, agents as A, approvals, billing, collab, composio
                     connectors, continuation, cost, govern, handoffs, keys as K, memory,
                     metrics, onboarding, org, policy, provisioning, redact, review, router,
                     routines, runs, schedules, skills, standard_runtime, threads)
-from amazai.cost import Budget, RunCost, Verdict, check as budget_check
+from amazai.cost import RunCost
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
 from amazai.policy import Capability
@@ -71,10 +71,13 @@ WAKE_STAGGER_SECONDS = 1.5
 MAX_WAKE_STAGGER_SLOTS = 4
 
 #: How many times in a row a task may auto-continue past the round/time ceiling
-#: (never the budget ceiling -- see `_continue_automatically`) before it stops
-#: and waits for the operator instead. Bounded so a task that genuinely cannot
-#: finish does not run away with cost on its own; three legs is roughly half an
-#: hour of continuous work before it checks in either way.
+#: before it stops and waits for the operator instead -- see
+#: `_continue_automatically`. Bounded so a task that genuinely cannot finish
+#: does not run away on its own; three legs is roughly half an hour of
+#: continuous work before it checks in either way. This is the only ceiling
+#: left that can end a run on its own initiative: per-agent spend/tool-call/
+#: error ceilings were removed in favour of a single account-level credit
+#: gate (`billing.has_credit`).
 MAX_AUTO_CONTINUES = 3
 
 #: The inline tools the code answers itself. Their result goes back to the model;
@@ -317,7 +320,7 @@ def _paused_turn(store: Store, run: dict, event: dict) -> dict | None:
 def _rotate_if_abandoning_a_resume(store: Store, run: dict, event: dict) -> None:
     """Call before failing a run at any gate `_drive` checks before it
     invokes the harness this turn (kill switch, credits, agent state,
-    missing model id, the start-of-run Budget check).
+    missing model id).
 
     Every one of those gates can fire on a *resume* -- an invocation
     carrying the answer to a paused approval, which `_paused_turn` reads
@@ -338,9 +341,9 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     agent = store.get(K.agent_pk(store.owner_id, run["agentId"]), "META")
 
     # The kill switch is the pre-model chokepoint: a frozen org fails every run
-    # closed here, before a single token is spent. Checked ahead of the budget
-    # and tool resolution so freezing an org stops work immediately on the next
-    # run rather than after the model has already been invoked. The org id is
+    # closed here, before a single token is spent. Checked ahead of tool
+    # resolution so freezing an org stops work immediately on the next run
+    # rather than after the model has already been invoked. The org id is
     # the agent's owner today (the one-workspace-per-owner seam).
     org_id = agent.get("orgId") or store.owner_id
     if govern.is_frozen(store.try_get(K.org_pk(org_id), "KILLSWITCH")):
@@ -350,10 +353,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
     # The account-wide credit balance, checked right alongside the kill
     # switch: both are account-level gates that must refuse a run before a
-    # single token is spent, ahead of the per-agent Budget below (which
-    # governs how much *this run* may spend, not whether the account has
-    # anything left to spend at all). See billing.py's module docstring for
-    # why this is a coarse pre-flight check, not mid-run metering.
+    # single token is spent. There is deliberately no per-agent spend ceiling
+    # below this any more -- an agent-level budget stopped a run mid-task in a
+    # way an operator could not see coming, so the only ceiling left is this
+    # account-wide one. See billing.py's module docstring for why this is a
+    # coarse pre-flight check, not mid-run metering.
     if not billing.has_credit(store):
         _rotate_if_abandoning_a_resume(store, run, event)
         _fail(store, run, "this account is out of credits")
@@ -374,22 +378,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
               "profile and set it in scripts/seats.json (decision D2)")
         return {"ok": False, "reason": "no model configured"}
 
-    # --- budget, before anything is spent ---------------------------------
-    budget = _budget_for(agent)
-    spent_month = _spent_this_month(store, agent["agentId"])
-    verdict = budget_check(budget, spent_this_run=run.get("costUsd", 0.0),
-                           spent_this_month=spent_month,
-                           tool_calls=run.get("toolCallCount", 0),
-                           tool_errors=run.get("toolErrorCount", 0),
-                           consecutive_tool_errors=run.get("consecutiveToolErrors", 0))
-    if verdict.should_stop:
-        _rotate_if_abandoning_a_resume(store, run, event)
-        _finish(store, run, RunState.FAILED, f"stopped: {verdict.reason}", push)
-        return {"ok": False, "reason": verdict.reason}
-    if verdict.verdict is Verdict.WARN:
-        push.notification("warn", f"{agent['name']}: {verdict.reason}")
-
-    # --- tool resolution: grants ∩ budget ∩ rate limits --------------------
+    # --- tool resolution: grants ∩ rate limits ------------------------------
     # Intersected with the org install and the catalog on every run, not
     # trusted as written. A grant row that outlived its install — a revoke
     # that raced this read, a restored backup — contributes nothing, so
@@ -605,11 +594,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             out = result.get("toolResult", {"ok": True})
             failed = isinstance(out, dict) and "error" in out
             # Counted here because this is the one place that already knows an
-            # inline tool refused. `runs.create` initialises both of these and
-            # nothing ever incremented them, so `cost.check`'s error ceilings
-            # could not be reached by any input -- a model could fail the same
-            # call with the same arguments until the round limit ran out, which
-            # is exactly what happened: nine identical denials in one turn.
+            # inline tool refused. Kept on the run row even though nothing
+            # ceilings on it any more (per-agent budgets were removed in favour
+            # of an account-level one, see billing.has_credit) -- it is still
+            # what an operator or a future account-level check would read to
+            # see a Bot failing the same call over and over.
             if failed:
                 tool_errors += 1
                 consecutive_errors += 1
@@ -735,42 +724,20 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             rounds += 1
             out_of_rounds = rounds > MAX_TOOL_ROUNDS
             out_of_time = time.monotonic() - drive_started > ROUND_BUDGET_SECONDS
-            # Money, re-checked between rounds. The check at the top of this
-            # function only knows what *earlier* runs spent; a turn that calls
-            # the model forty times passes it once and could then spend past
-            # every ceiling without being asked again. This is the ceiling that
-            # actually holds inside one invocation. `warn` mode returns WARN
-            # rather than STOP here, so D7 still decides whether a ceiling
-            # stops a run or only reports it.
-            money = budget_check(budget,
-                                 spent_this_run=run.get("costUsd", 0.0) + spend.total_usd,
-                                 spent_this_month=spent_month + spend.total_usd,
-                                 tool_errors=tool_errors,
-                                 consecutive_tool_errors=consecutive_errors)
-            if out_of_rounds or out_of_time or money.should_stop:
+            if out_of_rounds or out_of_time:
                 # A round/time ceiling is friction, not a safety stop: the task
                 # is not done, and the honest continuation is to keep going, not
-                # to make the operator say so. The budget ceiling is different --
-                # `money.should_stop` means this run has spent what it is allowed
-                # to, and auto-continuing past that would spend past it silently,
-                # so it is never eligible no matter how many auto-continues remain.
+                # to make the operator say so.
                 consecutive = int((run.get("trigger") or {}).get("autoContinued", 0) or 0)
-                auto_continuing = (
-                    (out_of_rounds or out_of_time) and not money.should_stop
-                    and consecutive < MAX_AUTO_CONTINUES
-                )
+                auto_continuing = consecutive < MAX_AUTO_CONTINUES
                 if auto_continuing:
                     note = ""
                 elif out_of_rounds:
                     note = ("\n\n(I stopped here: that was more tool calls than one turn "
                             "allows. Ask me to carry on.)")
-                elif out_of_time:
+                else:
                     note = ("\n\n(I stopped here: that turn ran as long as one turn may. "
                             "Ask me to carry on.)")
-                else:
-                    note = f"\n\n(I stopped here: {money.reason}.)"
-                    push.notification(
-                        "warn", f"{agent['name']} stopped mid-task: {money.reason}")
                 if note:
                     buffer.append(note)
                     push.delta(run["runId"], run["threadId"], note)
@@ -1823,7 +1790,7 @@ def _brief_child(store, run, creator: dict, child: dict, task) -> dict:
     stored atomically with the Bot. This function only applies the wake gate and
     starts that run; it never inserts a second copy of the briefing. It goes
     through the same wake gate any priority message does
-    (`collab.may_wake_now`: the Bot's own concurrency and budget), so a Bot that
+    (`collab.may_wake_now`: the Bot's own concurrency ceiling), so a Bot that
     cannot start yet is told so while the assigned task remains visible and
     unread in its thread.
     """
@@ -2208,8 +2175,8 @@ def _message_agent(store: Store, run: dict, agent: dict, args: dict) -> dict:
     are participants of it (or an org escalation policy applies), and enforces
     hop depth / message ceilings by raising `collab.MessagingError`. `priority`
     only ever *requests* an expedited wake; `collab.may_wake_now` still has to
-    clear concurrency and budget before a run is actually spawned for the
-    recipient -- exactly the same gates any other trigger goes through in
+    clear the recipient's own concurrency ceiling before a run is actually
+    spawned for it -- exactly the same gate any other trigger goes through in
     `_drive`.
 
     The trace this message belongs to is decided here, from the run, and never
@@ -2308,14 +2275,6 @@ def _write_cost(store: Store, run: dict, agent: dict, cost: RunCost) -> None:
         "entity": "Cost", "runId": run["runId"], "agentId": agent["agentId"],
         **cost.to_item(),
     })
-
-
-def _spent_this_month(store: Store, agent_id: str) -> float:
-    return cost.spent_this_month(store, agent_id)
-
-
-def _budget_for(agent: dict) -> Budget:
-    return cost.budget_for_agent(agent)
 
 
 def _finish(store: Store, run: dict, state: RunState, summary: str, push: Push,
