@@ -134,6 +134,17 @@ def main() -> int:
     print()
 
     changed = False
+    # What each tier resolved to on this account, for the platform-wide registry
+    # every self-serve tenant reads from (see amazai.platform_models). Resolving
+    # here for the tiers a Bot can actually be created with -- not only the seat
+    # tiers -- so a first self-serve Bot on the default `balanced` tier has a
+    # model even if no enabled seat uses that tier.
+    resolved_by_tier: dict[str, str] = {}
+    for tier in TIERS:
+        chosen = pick(models, TIERS[tier])
+        if chosen:
+            resolved_by_tier[tier] = chosen["id"]
+
     for seat in config["seats"]:
         tier = "frontier" if args.best else SEAT_TIERS.get(seat["key"], "balanced")
         chosen = pick(models, TIERS[tier])
@@ -150,7 +161,8 @@ def main() -> int:
             changed = True
 
     if not args.write:
-        print("\nNothing written. Re-run with --write to apply these to seats.json.")
+        print("\nNothing written. Re-run with --write to apply these to seats.json,")
+        print("and to record the platform-wide model registry for self-serve signups.")
         return 0
 
     if changed:
@@ -158,6 +170,18 @@ def main() -> int:
         print(f"\nWrote {seats_path.relative_to(ROOT)}")
     else:
         print("\nseats.json already matches; nothing to change.")
+
+    # Record the account's resolved models where every tenant can reuse them.
+    # This is what lets a brand-new self-serve customer's first Bot resolve a
+    # model with nothing yet in its own (empty) org partition.
+    if resolved_by_tier:
+        from amazai import platform_models
+        for tier, model_id in resolved_by_tier.items():
+            platform_models.record(tier, model_id, source="resolve_models.py")
+        print("\nRecorded platform model registry for tiers: "
+              + ", ".join(sorted(resolved_by_tier)))
+    else:
+        print("\nNo tier resolved a model; platform registry left unchanged.")
     return 0
 
 
