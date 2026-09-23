@@ -1,5 +1,6 @@
 import { Children, cloneElement, isValidElement, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import ApprovalCard from './ApprovalCard';
 import Icon from './Icon';
 import Card, { EventLine } from './Cards';
@@ -150,7 +151,15 @@ function withMentions(children, ids, onContact, keyPrefix = 'm') {
 const MARKDOWN_ELEMENTS = [
   'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'ul', 'ol', 'li', 'blockquote', 'hr', 'strong', 'em', 'code', 'pre', 'a',
+  // GFM, via remarkGfm below: tables (a model reaches for these constantly
+  // for anything comparative -- a roster, a before/after, a recommendation
+  // list) and struck-through text.
+  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'del',
 ];
+
+// A stable reference, not a fresh array literal per render: react-markdown
+// re-parses when this prop changes identity.
+const REMARK_PLUGINS = [remarkGfm];
 
 function safeUrl(value) {
   const url = String(value || '').trim();
@@ -175,6 +184,14 @@ export function Body({ text, ids, onContact }) {
       blockquote: block('blockquote', 'quote'),
       h1: block('h3', 'h1'), h2: block('h3', 'h2'), h3: block('h3', 'h3'),
       h4: block('h4', 'h4'), h5: block('h4', 'h5'), h6: block('h4', 'h6'),
+      // A table scrolls sideways on its own (see .body--markdown table in
+      // styles.css) rather than forcing the whole bubble wider than the
+      // column -- the same reason `pre` does.
+      table({ node: _node, children, ...props }) {
+        return <div className="md-table-wrap"><table {...props}>{children}</table></div>;
+      },
+      th: block('th', 'th'),
+      td: block('td', 'td'),
       a({ node: _node, href, children, ...props }) {
         const safe = safeUrl(href);
         if (!safe) return <span>{children}</span>;
@@ -187,6 +204,7 @@ export function Body({ text, ids, onContact }) {
   if (!text) return null;
   return (
     <ReactMarkdown skipHtml unwrapDisallowed allowedElements={MARKDOWN_ELEMENTS}
+                   remarkPlugins={REMARK_PLUGINS}
                    urlTransform={safeUrl} components={components}>
       {String(text)}
     </ReactMarkdown>
