@@ -51,6 +51,7 @@ export default function ProfileSheet({ onClose }) {
         <SheetRow icon="user" title="Account" hint="Who you are signed in as" onClick={() => setView('acct-account')} />
         <SheetRow icon="building" title="Organization" hint="Your workspace" onClick={() => setView('acct-org')} />
         <SheetRow icon="users" title="Org chart" hint="Who reports to whom" onClick={() => go('/org')} />
+        <SheetRow icon="hash" title="Rooms" hint="Where your Bots coordinate, read-only" onClick={() => go('/rooms')} />
         <SheetRow icon="plug" title="Integrations" hint="Apps your agents can use" onClick={() => setView('tools')} />
         <SheetRow icon="sliders" title="Preferences" hint="Notifications and defaults" onClick={() => setView('acct-prefs')} />
         <SheetRow icon="card" title="Billing" hint="Balance, plan, and spend" onClick={() => go('/billing')} />

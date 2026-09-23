@@ -32,6 +32,7 @@ import Settings from './screens/Settings';
 import Task from './screens/Task';
 import CompanionSettings from './screens/CompanionSettings';
 import Room from './screens/Room';
+import Rooms from './screens/Rooms';
 import Usage from './screens/Usage';
 import Gallery from './screens/Gallery';
 import AdminShell from './admin/AdminShell';
@@ -189,7 +190,7 @@ function Router() {
         <Route path="/agents/:agentId/settings" element={<SettingsRoute />} />
         <Route path="/marketplace" element={<Marketplace />} />
         <Route path="/connectors" element={<Connectors />} />
-        <Route path="/rooms" element={<Navigate to="/" replace />} />
+        <Route path="/rooms" element={<Rooms />} />
         <Route path="/rooms/:roomId" element={<RoomRoute />} />
         <Route path="/org" element={<OrgChart />} />
         <Route path="/routines" element={<Routines />} />

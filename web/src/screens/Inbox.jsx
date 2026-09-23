@@ -143,18 +143,16 @@ export default function Inbox({ variant }) {
     return ids;
   }, [approvals]);
 
-  const byId = useMemo(() => {
-    const map = new Map();
-    for (const a of agents) map.set(a.agentId, a);
-    return map;
-  }, [agents]);
-
   /**
-   * Companions and rooms, merged.
+   * Companions only.
    *
-   * Recency decides the order, and a companion with no thread yet sorts on
-   * nothing rather than on `Date.now()` -- a brand new agent should not
-   * outrank the room you were in a minute ago.
+   * A room used to be merged in here, ordered by recency alongside your own
+   * conversations -- so a burst of bots talking to each other about a task
+   * could outrank a Bot actually waiting on you. Rooms are real, and
+   * read-only observation of them is a deliberate feature (see
+   * docs/architecture/16), but that observation belongs behind an opt-in
+   * (the Rooms screen, from the profile menu), not defaulted into the one
+   * list this screen's whole job is to keep trustworthy as "what needs me."
    */
   const rows = useMemo(() => {
     const threadFor = new Map(threads.map((t) => [t.threadId, t]));
@@ -185,38 +183,17 @@ export default function Inbox({ variant }) {
       };
     });
 
-    const roomRows = threads
-      .filter((t) => t.kind === 'room')
-      .map((room) => {
-        const members = (room.agentIds || []).map((id) => byId.get(id)).filter(Boolean);
-        const needsYou = members.some((m) => waiting.has(m.agentId));
-        return {
-          key: `room:${room.threadId}`,
-          kind: 'room',
-          to: `/rooms/${room.threadId}`,
-          threadId: room.threadId,
-          title: room.title || 'Room',
-          chip: 'Channel',
-          preview: previewOf(room),
-          action: '',
-          subtitle: members.length
-            ? members.map((m) => m.name).join(', ')
-            : 'No Bots in this channel yet',
-          state: needsYou ? 'approval' : (room.status === 'active' ? 'working' : 'idle'),
-          at: room.lastActivity || '',
-          unread: Boolean(room.unread),
-          members,
-        };
-      });
-
-    const all = [...companionRows, ...roomRows];
+    // A room's own approval need is never lost by leaving it out here: a Bot
+    // that needs a decision already shows `needsYou` on its own companion row
+    // above, room member or not -- `waiting` is keyed by agent, not by thread.
+    const all = companionRows;
     const needle = query.trim().toLowerCase();
     const filtered = needle
       ? all.filter((r) => `${r.title} ${r.chip} ${r.subtitle}`.toLowerCase().includes(needle))
       : all;
 
     return filtered.sort((a, b) => String(b.at).localeCompare(String(a.at)));
-  }, [agents, threads, byId, waiting, query, presence]);
+  }, [agents, threads, waiting, query, presence]);
 
   const listRef = useRef(null);
   useFlipList(listRef, rows.map((r) => r.key).join('|'));
