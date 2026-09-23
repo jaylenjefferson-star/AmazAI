@@ -45,6 +45,9 @@ export default function Onboarding() {
   const [color, setColor] = useState(PALETTE[0]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // True only while automatically retrying a first-time account runtime
+  // that is still being created -- see PROVISIONING_RETRY_MAX below.
+  const [retrying, setRetrying] = useState(false);
   // One key for the whole run of setup, so a retry after a timeout resolves
   // to the Bot the first attempt created rather than a second one.
   const idempotencyKey = useMemo(
@@ -128,31 +131,57 @@ export default function Onboarding() {
   const s = steps[step];
   const last = step === steps.length - 1;
 
+  // A brand-new owner's account runtime is created lazily, warmed by a
+  // best-effort async call the moment they signed in (api._warm_account_harness)
+  // -- a head start, not a guarantee. Real AgentCore harness creation is
+  // genuinely variable (seconds to a couple of minutes), so the very first
+  // create-Bot call landing before it is ready is expected, not exceptional:
+  // the server says so explicitly ("...; retry this request"). This is the
+  // one place in the whole console that error text is pattern-matched rather
+  // than just shown, because it is the one place a brand-new person's very
+  // first click would otherwise show them a raw backend exception instead of
+  // "hang on, this can take a minute."
+  const PROVISIONING_RETRY_MAX = 8;
+  const PROVISIONING_RETRY_DELAY_MS = 6000;
+
   async function finish() {
     if (busy) return;
     setBusy(true);
     setError('');
-    try {
-      // The Bot first: it is the thing someone would notice missing, and the
-      // workspace name is worth nothing without it.
-      const bot = await api.createAgent({
-        name: name.trim(),
-        entrypoint: true,
-        // Only so it can say hello by name. Sent, read once, stored nowhere.
-        operatorName: operatorFirstName(user),
-        avatar: { shape: archetype, color },
-      }, idempotencyKey);
-      await api.saveSettings({ workspaceName: workspace.trim(), onboarded: true });
-      rememberSetupDone();
-      // Straight into the conversation: the greeting is waiting there, and an
-      // inbox with one unread row would only be a longer way to the same place.
-      nav(`/agents/${bot.agentId}`, { replace: true });
-    } catch (err) {
-      // Stays on this step with the reason. Navigating anyway would be the
-      // original bug with a better story.
-      setError(err.message);
-    } finally {
-      setBusy(false);
+    for (let attempt = 1; attempt <= PROVISIONING_RETRY_MAX; attempt += 1) {
+      try {
+        // The Bot first: it is the thing someone would notice missing, and the
+        // workspace name is worth nothing without it.
+        // eslint-disable-next-line no-await-in-loop
+        const bot = await api.createAgent({
+          name: name.trim(),
+          entrypoint: true,
+          // Only so it can say hello by name. Sent, read once, stored nowhere.
+          operatorName: operatorFirstName(user),
+          avatar: { shape: archetype, color },
+        }, idempotencyKey);
+        // eslint-disable-next-line no-await-in-loop
+        await api.saveSettings({ workspaceName: workspace.trim(), onboarded: true });
+        rememberSetupDone();
+        // Straight into the conversation: the greeting is waiting there, and an
+        // inbox with one unread row would only be a longer way to the same place.
+        nav(`/agents/${bot.agentId}`, { replace: true });
+        return;
+      } catch (err) {
+        const stillSettingUp = /retry this request/i.test(err.message);
+        if (stillSettingUp && attempt < PROVISIONING_RETRY_MAX) {
+          setRetrying(true);
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => { setTimeout(r, PROVISIONING_RETRY_DELAY_MS); });
+          continue;
+        }
+        // Stays on this step with the reason. Navigating anyway would be the
+        // original bug with a better story.
+        setError(err.message);
+        setBusy(false);
+        setRetrying(false);
+        return;
+      }
     }
   }
 
@@ -178,6 +207,12 @@ export default function Onboarding() {
 
         <div className="onboard-content">{s.content}</div>
 
+        {retrying && (
+          <p className="hint-text" style={{ textAlign: 'center' }}>
+            Your workspace is still starting up -- this can take a minute the
+            first time. Hang tight, {botName} will be right with you.
+          </p>
+        )}
         {error && <div className="err"><span className="msg-text">{error}</span></div>}
 
         <footer className="onboard-foot">
@@ -187,7 +222,7 @@ export default function Onboarding() {
             : <span />}
           <button className="primary" disabled={!s.canNext || busy}
                   onClick={() => (last ? finish() : setStep((n) => n + 1))}>
-            {last ? (busy ? 'Setting up…' : `Meet ${botName}`) : 'Continue'}
+            {last ? (busy ? (retrying ? 'Almost there…' : 'Setting up…') : `Meet ${botName}`) : 'Continue'}
           </button>
         </footer>
       </div>

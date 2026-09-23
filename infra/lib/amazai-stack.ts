@@ -389,6 +389,14 @@ export class AmazaiStack extends cdk.Stack {
       // Crash recovery for a Lambda that died after CreateHarness succeeded
       // but before the deterministic account-runtime row was updated.
       'bedrock-agentcore:ListHarnesses',
+      // CreateHarness provisions a workload identity for the harness
+      // internally; every harness this account had before now was created
+      // by an operator's own (unconstrained) credentials via
+      // scripts/provision_agents.py, so this narrower Lambda role's gap
+      // went undiscovered until a real new-tenant signup exercised it for
+      // the first time in production: CREATE_FAILED, "not authorized to
+      // perform: bedrock-agentcore:CreateWorkloadIdentity".
+      'bedrock-agentcore:CreateWorkloadIdentity',
     ];
     for (const fn of [apiFn, orchestratorFn]) {
       fn.addToRolePolicy(new iam.PolicyStatement({
