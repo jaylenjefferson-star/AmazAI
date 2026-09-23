@@ -12,8 +12,15 @@ const steps = (over = {}) => ({
 });
 
 describe('StepsGroup', () => {
-  it('shows a plain label for each tool and keeps the exact name on hover', () => {
-    render(<StepsGroup steps={steps({ endedAt: undefined })} />);   // running, so open
+  it('stays collapsed while the run is live, not pushed open on you', () => {
+    render(<StepsGroup steps={steps({ endedAt: undefined })} />);
+    expect(screen.getByRole('button', { name: /Working/ })).toBeTruthy();
+    expect(screen.queryByText('Terminal')).toBeNull();
+  });
+
+  it('shows a plain label for each tool and keeps the exact name on hover, once opened', () => {
+    render(<StepsGroup steps={steps({ endedAt: undefined })} />);
+    fireEvent.click(screen.getByRole('button', { name: /Working/ }));
     const terminal = screen.getByText('Terminal');
     expect(terminal.getAttribute('title')).toBe('shell');
     expect(screen.getByText('Gmail: send email').getAttribute('title')).toBe('GMAIL_SEND_EMAIL');
@@ -21,8 +28,9 @@ describe('StepsGroup', () => {
     expect(screen.queryByText('shell')).toBeNull();
   });
 
-  it('shows what was actually done, untouched', () => {
+  it('shows what was actually done, untouched, once opened', () => {
     render(<StepsGroup steps={steps({ endedAt: undefined })} />);
+    fireEvent.click(screen.getByRole('button', { name: /Working/ }));
     expect(screen.getByText('git status → clean')).toBeTruthy();
     expect(screen.getByText('to a@b.co')).toBeTruthy();
   });
