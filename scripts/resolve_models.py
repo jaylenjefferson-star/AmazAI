@@ -84,14 +84,53 @@ def available(region: str) -> list[dict]:
     return found
 
 
-def pick(models: list[dict], preferences: list[str]) -> dict | None:
-    """First preference that the account actually has, profiles winning ties."""
+_INVOKABLE_CACHE: dict[str, bool] = {}
+
+
+def invokable(region: str, model_id: str) -> bool:
+    """Whether this account can actually invoke this model right now.
+
+    Catalog listing (`list_inference_profiles` / `list_foundation_models`) is
+    a fact about the region; whether this *account* has been granted access
+    to invoke a given model is a separate, per-account setting that a fresh
+    or partially-enabled account can easily diverge on -- a profile the
+    catalog reports `ACTIVE` can still fail every real Converse call with
+    AccessDeniedException. That gap is exactly what shipped `claude-sonnet-5`
+    to a customer's harness although the account had never been granted it.
+    One cheap real call per candidate is the only way to tell the two apart.
+    """
+    if model_id in _INVOKABLE_CACHE:
+        return _INVOKABLE_CACHE[model_id]
+    bedrock_runtime = boto3.client("bedrock-runtime", region_name=region)
+    try:
+        bedrock_runtime.converse(
+            modelId=model_id,
+            messages=[{"role": "user", "content": [{"text": "hi"}]}],
+            inferenceConfig={"maxTokens": 1},
+        )
+        ok = True
+    except ClientError as e:
+        ok = e.response["Error"]["Code"] != "AccessDeniedException"
+    except Exception:  # noqa: BLE001 -- a transient failure is not a verdict
+        ok = True
+    _INVOKABLE_CACHE[model_id] = ok
+    return ok
+
+
+def pick(models: list[dict], preferences: list[str], *, region: str,
+         is_invokable=invokable) -> dict | None:
+    """First preference the account can actually invoke, profiles winning ties."""
     for want in preferences:
         matches = [m for m in models if want in _normalise(m["id"])]
         if not matches:
             continue
         matches.sort(key=lambda m: (m["kind"] != "inference-profile", len(m["id"])))
-        return matches[0]
+        for m in matches:
+            if is_invokable(region, m["id"]):
+                return m
+            print(f"  note: {m['id']} is in the catalog but this account "
+                  "cannot invoke it (no access grant) -- skipping",
+                  file=sys.stderr)
     return None
 
 
@@ -141,13 +180,13 @@ def main() -> int:
     # model even if no enabled seat uses that tier.
     resolved_by_tier: dict[str, str] = {}
     for tier in TIERS:
-        chosen = pick(models, TIERS[tier])
+        chosen = pick(models, TIERS[tier], region=region)
         if chosen:
             resolved_by_tier[tier] = chosen["id"]
 
     for seat in config["seats"]:
         tier = "frontier" if args.best else SEAT_TIERS.get(seat["key"], "balanced")
-        chosen = pick(models, TIERS[tier])
+        chosen = pick(models, TIERS[tier], region=region)
         flag = "" if seat.get("enabled") else "  (disabled)"
 
         if not chosen:

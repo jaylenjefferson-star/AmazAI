@@ -221,7 +221,7 @@ class TestTheRecord:
         existing = {"agentId": "ops", "model": {"tier": "fast", "modelId": "x"}}
         changes, _ = A.plan_update(existing, {"modelTier": "frontier"}, PERSON)
         assert changes["model"]["modelId"] is None
-        assert changes["model"]["ladder"][0] == "claude-opus-5"
+        assert changes["model"]["ladder"][0] == "claude-opus-4-6"
 
 
 # --- audit ------------------------------------------------------------------
