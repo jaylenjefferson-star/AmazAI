@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import PublicShell from '../../components/PublicShell';
+import Seo from '../../components/Seo';
 
 const DOCS = [
   { to: '/terms', title: 'Terms of Use', body: 'The agreement covering your use of AmazAI.' },
@@ -17,6 +18,11 @@ const COMING_SOON = [
 export default function Legal() {
   return (
     <PublicShell>
+      <Seo
+        title="Legal & Trust"
+        description="Terms of Use, Privacy Policy, Cookie Policy, Acceptable Use Policy, and our Security & Responsible Disclosure policy, all in one place."
+        path="/legal"
+      />
       <section className="about-hero">
         <h1>Legal &amp; Trust</h1>
         <p>Every policy that governs how AmazAI is built and run, in one place.</p>

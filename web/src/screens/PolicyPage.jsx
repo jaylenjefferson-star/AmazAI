@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import PublicShell from '../components/PublicShell';
+import Seo from '../components/Seo';
 
 /** Pulls `key: value` pairs out of a leading `---` YAML block without a YAML
  *  parser — the frontmatter here is flat scalars, so a real parser would be
@@ -40,12 +41,13 @@ function DocLink({ href, children }) {
  * the words, this component only lays them out — so nothing here should
  * rephrase or summarize the body text.
  */
-export default function PolicyPage({ raw }) {
+export default function PolicyPage({ raw, description, path }) {
   const { meta, body } = useMemo(() => splitFrontmatter(raw), [raw]);
   const updated = formatDate(meta.last_updated || meta.effective);
 
   return (
     <PublicShell>
+      <Seo title={meta.title} description={description} path={path} />
       <article className="policy">
         {updated && <p className="policy-meta">Last updated {updated}</p>}
         <ReactMarkdown

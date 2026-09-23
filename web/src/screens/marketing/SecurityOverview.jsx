@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import PublicShell from '../../components/PublicShell';
+import Seo from '../../components/Seo';
 
 const PILLARS = [
   {
@@ -23,6 +24,11 @@ const PILLARS = [
 export default function SecurityOverview() {
   return (
     <PublicShell wide>
+      <Seo
+        title="Security"
+        description="Approval-first actions, scoped access, an append-only audit history, and per-agent isolation — AmazAI's security model is enforced in code, not a prompt."
+        path="/security"
+      />
       <section className="about-hero">
         <h1>Security is enforced in code, not asked for in a prompt.</h1>
         <p>

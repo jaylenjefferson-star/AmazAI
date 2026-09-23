@@ -1,4 +1,5 @@
 import PublicShell from '../../components/PublicShell';
+import Seo from '../../components/Seo';
 import Companion from '../../characters/Companion';
 
 const CASES = [
@@ -27,6 +28,11 @@ const CASES = [
 export default function UseCases() {
   return (
     <PublicShell wide>
+      <Seo
+        title="Use Cases"
+        description="From founder operations to engineering and customer support, see how AmazAI agents handle recurring work with an approval on anything irreversible."
+        path="/use-cases"
+      />
       <section className="about-hero">
         <h1>Built for the work that repeats.</h1>
         <p>The same guardrails apply everywhere: scoped tools, approval on anything irreversible, a record of what happened.</p>

@@ -165,11 +165,16 @@ function Router() {
       <Route path="/faq" element={<FAQ />} />
       <Route path="/contact" element={<Contact />} />
       <Route path="/legal" element={<Legal />} />
-      <Route path="/terms" element={<PolicyPage raw={termsRaw} />} />
-      <Route path="/privacy" element={<PolicyPage raw={privacyRaw} />} />
-      <Route path="/cookie-policy" element={<PolicyPage raw={cookieRaw} />} />
-      <Route path="/acceptable-use" element={<PolicyPage raw={acceptableUseRaw} />} />
-      <Route path="/security-disclosure" element={<PolicyPage raw={securityRaw} />} />
+      <Route path="/terms" element={<PolicyPage raw={termsRaw} path="/terms"
+        description="The agreement covering your use of AmazAI." />} />
+      <Route path="/privacy" element={<PolicyPage raw={privacyRaw} path="/privacy"
+        description="What AmazAI collects, why, and how it is stored and deleted." />} />
+      <Route path="/cookie-policy" element={<PolicyPage raw={cookieRaw} path="/cookie-policy"
+        description="The cookies AmazAI sets and why." />} />
+      <Route path="/acceptable-use" element={<PolicyPage raw={acceptableUseRaw} path="/acceptable-use"
+        description="What AmazAI agents may not be used to do." />} />
+      <Route path="/security-disclosure" element={<PolicyPage raw={securityRaw} path="/security-disclosure"
+        description="How AmazAI handles security reports, and how to send us one." />} />
       <Route path="/security-responsible-disclosure" element={<Navigate to="/security-disclosure" replace />} />
 
       {/* First run */}

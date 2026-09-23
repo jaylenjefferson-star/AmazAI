@@ -1,4 +1,5 @@
 import PublicShell from '../../components/PublicShell';
+import Seo from '../../components/Seo';
 
 const AVAILABLE = [
   { name: 'Slack', blurb: 'Read channels an agent was granted, or post as itself — posting sits on the always-approve floor and can never be pre-approved away.' },
@@ -22,6 +23,11 @@ const COMING_SOON = [
 export default function Integrations() {
   return (
     <PublicShell wide>
+      <Seo
+        title="Integrations"
+        description="Connect real tools like Slack — and soon Google Workspace, GitHub, Notion, HubSpot and more — without ever handing an agent your API keys."
+        path="/integrations"
+      />
       <section className="about-hero">
         <h1>Connect real tools, without handing over the keys.</h1>
         <p>
