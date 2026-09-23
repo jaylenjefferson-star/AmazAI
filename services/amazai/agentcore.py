@@ -80,10 +80,11 @@ INLINE_TOOLS = {
     },
     "update_agent": {
         "description": (
-            "Refine a Bot you created: its name, title, role or standing orders (`description`). Use it "
-            "when you learn a durable preference or boundary that should outlive this conversation. "
-            "It changes only what you pass. It cannot change access, budget or status, and it works "
-            "only on Bots you created, when the operator's own message started this turn."
+            "Refine any Bot's name, title, role or standing orders (`description`) -- not only "
+            "ones you created. Use it when the operator asks for a correction directly, or when "
+            "you learn a durable preference or boundary that should outlive this conversation. "
+            "It changes only what you pass. It cannot change access, budget, status or who a Bot "
+            "reports to, and it only works when the operator's own message started this turn."
         ),
         "inputSchema": {
             "type": "object",

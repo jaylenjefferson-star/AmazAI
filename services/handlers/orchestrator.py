@@ -1743,11 +1743,18 @@ _REFINABLE = ("name", "title", "role", "description")
 
 
 def _update_agent_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
-    """`update_agent`: refine a Bot this Bot created, when the operator asked.
+    """`update_agent`: refine any Bot, when the operator's own message asked for it.
 
     Names, titles, roles and standing orders only, through the same `plan_update` a
-    person's edit goes through, so it is validated and audited the same way. The
-    fields that carry authority are privileged there and an agent is refused them.
+    person's edit goes through, so it is validated and audited the same way (and
+    `assert_no_self_escalation` inside it still refuses a self-grant on any field
+    that carries authority, regardless of who is asking). Not restricted to Bots
+    this one created: the operator directing a change through whichever Bot they
+    are talking to -- an org audit finding a wrong title, a teammate relaying a
+    correction -- is the operator's own instruction either way, and gatekeeping it
+    on parentage was a technicality that blocked real requests, not a safety
+    boundary. `_owner_asked` is still the actual gate: a Bot cannot reach this
+    with a request it invented, or one relayed from something it merely read.
     """
     def refuse(why: str) -> dict:
         ev.error(seq, "terminal", f"update_agent: {why}")
@@ -1760,8 +1767,8 @@ def _update_agent_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
                       "ask them for the change instead")
     target_id = A.agent_ref(args.get("agentId"))
     target = store.try_get(K.agent_pk(store.owner_id, target_id), "META") if target_id else None
-    if not target or target.get("parentAgentId") != agent["agentId"]:
-        return refuse("you can only refine a Bot you created")
+    if not target:
+        return refuse(f"no such Bot: {target_id!r}")
     body = {k: args[k].strip() for k in _REFINABLE
             if isinstance(args.get(k), str) and args[k].strip()}
     if not body:
@@ -1776,7 +1783,7 @@ def _update_agent_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
         store.put(event_row)
     ev.action(seq, "agent.update", f"refined {target_id}", agentId=target_id)
     _step(push, run, turn, "agent.update", f"refined {target['name']}",
-          review.scoped("agent", "a Bot you created; name, title, role and standing orders only"))
+          review.scoped("agent", "you asked for it; name, title, role and standing orders only"))
     return {"pause": False, "toolResult": {"updated": sorted(body), "agentId": target_id}}
 
 
