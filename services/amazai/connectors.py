@@ -9,13 +9,21 @@ Bots. What stays is the gate, and it is per *call*, not per app:
 
 **Every tool is classified when it is called.** `composio.classify` reads the
 tool's own behaviour tags and `policy.evaluate` turns the result into a decision
--- reads run, anything that creates, changes or removes data is held for the
-operator's approval, and an unlabelled tool counts as a write. Nothing in this
-file knows what any particular app's tools do, because it does not need to.
+-- reads run, and an unlabelled tool counts as a write. Nothing in this file
+knows what any particular app's tools do, because it does not need to.
 
 **A Bot's grant is a ceiling, not a list.** The default grant is the whole app.
 Narrow it and the narrower rule wins: `capability: read` makes a Bot read-only in
 that app whatever the tool is called; an explicit tool list allows only those.
+A grant above read-only is also the operator's own explicit decision to let
+this Bot write through that app, so an ordinary write no longer asks a second
+time on top of it (`policy.evaluate`'s `connector_capability`) -- except for a
+toolkit that can reach a real person directly (email, chat, SMS, calendar
+invites), which is never covered by that trust regardless of grant tier; see
+`policy._REACHES_A_REAL_PERSON_DIRECTLY`. Every other kind of write -- the
+floor (`payment.*`, `aws.iam.*`, …), destructive/admin/cost capabilities, and
+anything not covered by the grant at all -- is still held for the operator
+exactly as before.
 
 **Revocation is immediate because it is subtractive.** Removing an org install or
 a grant removes rows. The next call resolves from what is there, so there is no

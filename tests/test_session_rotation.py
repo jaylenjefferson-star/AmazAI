@@ -299,14 +299,25 @@ class TestAnUnfulfilledCommitmentAutoContinues:
         world.drive()
         assert self._continuation(world) == []
 
-    def test_a_tool_call_answered_within_the_same_round_does_not_rule_it_out(self, world):  # noqa: F811
-        """A tool_use block and closing text can arrive in the same round --
-        `answered` is non-empty from the tool call, so the loop asks the model
-        once more; an empty reply to that (nothing further to add) is not
-        itself a promise, so this does not auto-continue -- but not because a
-        tool was called, only because the closing round said nothing."""
+    def test_a_promise_that_the_next_round_never_follows_through_on_still_auto_continues(self, world):  # noqa: F811
+        """The check reads the *whole* accumulated reply, not just the round
+        that triggers it: a tool call and a promise can land in round 1
+        ("I'll do the rest now."), `answered` being non-empty sends the model
+        back for another round, and that next round can itself contribute no
+        text at all -- silently giving up rather than doing "the rest" or
+        explaining why not. Confirmed in production: the promise was said two
+        rounds before the empty round that actually triggered this check, so
+        checking only that round's own (empty) slice missed it entirely."""
         world.script([*tool_use("remember", {"title": "t", "body": "b"}),
                       text(" I'll do the rest now.")])
+        world.drive()
+        rows = self._continuation(world)
+        assert len(rows) == 1
+        assert rows[0]["trigger"]["autoContinued"] == 1
+
+    def test_a_tool_call_then_a_reply_that_genuinely_finishes_does_not_auto_continue(self, world):  # noqa: F811
+        world.script([*tool_use("remember", {"title": "t", "body": "b"}),
+                      text(" Saved.")])
         world.drive()
         assert self._continuation(world) == []
 

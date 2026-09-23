@@ -166,3 +166,74 @@ class TestWhichRuleDecided:
         with pytest.raises(Refused) as exc:
             policy.evaluate("aws.admin_credential", Capability.ADMIN)
         assert exc.value.matched == "aws.admin_credential"
+
+
+class TestAConnectorGrantedWriteNoLongerAsksTwice:
+    """Connecting an app, then choosing Full over Read in a Bot's profile, is
+    already the operator's own explicit decision to let that Bot write
+    through it (docs/connectors.md). An ordinary write no longer asks a
+    second time on top of that -- but only the ordinary "default" write rule
+    moves; the floor, NEVER_APPROVABLE, and NEVER_PREAPPROVABLE all run
+    first and are completely unaffected, so a connector-wide grant can never
+    be the reason a payment, a deletion, or an email goes unreviewed."""
+
+    def test_a_full_grant_skips_the_default_ask(self):
+        d = policy.evaluate("notes.append", Capability.WRITE,
+                            connector_capability=Capability.WRITE)
+        assert (d.required, d.rule, d.matched) == (False, "connector_trusted", "write")
+
+    def test_an_admin_ceiling_grant_also_counts(self):
+        d = policy.evaluate("notes.append", Capability.WRITE,
+                            connector_capability=Capability.ADMIN)
+        assert not d.required
+
+    def test_a_read_only_grant_still_asks(self):
+        # Not reachable in practice -- connectors.authorize refuses a write
+        # against a read-only grant before policy.evaluate is ever called --
+        # but the function is correct in isolation regardless.
+        d = policy.evaluate("notes.append", Capability.WRITE,
+                            connector_capability=Capability.READ)
+        assert (d.required, d.rule) == (True, "default")
+
+    def test_no_connector_capability_behaves_exactly_as_before(self):
+        d = policy.evaluate("notes.append", Capability.WRITE)
+        assert (d.required, d.rule) == (True, "default")
+
+    @pytest.mark.parametrize("tool", [
+        "email.send", "slack.post", "payment.charge", "aws.iam.AttachRolePolicy",
+    ])
+    def test_the_floor_asks_regardless_of_connector_grant(self, tool):
+        d = policy.evaluate(tool, Capability.WRITE, connector_capability=Capability.ADMIN)
+        assert d.required and d.rule == "floor"
+
+    @pytest.mark.parametrize("capability", [
+        Capability.DESTRUCTIVE, Capability.ADMIN, Capability.COST,
+    ])
+    def test_destructive_admin_and_cost_ask_regardless_of_connector_grant(self, capability):
+        d = policy.evaluate("some.risky.op", capability, connector_capability=Capability.ADMIN)
+        assert d.required and d.rule == "capability"
+
+    def test_an_explicit_pre_approval_still_wins_over_a_read_only_grant(self):
+        # preapproved is checked first, so a narrower, tool-specific rule
+        # still applies even when the connector-wide grant would not cover it.
+        d = policy.evaluate("notes.append", Capability.WRITE,
+                            preapproved={"notes.append"}, connector_capability=Capability.READ)
+        assert (d.required, d.rule) == (False, "preapproved")
+
+    @pytest.mark.parametrize("toolkit", ["gmail", "slack", "outlook", "googlecalendar", "twilio"])
+    def test_email_chat_sms_and_calendar_toolkits_are_never_trusted_by_a_connector_grant(self, toolkit):
+        """The floor's own email.send/slack.post/calendar.write_with_attendees
+        entries can never match a real Composio slug (GMAIL_SEND_EMAIL is not
+        the string "email.send"), so a send has only ever been gated by this
+        "default" rule -- meaning connector_capability must not let a
+        connector-wide grant carry these past it either, or this feature
+        would be the thing that finally breaks what the floor was trying to
+        protect and never actually could."""
+        d = policy.evaluate("SOME_SEND_ACTION", Capability.WRITE,
+                            connector_capability=Capability.ADMIN, connector_toolkit=toolkit)
+        assert (d.required, d.rule) == (True, "default")
+
+    def test_an_unlisted_toolkit_is_trusted_normally(self):
+        d = policy.evaluate("NOTION_CREATE_PAGE", Capability.WRITE,
+                            connector_capability=Capability.ADMIN, connector_toolkit="notion")
+        assert (d.required, d.rule) == (False, "connector_trusted")

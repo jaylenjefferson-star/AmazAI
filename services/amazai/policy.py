@@ -60,6 +60,32 @@ ALWAYS_APPROVE: frozenset[str] = frozenset({
     "device.register", "device.modify", "device.unpause", "device.action.*",
 })
 
+#: Connector toolkits whose write actions can reach a real person outside
+#: AmazAI directly -- email, chat, SMS, and calendar invites. A connector-wide
+#: grant (`connector_capability` in `evaluate`) never extends trust to these,
+#: regardless of tier.
+#:
+#: This exists because the floor's own communication entries just above
+#: (`email.send`, `slack.post`, `calendar.write_with_attendees`) name semantic
+#: actions that nothing currently produces: `connector_call` passes a raw
+#: Composio tool slug (`GMAIL_SEND_EMAIL`, `SLACK_SEND_MESSAGE`) as `tool`, and
+#: Composio's own tags (`readOnlyHint`/`createHint`/`updateHint`/
+#: `destructiveHint`) have no fifth tag for "reaches a person" -- so those
+#: floor patterns cannot match a real connector call at all, and a send has
+#: only ever been gated by the ordinary "default" write rule. That gap
+#: predates this constant and is not what this fixes; what this fixes is
+#: narrower and more urgent: `connector_capability` must not let a Bot's
+#: connector-wide grant carry an email or a Slack post past even that
+#: ordinary rule. Toolkit-scoped and conservative on purpose -- a false
+#: positive here just asks once more; a false negative is the exact thing
+#: the floor exists to prevent. A real fix for the underlying gap (mapping
+#: specific send-shaped actions to the floor's semantic names, toolkit by
+#: toolkit) is a separate, larger piece of work.
+_REACHES_A_REAL_PERSON_DIRECTLY: frozenset[str] = frozenset({
+    "gmail", "outlook", "office365", "slack", "discord", "microsoft_teams",
+    "twilio", "whatsapp", "telegram", "sms", "googlecalendar", "outlook_calendar",
+})
+
 #: Capabilities no grant may ever confer. Requests are refused outright; there
 #: is no approval that unlocks these.
 NEVER_APPROVABLE: frozenset[str] = frozenset({
@@ -126,11 +152,30 @@ def evaluate(
     capability: Capability,
     *,
     preapproved: frozenset[str] | set[str] = frozenset(),
+    connector_capability: Capability | None = None,
+    connector_toolkit: str = "",
 ) -> Decision:
     """Decide whether `tool` needs an approval before it may run.
 
     `preapproved` is the agent's narrow pre-approved rule set from its Access
     tab. It is consulted last and can never override the floor.
+
+    `connector_capability` is the Bot's own granted ceiling for the connector
+    this call belongs to (`None` for anything that is not a connector call --
+    `agent.create`, `skill.create`, and the like pass nothing here and are
+    unaffected). Granting a connector above read-only is already the
+    operator's own explicit decision to let this Bot write through that app
+    (`docs/connectors.md`): connecting it, then choosing Full over Read in
+    its profile. An ordinary write no longer asks a second time on top of
+    that. This changes nothing else: `NEVER_APPROVABLE`, the floor, and
+    `NEVER_PREAPPROVABLE` capabilities (destructive/admin/cost) are all
+    checked first and never reach this, so a connector-wide grant can never
+    be the reason a payment, a deletion, or an email goes unreviewed.
+
+    `connector_toolkit` narrows that trust further: a toolkit in
+    `_REACHES_A_REAL_PERSON_DIRECTLY` (email, chat, SMS, calendar invites)
+    is never covered by `connector_capability`, however it was granted --
+    see that constant for why.
     """
     never = matching_pattern(tool, NEVER_APPROVABLE)
     if never:
@@ -153,6 +198,11 @@ def evaluate(
     if tool in preapproved:
         return Decision(False, "covered by a pre-approved rule",
                         rule="preapproved", matched=tool)
+
+    if (connector_capability is not None and connector_capability is not Capability.READ
+            and connector_toolkit not in _REACHES_A_REAL_PERSON_DIRECTLY):
+        return Decision(False, "the connector itself was granted write access",
+                        rule="connector_trusted", matched=connector_capability.value)
 
     return Decision(True, "write capability without a pre-approved rule",
                     EXPIRY[capability], rule="default", matched=capability.value)
