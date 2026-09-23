@@ -508,10 +508,18 @@ def validate_grants(requested: list[dict],
 
 
 #: Fields whose change is a privilege change. Auditable, and never writable by
-#: an agent actor.
+#: an agent actor. `reportsTo` is deliberately not here: it is organization
+#: metadata, not a grant -- `org.resolve`'s own docstring is explicit that a
+#: reporting line "never grant[s] authority" (nothing about what a Bot may do
+#: changes when it moves), and `update_agent` is still gated on `_owner_asked`
+#: regardless, so the operator's own instruction is what authorizes the move
+#: either way. `status` stays privileged in general (it covers more than a
+#: pause -- provisioning states, archival), but a Bot may still request the
+#: one safe, reversible transition through the narrower `pause_agent` tool,
+#: which does not go through this check at all.
 PRIVILEGED_FIELDS: frozenset[str] = frozenset({
     "budget", "allowedTools", "preapproved", "grants", "status",
-    "toolCapabilities", "parentAgentId", "reportsTo",
+    "toolCapabilities", "parentAgentId",
 })
 
 
@@ -547,8 +555,8 @@ def check_quota(active_count: int, *, max_agents: int = DEFAULT_MAX_AGENTS) -> N
 
 AUDITED_ACTIONS = (
     "agent.created", "agent.updated", "agent.grants_changed",
-    "agent.budget_changed", "agent.deactivated", "agent.provision_failed",
-    "agent.reporting_changed",
+    "agent.budget_changed", "agent.deactivated", "agent.reactivated",
+    "agent.provision_failed", "agent.reporting_changed",
 )
 
 
@@ -898,7 +906,12 @@ def plan_update(existing: dict, body: dict, actor: Actor) -> tuple[dict, list[di
             before={"reportsTo": existing.get("reportsTo")},
             after={"reportsTo": changes["reportsTo"]}))
 
-    cosmetic = set(changes) - PRIVILEGED_FIELDS - {"accent", "gsi1sk", "model", "state"}
+    # `reportsTo` is no longer in PRIVILEGED_FIELDS (an agent actor may move
+    # it too, see PRIVILEGED_FIELDS's own docstring), but it still has its own
+    # specific event just above -- excluded here for the same reason
+    # accent/gsi1sk/model/state are: a second, generic "agent.updated" event
+    # for the same change would be noise on top of the precise one.
+    cosmetic = set(changes) - PRIVILEGED_FIELDS - {"accent", "gsi1sk", "model", "state", "reportsTo"}
     if cosmetic:
         events.append(audit_event(
             existing["agentId"], "agent.updated", actor,

@@ -80,11 +80,13 @@ INLINE_TOOLS = {
     },
     "update_agent": {
         "description": (
-            "Refine any Bot's name, title, role or standing orders (`description`) -- not only "
-            "ones you created. Use it when the operator asks for a correction directly, or when "
-            "you learn a durable preference or boundary that should outlive this conversation. "
-            "It changes only what you pass. It cannot change access, budget, status or who a Bot "
-            "reports to, and it only works when the operator's own message started this turn."
+            "Refine any Bot's name, title, role, standing orders (`description`) or who it "
+            "reports to -- not only ones you created. Use it when the operator asks for a "
+            "correction directly, or when you learn a durable preference or boundary that "
+            "should outlive this conversation. It changes only what you pass. It cannot "
+            "change access, budget or status, and it only works when the operator's own "
+            "message started this turn -- a reporting line moved this way is still their "
+            "instruction, not authority you granted yourself."
         ),
         "inputSchema": {
             "type": "object",
@@ -96,6 +98,26 @@ INLINE_TOOLS = {
                     "The short label beside the name, at most 24 characters")},
                 "role": {"type": "string", "description": "One sentence: what it is for"},
                 "description": {"type": "string"},
+                "reportsTo": {"type": "string", "description": (
+                    "Who this Bot reports to: another Bot's id, or \"owner\" for the operator "
+                    "directly. Organization metadata only -- moving it grants nothing.")},
+            },
+            "required": ["agentId"],
+        },
+    },
+    "pause_agent": {
+        "description": (
+            "Stop or resume any Bot -- only when the operator's own message asked for it. "
+            "Fully reversible: nothing it owns, remembers or was granted is touched, and "
+            "resuming restores it exactly. This cannot archive or delete a Bot; that stays "
+            "the operator's own action in the console."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agentId": {"type": "string", "description": "The Bot to stop or resume"},
+                "paused": {"type": "boolean", "description": (
+                    "true to pause (default), false to resume")},
             },
             "required": ["agentId"],
         },
@@ -270,11 +292,13 @@ INLINE_TOOLS = {
     },
     "propose_routine": {
         "description": (
-            "Suggest a routine so a result you just delivered keeps happening "
-            "on its own. This never creates one: it shows the operator the "
-            "routine, pre-filled, and they read and confirm it. Offer it after "
-            "you have delivered the result, as your last action, and only when "
-            "repeating the work is actually useful."
+            "Set up a routine so a result you just delivered keeps happening on "
+            "its own. When the operator's own message asked for this, it is "
+            "created and armed at once -- it runs on the schedule you set "
+            "starting now. Otherwise it is only a suggestion: the operator sees "
+            "it pre-filled and has to confirm it before anything is scheduled. "
+            "Offer or create it after you have delivered the result, as your "
+            "last action, and only when repeating the work is actually useful."
         ),
         "inputSchema": {
             "type": "object",

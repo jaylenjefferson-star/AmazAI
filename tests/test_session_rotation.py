@@ -299,11 +299,29 @@ class TestAnUnfulfilledCommitmentAutoContinues:
         world.drive()
         assert self._continuation(world) == []
 
-    def test_calling_a_tool_at_all_rules_it_out_regardless_of_the_closing_line(self, world):  # noqa: F811
+    def test_a_tool_call_answered_within_the_same_round_does_not_rule_it_out(self, world):  # noqa: F811
+        """A tool_use block and closing text can arrive in the same round --
+        `answered` is non-empty from the tool call, so the loop asks the model
+        once more; an empty reply to that (nothing further to add) is not
+        itself a promise, so this does not auto-continue -- but not because a
+        tool was called, only because the closing round said nothing."""
         world.script([*tool_use("remember", {"title": "t", "body": "b"}),
                       text(" I'll do the rest now.")])
         world.drive()
         assert self._continuation(world) == []
+
+    def test_a_search_then_an_unfulfilled_close_in_a_later_round_still_auto_continues(self, world):  # noqa: F811
+        """The shape that actually recurred in production: a tool call (a
+        connector_search that found the tool) in round 1, then a later round
+        that calls nothing and closes on a promise instead of following
+        through with the action the search was for. Not narrowed by round
+        count -- see _looks_unfulfilled's own docstring."""
+        world.script([*tool_use("connector_search", {"query": "create a doc"})],
+                     [text("Let me look up the available tools first.")])
+        world.drive()
+        rows = self._continuation(world)
+        assert len(rows) == 1
+        assert rows[0]["trigger"]["autoContinued"] == 1
 
     def test_stops_at_the_bound_like_the_ceiling_case_does(self, world):  # noqa: F811
         world.store.update(world.run["pk"], "META",

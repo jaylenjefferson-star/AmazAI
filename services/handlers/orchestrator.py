@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from amazai import (agentcore, agents as A, approvals, billing, collab, composio,
                     connectors, continuation, cost, govern, handoffs, keys as K, memory,
                     metrics, onboarding, org, policy, provisioning, redact, review, router,
-                    routines, runs, skills, standard_runtime, threads)
+                    routines, runs, schedules, skills, standard_runtime, threads)
 from amazai.cost import Budget, RunCost, Verdict, check as budget_check
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
@@ -109,18 +109,24 @@ def _looks_unfulfilled(text: str) -> bool:
     """Whether a turn's own words say it is about to act, right after it
     stopped having acted on nothing.
 
-    Added after a real, repeated pattern: asked to do something, a Bot would
-    answer with only a description of what it was about to do -- "Let me
-    update every agent's role... I'll do all of them now." -- and end its
-    turn there, having called no tool at all. `_persistence_note` in the
-    system prompt already asks a Bot not to do this; this is the code-level
-    backstop for when the guidance alone does not hold, and it is deliberately
-    narrow: only the turn's *own last sentence* is checked (an "I'll" used
-    mid-explanation, followed by a reply that genuinely finishes, is left
-    alone), and it is only ever consulted when this turn made zero tool
-    calls -- see the `rounds == 0` guard at the call site. A wrong read here
-    costs one bounded extra turn (`MAX_AUTO_CONTINUES`), not a loop: worst
-    case the model replies that it already has nothing further to add.
+    Added after a real, repeated pattern, in two shapes: asked to do
+    something, a Bot would answer with only a description of what it was
+    about to do -- "Let me update every agent's role... I'll do all of them
+    now." -- and end its turn there, having called no tool at all. The second
+    shape looks busier but is the same failure: connector_search called
+    twice to find a Google Docs tool, then the turn ends on "Let me look up
+    the available tools first" -- as if the search that already ran had not
+    happened -- with connector_call, the action that would have actually done
+    something, never reached. `_persistence_note` in the system prompt
+    already asks a Bot not to do this; this is the code-level backstop for
+    when the guidance alone does not hold, deliberately narrow only in that
+    it checks the turn's *own last sentence* (an "I'll" used mid-explanation,
+    followed by a reply that genuinely finishes, is left alone) -- it is not
+    narrowed by round count, because the second shape proves the pattern
+    recurs just as often after rounds that already made some (insufficient)
+    progress. A wrong read here costs one bounded extra turn
+    (`MAX_AUTO_CONTINUES`), not a loop: worst case the model replies that it
+    already has nothing further to add.
     """
     tail = text.strip()
     if not tail:
@@ -678,12 +684,17 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
             # The model asked for something and stopped to wait for it. Answer, and let it go on.
             if stream_error or pending_approval or not answered:
-                if not stream_error and not pending_approval and rounds == 0:
-                    # `rounds` only advances past a round that had tool calls to
-                    # answer (just below); still 0 here means this whole turn
-                    # made none. That shape is indistinguishable from a genuine
-                    # "nothing more to do" finish by `answered` alone -- both are
-                    # empty -- so `_looks_unfulfilled` is what tells the two apart.
+                if not stream_error and not pending_approval:
+                    # `answered` empty is a genuine "nothing more to do" finish
+                    # and a reply that only *describes* what it is about to do
+                    # in the exact same shape -- indistinguishable by `answered`
+                    # alone, so `_looks_unfulfilled` is what tells them apart.
+                    # Not narrowed to a turn's first round: the pattern this
+                    # exists for recurs just as often after earlier rounds that
+                    # searched but never acted -- connector_search finding the
+                    # tool twice, connector_call never following -- so a wrong
+                    # read costs one bounded extra turn regardless of how many
+                    # rounds came before it.
                     consecutive = int((run.get("trigger") or {}).get("autoContinued", 0) or 0)
                     auto_continuing = (
                         consecutive < MAX_AUTO_CONTINUES
@@ -1084,7 +1095,11 @@ def _connected_apps_note(store: Store, agent_id: str) -> str:
             f"You have access to: {', '.join(apps)}. Use connector_search to find what "
             "you can do in them, then connector_call to do it. Reading runs at once; "
             "anything that creates, changes or removes data waits for the operator's "
-            "approval. For an app not listed, use request_connector.")
+            "approval. For an app not listed, use request_connector.\n"
+            "Once connector_search has told you the tool's name, call it with "
+            "connector_call in this same turn -- searching again for a tool you already "
+            "found is not progress, and a turn that ends on \"let me look up the tools\" "
+            "after it already looked them up has done nothing.")
 
 
 def _directory_field(value, limit: int) -> str:
@@ -1265,6 +1280,9 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
 
     if name == "update_agent":
         return _update_agent_tool(store, run, agent, ev, push, turn, seq, args)
+
+    if name == "pause_agent":
+        return _pause_agent_tool(store, run, agent, ev, push, turn, seq, args)
 
     if name == "create_group_chat":
         try:
@@ -1512,6 +1530,8 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
             "note": f"the operator was shown a card to connect {app['name']}; say what it is for and stop"}}
 
     if name == "propose_routine":
+        if _owner_asked(run):
+            return _create_routine_tool(store, run, agent, ev, push, turn, seq, args)
         try:
             proposal = routines.validate_proposal(args)
         except routines.ValidationError as exc:
@@ -1795,7 +1815,7 @@ def _brief_child(store, run, creator: dict, child: dict, task) -> dict:
 
 
 #: What a Bot may refine about a Bot it made. Not access, budget, tools or status.
-_REFINABLE = ("name", "title", "role", "description")
+_REFINABLE = ("name", "title", "role", "description", "reportsTo")
 
 
 def _update_agent_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
@@ -1839,8 +1859,109 @@ def _update_agent_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
         store.put(event_row)
     ev.action(seq, "agent.update", f"refined {target_id}", agentId=target_id)
     _step(push, run, turn, "agent.update", f"refined {target['name']}",
-          review.scoped("agent", "you asked for it; name, title, role and standing orders only"))
+          review.scoped("agent", "you asked for it; name, title, role, standing orders and reporting line only"))
     return {"pause": False, "toolResult": {"updated": sorted(body), "agentId": target_id}}
+
+
+def _pause_agent_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
+    """`pause_agent`: stop or resume any Bot, when the operator's own message
+    asked for it.
+
+    The one status change a Bot may make on another -- and only that one:
+    `status` stays privileged in `agents.assert_no_self_escalation` for
+    everything else, and archival/deletion are not reachable from here at
+    all, on purpose (see docs/architecture/16, "Delete stays user-only" --
+    the same norm GrokBot itself keeps). Pausing is fully reversible; nothing
+    it owns, remembers or was granted is touched, and resuming restores
+    exactly what paused.
+    """
+    def refuse(why: str) -> dict:
+        ev.error(seq, "terminal", f"pause_agent: {why}")
+        _step(push, run, turn, "pause_agent", f"not changed: {why}",
+              review.Review(review.DENIED, "agent", why))
+        return {"pause": False, "toolResult": {"error": why}}
+
+    if not _owner_asked(run):
+        return refuse("this only works when the operator's own message started the turn; "
+                      "ask them for the change instead")
+    target_id = A.agent_ref(args.get("agentId"))
+    target = store.try_get(K.agent_pk(store.owner_id, target_id), "META") if target_id else None
+    if not target:
+        return refuse(f"no such Bot: {target_id!r}")
+    paused = args.get("paused")
+    if paused is None:
+        paused = True
+    want = "paused" if paused else "active"
+    current = target.get("status") or target.get("state")
+    if current == "archived":
+        return refuse("an archived Bot cannot be paused or resumed")
+    if current == want:
+        return refuse(f"{target['name']} is already {want}")
+    store.update(K.agent_pk(store.owner_id, target_id), "META", {"status": want, "state": want})
+    actor = A.Actor(user_id=store.owner_id, org_id=agent.get("orgId") or "", agent_id=agent["agentId"])
+    store.put(A.audit_event(
+        target_id, "agent.deactivated" if paused else "agent.reactivated", actor,
+        before={"status": current}, after={"status": want}, detail=f"status -> {want}"))
+    ev.action(seq, "agent.pause" if paused else "agent.resume", f"{want} {target_id}", agentId=target_id)
+    _step(push, run, turn, "pause_agent", f"{'paused' if paused else 'resumed'} {target['name']}",
+          review.scoped("agent", "you asked for it; reversible, never archival or deletion"))
+    return {"pause": False, "toolResult": {"agentId": target_id, "status": want}}
+
+
+def _create_routine_tool(store, run, agent, ev, push, turn, seq, args) -> dict:
+    """`propose_routine`, direct: set it up now, when the operator's own
+    message asked for it -- the same split `create_agent` already makes
+    between a direct ask and a Bot's own initiative (which still only ever
+    proposes; see the caller).
+
+    Goes through the identical path a person's own `POST /routines` does --
+    `routines.plan_create`, then `schedules.put` to actually arm the
+    EventBridge schedule, with the same rollback if arming it fails, so a
+    routine can never sit in the list looking live while nothing is
+    scheduled to fire it.
+    """
+    def refuse(why: str) -> dict:
+        ev.error(seq, "terminal", f"propose_routine: {why}")
+        _step(push, run, turn, "propose_routine", f"not created: {why}",
+              review.Review(review.DENIED, "routine", why))
+        return {"pause": False, "toolResult": {"error": why}}
+
+    preset = (args.get("schedule") or args.get("preset") or "").strip()
+    if preset not in routines.PRESETS:
+        return refuse(f"schedule must be one of {sorted(routines.PRESETS)}")
+    body = {
+        "name": args.get("name", ""),
+        "agentId": agent["agentId"],
+        "prompt": args.get("prompt", ""),
+        "trigger": {"type": "schedule", "expression": routines.PRESETS[preset]},
+        "enabled": True,
+    }
+    actor = A.Actor(user_id=store.owner_id, org_id=agent.get("orgId") or "", agent_id=agent["agentId"])
+    try:
+        record = routines.plan_create(body, actor)
+    except routines.ValidationError as exc:
+        return refuse(str(exc))
+    record["timezone"] = agent.get("timezone")
+    written = store.put(record)
+    try:
+        schedules.put(written, store.owner_id)
+    except Exception as exc:  # noqa: BLE001
+        # A schedule EventBridge refused would otherwise sit in the list
+        # looking armed and never fire -- leave nothing behind, matching
+        # services/handlers/api.py's own create route.
+        traceback.print_exc()
+        store.delete(K.routine_pk(written["routineId"]), "META")
+        return refuse(f"could not arm the schedule: {exc}")
+    threads.event(store, run["threadId"],
+                  f"Routine created: {written['name']} · "
+                  f"{routines.describe_schedule(written.get('trigger'))}",
+                  icon="clock", routineId=written["routineId"])
+    ev.action(seq, "routine.create", f"created {written['routineId']}", routineId=written["routineId"])
+    _step(push, run, turn, "propose_routine", f"created {written['name']}",
+          review.scoped("routine", "you asked for it; runs on the schedule shown"))
+    return {"pause": False, "toolResult": {
+        "created": True, "routineId": written["routineId"], "name": written["name"],
+        "note": "it is live now, on the schedule you set; tell the operator briefly what you made"}}
 
 
 def _agent_creation_proposal(args: dict, *, parent_agent_id: str) -> dict:
