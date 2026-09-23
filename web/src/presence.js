@@ -198,10 +198,14 @@ export function usePresence() {
 // Run states -> [companion state, a line for hover]. `AWAITING_INPUT` and
 // `AWAITING_LOGIN` are asking *you*, so they are `approval` ("Needs you");
 // `AWAITING_CONNECTOR` is waiting on the outside world, which is `waiting`.
+// `EXECUTING` is `thinking`, not `working`: this fires once, before the
+// stream has produced a single delta or tool call -- the very first thing a
+// Bot does is reason, not act, and `working` here drew that instant wrong
+// until either a `delta` or a `tool` event corrected it a moment later.
 const RUN_STATES = {
   QUEUED:             ['thinking', 'Getting started'],
   PLANNING:           ['thinking', 'Planning'],
-  EXECUTING:          ['working', ''],
+  EXECUTING:          ['thinking', ''],
   RETRYING:           ['working', 'Retrying'],
   AWAITING_APPROVAL:  ['approval', 'Waiting for your approval'],
   AWAITING_INPUT:     ['approval', 'Waiting for your answer'],

@@ -24,14 +24,29 @@ describe('presence events', () => {
   it('turns live run events into a visible lifecycle and fades completed work', () => {
     const { result } = renderHook(() => usePresence());
 
+    // EXECUTING fires once, before a single delta or tool call has happened --
+    // the Bot is about to reason, not act yet, so it reads as thinking.
     act(() => applyEvent({ type: 'run.state', state: 'EXECUTING', threadId: 'dm-eng', runId: 'run-1' }, ctx));
-    expect(result.current.eng).toMatchObject({ state: 'working', runId: 'run-1' });
+    expect(result.current.eng).toMatchObject({ state: 'thinking', runId: 'run-1' });
 
     act(() => applyEvent({ type: 'run.end', state: 'COMPLETED', threadId: 'dm-eng', summary: 'Shipped' }, ctx));
     expect(result.current.eng).toMatchObject({ state: 'complete', action: 'Shipped' });
 
     act(() => vi.advanceTimersByTime(4_000));
     expect(result.current).toEqual({});
+  });
+
+  it('toggles between thinking and working as a turn alternates between text and tool calls', () => {
+    const { result } = renderHook(() => usePresence());
+
+    act(() => applyEvent({ type: 'delta', threadId: 'dm-eng', runId: 'run-1', text: 'Checking the logs…' }, ctx));
+    expect(result.current.eng.state).toBe('thinking');
+
+    act(() => applyEvent({ type: 'tool', threadId: 'dm-eng', runId: 'run-1', name: 'shell', summary: 'ran a command' }, ctx));
+    expect(result.current.eng.state).toBe('working');
+
+    act(() => applyEvent({ type: 'delta', threadId: 'dm-eng', runId: 'run-1', text: 'Found it — ' }, ctx));
+    expect(result.current.eng.state).toBe('thinking');
   });
 
   it('records the live tool trail and closes it on an approval pause', () => {
