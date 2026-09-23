@@ -45,8 +45,6 @@ function formValues(agent) {
     modelTier: agent.model?.tier || 'balanced',
     shape: agent.archetype,
     color: agent.color,
-    perRunUsd: agent.budget?.perRunUsd ?? 1,
-    perMonthUsd: agent.budget?.perMonthUsd ?? 20,
     timezone: agent.timezone || '',
     hoursOn: Boolean(agent.workingHours),
     start: agent.workingHours?.start || '09:00',
@@ -120,15 +118,6 @@ export default function CompanionSettings() {
 
     if (draft.shape !== was.shape || draft.color !== was.color) {
       out.avatar = { shape: draft.shape, color: draft.color };
-    }
-
-    if (Number(draft.perRunUsd) !== Number(was.perRunUsd)
-        || Number(draft.perMonthUsd) !== Number(was.perMonthUsd)) {
-      out.budget = {
-        ...(agent.budget || {}),
-        perRunUsd: Number(draft.perRunUsd),
-        perMonthUsd: Number(draft.perMonthUsd),
-      };
     }
 
     // An empty box is "unchanged", not "clear it": the API has no way to
@@ -282,21 +271,7 @@ export default function CompanionSettings() {
           </p>
         </Group>
 
-        <Group title="Work" note="When this companion may start, and what a run may cost.">
-          <div className="field-row">
-            <label className="field">
-              <span>Per run</span>
-              <input type="number" min="0" step="0.5" value={draft.perRunUsd}
-                     onChange={(e) => set('perRunUsd', e.target.value)} />
-            </label>
-            <label className="field">
-              <span>Per month</span>
-              <input type="number" min="0" step="5" max={options.limits.maxMonthlyUsd}
-                     value={draft.perMonthUsd}
-                     onChange={(e) => set('perMonthUsd', e.target.value)} />
-            </label>
-          </div>
-
+        <Group title="Work" note="When this companion may start.">
           <label className="field">
             <span>Timezone <em>IANA name</em></span>
             <input value={draft.timezone} placeholder="America/Los_Angeles"

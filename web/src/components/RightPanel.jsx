@@ -111,20 +111,14 @@ export function Usage({ agent }) {
   if (error) return <div className="err">{error}</div>;
   if (!data) return <div className="empty">Loading…</div>;
 
-  const budget = agent.budget || {};
-  const pct = budget.perMonthUsd ? (data.totalUsd / budget.perMonthUsd) * 100 : 0;
-
   return (
     <>
+      {/* Spend only, not a ceiling: per-agent budgets were removed (D7 in
+          docs/architecture/15-open-decisions.md) -- nothing stops this
+          Bot's runs on cost, so showing a "budget" here would claim a limit
+          that no longer exists. */}
       <div className="kv">
         <span className="k">This month</span><span className="v">${data.totalUsd.toFixed(2)}</span>
-        <span className="k">Monthly budget</span><span className="v">${budget.perMonthUsd ?? '—'}</span>
-        <span className="k">Per-run cap</span><span className="v">${budget.perRunUsd ?? '—'}</span>
-        <span className="k">At ceiling</span><span className="v">{budget.onCeiling || 'hard_stop'}</span>
-      </div>
-      <div className="bar">
-        <i className={pct >= 100 ? 'danger' : pct >= 80 ? 'warn' : ''}
-           style={{ width: `${Math.min(100, pct)}%` }} />
       </div>
       <div className="section-label">Recent runs</div>
       {data.runs.length === 0 && <div className="empty">No runs this month.</div>}

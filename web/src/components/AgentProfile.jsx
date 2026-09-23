@@ -235,7 +235,7 @@ export default function AgentProfile({ agent, agents, threadId, onChange, onClos
 
         <button type="button" className="pf-more" onClick={() => { onClose(); navigate(`/agents/${agent.agentId}/settings`); }}>
           <span className="sx-icon"><Icon name="settings" size={19} /></span>
-          <span className="sx-text"><strong>More settings</strong><small>Spending limits, working hours, pause or archive</small></span>
+          <span className="sx-text"><strong>More settings</strong><small>Working hours, pause or archive</small></span>
           <Icon name="forward" size={16} />
         </button>
       </div>
