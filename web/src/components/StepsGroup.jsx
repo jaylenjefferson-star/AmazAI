@@ -19,6 +19,7 @@ export function ruleSentence(review) {
     case 'default': return 'a write with no pre-approved rule';
     case 'read': return 'read-only';
     case 'preapproved': return 'covered by a pre-approved rule';
+    case 'connector_trusted': return 'the connector itself was granted write access';
     case 'approved': return 'you approved these exact arguments';
     case 'sandbox': return 'ran in its own sandbox';
     case 'no_grant': return 'not granted to this Bot';

@@ -689,8 +689,17 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                     # and a reply that only *describes* what it is about to do
                     # in the exact same shape -- indistinguishable by `answered`
                     # alone, so `_looks_unfulfilled` is what tells them apart.
-                    # Not narrowed to a turn's first round: the pattern this
-                    # exists for recurs just as often after earlier rounds that
+                    # The *whole* buffer, not just this round's own slice: the
+                    # promise can be said in an earlier round (narrate, then
+                    # call three read-only tools, then stop) and the round that
+                    # actually triggers this check can itself contribute no
+                    # text at all -- confirmed in production, where checking
+                    # only the empty final increment silently missed a promise
+                    # said two rounds earlier. What matters is whether the
+                    # reply the operator actually sees ends unfulfilled, and
+                    # that is the full accumulated text, not one round's slice
+                    # of it. Not narrowed to a turn's first round either: the
+                    # pattern recurs just as often after earlier rounds that
                     # searched but never acted -- connector_search finding the
                     # tool twice, connector_call never following -- so a wrong
                     # read costs one bounded extra turn regardless of how many
@@ -698,7 +707,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                     consecutive = int((run.get("trigger") or {}).get("autoContinued", 0) or 0)
                     auto_continuing = (
                         consecutive < MAX_AUTO_CONTINUES
-                        and _looks_unfulfilled("".join(buffer[round_from:]))
+                        and _looks_unfulfilled("".join(buffer))
                     )
                 break
             if runs.is_cancelled(store, run):
@@ -1653,7 +1662,9 @@ def _connector_call(store, run, ev, push, turn, parsed, seq, cost, args, preappr
         grant = connectors.authorize(connectors.granted_apps(store, run["agentId"]),
                                      toolkit_slug=meta["toolkit"], tool=slug,
                                      capability=capability)
-        decision = policy.evaluate(slug, capability, preapproved=preapproved)
+        decision = policy.evaluate(slug, capability, preapproved=preapproved,
+                                   connector_capability=grant.capability,
+                                   connector_toolkit=meta["toolkit"])
     except policy.Refused as exc:
         ev.error(seq, "terminal", str(exc))
         _step(push, run, turn, slug, f"refused: {exc}", review.refused(exc))
