@@ -46,10 +46,10 @@ export function Verdict({ review }) {
  *
  * The transcript is for what was said. A run's tool calls are how it got
  * there, and five of them stacked between two sentences bury both. So they
- * collapse into "Worked for 14s · 5 steps", open while the run is live (that is
- * the moment someone is watching) and shut once it ends -- the memo's third
- * presence layer, "how much do I need to know", answered by one line first and
- * the trail only on demand.
+ * collapse into "Worked for 14s · 5 steps" (or "Working · 14s" while live) and
+ * stay collapsed either way -- the memo's third presence layer, "how much do
+ * I need to know", answered by one line and the trail only on demand, never
+ * pushed open on you just because the run happens to still be going.
  *
  * Each step carries Auto Review's verdict and the rule behind it, and the header
  * says up front if anything was asked or denied: the steps that needed a person
@@ -60,7 +60,7 @@ export function Verdict({ review }) {
  */
 export default function StepsGroup({ steps }) {
   const running = !steps.endedAt;
-  const [open, setOpen] = useState(running);
+  const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -69,8 +69,8 @@ export default function StepsGroup({ steps }) {
     return () => clearInterval(tick);
   }, [running]);
 
-  // Closed when the run ends. A reader who opened it stays in charge until
-  // then; after that it is history.
+  // Closed when the run ends, for whoever *did* open it while it was live: a
+  // reader stays in charge until then, and after that it is history.
   useEffect(() => { if (!running) setOpen(false); }, [running]);
 
   const seconds = Math.max(1, Math.round(((steps.endedAt || now) - steps.startedAt) / 1000));
