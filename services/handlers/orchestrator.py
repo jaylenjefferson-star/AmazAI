@@ -229,6 +229,25 @@ def _paused_turn(store: Store, run: dict, event: dict) -> dict | None:
     return store.try_get(run["pk"], K.paused_turn_sk(approval_id))
 
 
+def _rotate_if_abandoning_a_resume(store: Store, run: dict, event: dict) -> None:
+    """Call before failing a run at any gate `_drive` checks before it
+    invokes the harness this turn (kill switch, credits, agent state,
+    missing model id, the start-of-run Budget check).
+
+    Every one of those gates can fire on a *resume* -- an invocation
+    carrying the answer to a paused approval, which `_paused_turn` reads
+    and sends back to the harness at line ~344, well after all of them.
+    Bailing before that point means the harness is never reached to send
+    that answer: the session is left owing it exactly the way a turn
+    that dies mid-round after the harness call is (see `_mark_dirty`),
+    just from an earlier point in this function. A plain, non-resuming
+    run that fails one of these gates never invoked the harness at all
+    this turn, so there is nothing to rotate -- this is a no-op for it.
+    """
+    if continuation.is_approval_resume(event) and _paused_turn(store, run, event):
+        _mark_dirty(store, run)
+
+
 def _drive(store: Store, run: dict, event: dict) -> dict:
     push = Push(store)
     agent = store.get(K.agent_pk(store.owner_id, run["agentId"]), "META")
@@ -240,6 +259,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # the agent's owner today (the one-workspace-per-owner seam).
     org_id = agent.get("orgId") or store.owner_id
     if govern.is_frozen(store.try_get(K.org_pk(org_id), "KILLSWITCH")):
+        _rotate_if_abandoning_a_resume(store, run, event)
         _fail(store, run, "this organization is frozen by an administrator")
         return {"ok": False, "reason": "org frozen"}
 
@@ -250,10 +270,12 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # anything left to spend at all). See billing.py's module docstring for
     # why this is a coarse pre-flight check, not mid-run metering.
     if not billing.has_credit(store):
+        _rotate_if_abandoning_a_resume(store, run, event)
         _fail(store, run, "this account is out of credits")
         return {"ok": False, "reason": "out of credits"}
 
     if agent.get("state") != "active":
+        _rotate_if_abandoning_a_resume(store, run, event)
         _fail(store, run, f"agent {agent.get('name')} is {agent.get('state')}")
         return {"ok": False, "reason": "agent not active"}
 
@@ -261,6 +283,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     if not model_id:
         # seats.json ships modelId: null until D2 is decided. Failing here with
         # a clear message beats a Bedrock error that looks like a permissions bug.
+        _rotate_if_abandoning_a_resume(store, run, event)
         _fail(store, run,
               "no modelId configured for this seat; resolve the Bedrock inference "
               "profile and set it in scripts/seats.json (decision D2)")
@@ -275,6 +298,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                            tool_errors=run.get("toolErrorCount", 0),
                            consecutive_tool_errors=run.get("consecutiveToolErrors", 0))
     if verdict.should_stop:
+        _rotate_if_abandoning_a_resume(store, run, event)
         _finish(store, run, RunState.FAILED, f"stopped: {verdict.reason}", push)
         return {"ok": False, "reason": verdict.reason}
     if verdict.verdict is Verdict.WARN:
