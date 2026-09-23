@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import os
 
-from amazai import agents as A, connectors, keys as K, standard_runtime
+from amazai import agents as A, connectors, keys as K, platform_models, standard_runtime
 from amazai.policy import Capability
 from amazai.store import Store
 
@@ -69,18 +69,28 @@ def max_agents() -> int:
     return int(os.environ.get("MAX_AGENTS", A.DEFAULT_MAX_AGENTS))
 
 
-def resolve_model_id(agent: dict, seated: list[dict]) -> None:
+def resolve_model_id(agent: dict, seated: list[dict], *, table=None) -> None:
     """Give a new Bot the model an existing one already resolved, in place.
 
     A Bot is created by *tier*, never by a guessed Bedrock identifier. The account's
     resolved model is reused from a Bot that has one. Both creation paths need this:
     without it a Bot approved from a proposal reached provisioning with no model and
     was refused.
+
+    The seated-Bot reuse is scoped to *this owner's* org, which is empty for a
+    brand-new self-serve signup -- so it falls back to the platform-wide model
+    registry (`platform_models`), the cross-owner cache of what this AWS account's
+    tiers resolved to. Still never a guess: the registry only ever holds ids that
+    were resolved from the live account, so a tier with nothing recorded leaves
+    `modelId` None and fails at provisioning exactly as before.
     """
     if (agent.get("model") or {}).get("modelId"):
         return
     resolved = next((r.get("model", {}).get("modelId") for r in seated
                      if r.get("model", {}).get("modelId")), None)
+    if not resolved:
+        tier = (agent.get("model") or {}).get("tier") or ""
+        resolved = platform_models.resolve(tier, table=table)
     if resolved:
         agent["model"]["modelId"] = resolved
 
@@ -109,7 +119,12 @@ def provision_harness(store: Store, agent: dict) -> dict:
             "run scripts/resolve_models.py against this account first"
         )
 
-    return standard_runtime.provision_bot(store, agent)
+    provisioned = standard_runtime.provision_bot(store, agent)
+    # Seed the cross-owner registry from a Bot that just resolved a model, so the
+    # next self-serve signup's first Bot has a model to reuse without a
+    # resolve_models.py re-run. Best-effort; never fails a successful create.
+    platform_models.record_from_agent(agent)
+    return provisioned
 
 
 def first_task(value) -> str:

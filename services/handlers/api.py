@@ -1659,13 +1659,11 @@ def _create_agent(store: Store, body: dict, event: dict):
     # Reuse an already-provisioned seat's resolved model when one exists in the
     # org; it was discovered from this account by resolve_models.py, so a first
     # Bot can be created without turning the UI into a model-ID configuration
-    # screen. A fresh org still fails clearly at provisioning time until its
-    # models have been resolved.
-    if not plan.agent["model"].get("modelId"):
-        resolved = next((r.get("model", {}).get("modelId") for r in active
-                         if r.get("model", {}).get("modelId")), None)
-        if resolved:
-            plan.agent["model"]["modelId"] = resolved
+    # screen. A brand-new self-serve signup's org is empty, so this falls back
+    # to the platform-wide model registry (the cross-owner cache of what this
+    # account's tiers resolved to) inside `resolve_model_id`. Still no guess: a
+    # fresh account with nothing recorded fails clearly at provisioning time.
+    provisioning.resolve_model_id(plan.agent, active)
 
     if store.try_get(K.agent_pk(store.owner_id, plan.agent_id), "META"):
         return _resp(409, {"error": "conflict",
