@@ -58,6 +58,18 @@ MAX_TOOL_ROUNDS = 40
 #: nobody chose; stopping cleanly with the work so far is better than either.
 ROUND_BUDGET_SECONDS = 11 * 60
 
+#: A room wake fires every member's `InvokeHarness` at once, against the one
+#: harness the whole owner shares (`standard_runtime.py`). Confirmed in
+#: production: a five-member room wake put five concurrent invocations on it
+#: in the same second and four came back `ReadTimeoutError`/502 -- the
+#: account's one harness could not stand up that many sessions at once. This
+#: spreads a room wake's own harness calls out instead of asking AgentCore to
+#: absorb a burst it has already shown it cannot; `trigger.wakeIndex` (set by
+#: `api._post_message`) is this run's position in that wake, 0 for anything
+#: else, so a normal single-Bot trigger is never delayed by it.
+WAKE_STAGGER_SECONDS = 1.5
+MAX_WAKE_STAGGER_SLOTS = 4
+
 #: How many times in a row a task may auto-continue past the round/time ceiling
 #: (never the budget ceiling -- see `_continue_automatically`) before it stops
 #: and waits for the operator instead. Bounded so a task that genuinely cannot
@@ -525,6 +537,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     answered: list[dict] = []
     carried: list[dict] = []
     rounds = 0
+
+    wake_index = int((run.get("trigger") or {}).get("wakeIndex", 0) or 0)
+    if wake_index:
+        time.sleep(min(wake_index, MAX_WAKE_STAGGER_SLOTS) * WAKE_STAGGER_SECONDS)
+
     drive_started = time.monotonic()
     # Carried across invocations on the run row, so a run that pauses and
     # resumes does not get a fresh allowance of failures.

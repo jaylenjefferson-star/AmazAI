@@ -1785,7 +1785,7 @@ def _post_message(store: Store, thread_id: str, body: dict):
             redirect = old
 
     started = []
-    for agent_id in targets:
+    for i, agent_id in enumerate(targets):
         if redirect and redirect["agentId"] == agent_id:
             _stop_run(store, redirect, redirect_text=text)
             started.append({"runId": redirect["runId"], "agentId": agent_id,
@@ -1799,6 +1799,10 @@ def _post_message(store: Store, thread_id: str, body: dict):
         if len(targets) > 1:
             trigger["woke"] = [names[a] for a in targets]
             trigger["mentions"] = targets
+            # Spreads this room wake's InvokeHarness calls out instead of
+            # firing all of them at the one shared harness in the same
+            # instant -- see WAKE_STAGGER_SECONDS in orchestrator.py.
+            trigger["wakeIndex"] = i
         run = runs.create(store, agent_id=agent_id, thread_id=thread_id, goal=text,
                           trigger=trigger)
         _invoke_orchestrator(run["runId"], store.owner_id)

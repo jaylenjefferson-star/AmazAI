@@ -81,6 +81,20 @@ class TestParallelWakeInAChannel:
         events = [m for m in messages(room) if m.get("kind") == "event"]
         assert [e["text"] for e in events] == ["Woke Eng and Ops"]
 
+    def test_each_run_carries_its_position_in_the_wake(self, api_table):
+        # Production evidence: a five-member room wake fired five concurrent
+        # InvokeHarness calls against the one shared harness in the same
+        # second, and four came back ReadTimeoutError/502. `wakeIndex` is
+        # what `_drive`'s WAKE_STAGGER_SECONDS reads to spread them out --
+        # see orchestrator.py. Order must match `targets_for`'s membership
+        # order, which is what the stagger is spreading.
+        store = Store("owner-a", table=api_table)
+        eng, ops, res = make_agent("Eng"), make_agent("Ops"), make_agent("Res")
+        room = make_room(eng, ops, res)
+        body = call("POST", f"/threads/{room}/messages", {"text": "go"})[1]
+        indices = [run_row(store, r["runId"])["trigger"]["wakeIndex"] for r in body["runs"]]
+        assert indices == [0, 1, 2]
+
     def test_an_unmentioned_task_message_starts_the_whole_room(self, api_table):
         eng, ops = make_agent("Eng"), make_agent("Ops")
         room = make_room(eng, ops)
