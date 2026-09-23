@@ -11,11 +11,10 @@ import { operatorFirstName, useAuth0 } from '../auth0';
  * same constants the API validates against. The form cannot offer a colour or
  * a tier the server would refuse, because it does not know any others.
  *
- * Two things are deliberately visible rather than hidden behind a default:
- * the monthly ceiling, because an agent that can spend money should say so
- * while you are deciding to make one; and the grant list, because an agent
- * with no connectors is the safe starting point and should look like a
- * choice, not an oversight.
+ * The grant list is deliberately visible rather than hidden behind a default:
+ * an agent with no connectors is the safe starting point and should look like
+ * a choice, not an oversight. There is no budget control here -- per-agent
+ * spend ceilings were removed (see D7 in docs/architecture/15-open-decisions.md).
  */
 export default function CreateAgent({ onClose, onCreated }) {
   const { user } = useAuth0();
@@ -32,8 +31,6 @@ export default function CreateAgent({ onClose, onCreated }) {
   const [color, setColor] = useState('#2f6fe4');
   const [tier, setTier] = useState('balanced');
   const [style, setStyle] = useState('collaborative');
-  const [perMonth, setPerMonth] = useState(20);
-  const [perRun, setPerRun] = useState(1);
   const [tools, setTools] = useState([]);
   const [grants, setGrants] = useState({});
 
@@ -99,11 +96,6 @@ export default function CreateAgent({ onClose, onCreated }) {
         // read once by the API and stored nowhere.
         operatorName: operatorFirstName(user),
         tools,
-        budget: {
-          perRunUsd: Number(perRun),
-          perMonthUsd: Number(perMonth),
-          onCeiling: 'hard_stop',
-        },
         grants: Object.entries(grants).map(([connectorId, allowedTools]) => ({
           connectorId, allowedTools,
         })),
@@ -237,27 +229,6 @@ export default function CreateAgent({ onClose, onCreated }) {
                 <p className="hint-text">
                   A shell and the agent&rsquo;s own drive are always on. Anything
                   riskier is a grant, below.
-                </p>
-              </div>
-
-              <div className="field">
-                <span>Budget</span>
-                <div className="budget-row">
-                  <label>
-                    <em>per run</em>
-                    <input type="number" min="0.1" step="0.1" value={perRun}
-                           onChange={(e) => setPerRun(e.target.value)} />
-                  </label>
-                  <label>
-                    <em>per month</em>
-                    <input type="number" min="1" step="1"
-                           max={options.limits.maxMonthlyUsd} value={perMonth}
-                           onChange={(e) => setPerMonth(e.target.value)} />
-                  </label>
-                </div>
-                <p className="hint-text">
-                  Hard stop at the monthly ceiling — the agent stops rather than
-                  overspending.
                 </p>
               </div>
 
