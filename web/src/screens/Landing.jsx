@@ -1,6 +1,7 @@
 import Companion from '../characters/Companion';
 import { Link } from 'react-router-dom';
 import { TopNav, PublicFooter } from '../components/PublicShell';
+import Seo from '../components/Seo';
 import { startLogin, useAuth0 } from '../auth0';
 
 const STEPS = [
@@ -37,6 +38,11 @@ export default function Landing() {
 
   return (
     <div className="landing">
+      <Seo
+        title="Your AI Team, With You in Control"
+        description="AmazAI is a private agent operator console. Build a small team of AI agents, hand them real tools, and approve anything they can't undo before it happens."
+        path="/welcome-to-amazai"
+      />
       <TopNav />
 
       <section className="landing-hero">

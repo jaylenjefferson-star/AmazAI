@@ -1,5 +1,6 @@
 import Companion from '../characters/Companion';
 import PublicShell from '../components/PublicShell';
+import Seo from '../components/Seo';
 
 /**
  * The "who is behind this" page.
@@ -11,6 +12,11 @@ import PublicShell from '../components/PublicShell';
 export default function About() {
   return (
     <PublicShell>
+      <Seo
+        title="About"
+        description="AmazAI is built by AmazFlow, LLC — a small team building AI agents with narrow tools, a visible budget, and a stop before anything irreversible."
+        path="/about"
+      />
       <section className="about-hero">
         <h1>We build AI companions you can actually trust with a task.</h1>
         <p>

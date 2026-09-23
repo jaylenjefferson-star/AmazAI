@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import PublicShell from '../../components/PublicShell';
+import Seo from '../../components/Seo';
 
 const FEATURES = [
   { title: 'SSO', body: 'Single sign-on for your whole organization, so agent access follows the same identity provider as everything else you run.' },
@@ -12,6 +13,11 @@ const FEATURES = [
 export default function Enterprise() {
   return (
     <PublicShell wide>
+      <Seo
+        title="Enterprise"
+        description="SSO, a formal security review, custom retention, guided implementation, and a named point of contact — AmazAI for organizations with enterprise needs."
+        path="/enterprise"
+      />
       <section className="about-hero">
         <h1>Enterprise</h1>
         <p>For organizations that need SSO, a formal security review, and a retention policy that matches their own.</p>

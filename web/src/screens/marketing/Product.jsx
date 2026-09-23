@@ -1,5 +1,6 @@
 import Companion from '../../characters/Companion';
 import PublicShell from '../../components/PublicShell';
+import Seo from '../../components/Seo';
 
 const AGENT_TRAITS = [
   { title: 'Profiles', body: 'A name, a role, a system prompt, an accent colour, and a model. An agent is a persistent identity, not a chat thread you start over.' },
@@ -25,6 +26,11 @@ const SKILL_TRAITS = [
 export default function Product() {
   return (
     <PublicShell wide>
+      <Seo
+        title="Product: Agents & Skills"
+        description="Agents are custom identities with a role, a budget, and scoped tools. Skills are reviewed playbooks that make them reliable. See how they work together."
+        path="/product"
+      />
       <section className="about-hero">
         <h1>A small cast of agents, and the playbooks that make them reliable.</h1>
         <p>

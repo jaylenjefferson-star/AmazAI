@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import Companion from '../../characters/Companion';
 import PublicShell from '../../components/PublicShell';
+import Seo from '../../components/Seo';
 
 const FLOW = [
   {
@@ -41,6 +42,11 @@ const FLOW = [
 export default function HowItWorks() {
   return (
     <PublicShell wide>
+      <Seo
+        title="How It Works"
+        description="Five steps from creating your agent team to a sealed audit record — see how AmazAI keeps a human in the loop on everything that matters."
+        path="/how-it-works"
+      />
       <section className="about-hero">
         <h1>Five steps, and a human in the loop on every one that matters.</h1>
         <p>

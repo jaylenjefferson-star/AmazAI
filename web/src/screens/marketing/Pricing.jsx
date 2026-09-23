@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import PublicShell from '../../components/PublicShell';
+import Seo from '../../components/Seo';
 import { api } from '../../api';
 import { startLogin, useAuth0 } from '../../auth0';
 
@@ -54,6 +55,11 @@ export default function Pricing() {
 
   return (
     <PublicShell wide>
+      <Seo
+        title="Pricing"
+        description="Plans from Explore to Power, all built on the same approval-first guardrails. Pay for the work your team runs, not the number of seats."
+        path="/pricing"
+      />
       <section className="about-hero">
         <h1>Pricing that scales with the work, not the seat.</h1>
         <p>Every plan includes the same approval-first guardrails. What changes is how much work your team can run.</p>

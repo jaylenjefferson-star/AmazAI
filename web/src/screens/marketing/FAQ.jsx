@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import PublicShell from '../../components/PublicShell';
+import Seo from '../../components/Seo';
 
 const FAQS = [
   {
@@ -41,6 +42,11 @@ export default function FAQ() {
   const [open, setOpen] = useState(null);
   return (
     <PublicShell>
+      <Seo
+        title="FAQ"
+        description="Answers on Amaz Credits, data handling, model training, agent behavior, approvals, connectors, deletion, and support."
+        path="/faq"
+      />
       <section className="about-hero">
         <h1>Frequently asked questions</h1>
         <p>Credits, privacy, model and data use, agent behavior, approvals, connectors, deletion, and support.</p>

@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import PublicShell from '../../components/PublicShell';
+import Seo from '../../components/Seo';
 
 const FEATURES = [
   { title: 'Shared workspace', body: 'One team, one set of agents, one place to see everything they are working on - not a separate login for every person who needs a companion.' },
@@ -11,6 +12,11 @@ const FEATURES = [
 export default function ForTeams() {
   return (
     <PublicShell wide>
+      <Seo
+        title="For Teams"
+        description="Shared workspaces, governed collaboration, admin controls, and team-wide usage visibility — AmazAI plans built for startups and SMBs."
+        path="/for-teams"
+      />
       <section className="about-hero">
         <h1>For Teams</h1>
         <p>
