@@ -338,3 +338,89 @@ class TestTheRecordedTurnStaysSmallWithoutLosingACall:
         assert ([b["toolUse"]["toolUseId"] for b in asked["content"]]
                 == [b["toolResult"]["toolUseId"] for b in answered["content"]])
         assert len(answered["content"]) == 31
+
+
+class TestAGateThatFiresBeforeTheHarnessRotatesAnAbandonedResume:
+    """`_paused_turn` -- the code that actually sends a resume's answer back
+    to the harness -- runs well into `_drive`, after the kill switch, the
+    credit check, the agent-state check, the missing-model-id check and the
+    start-of-run Budget check. Any one of those refusing a *resuming*
+    invocation means the harness is never reached this turn, so the answer
+    that resume was carrying never gets sent -- leaving the session in
+    exactly the state this whole file exists to prevent, just reached from
+    an earlier point in the function than a mid-turn stream error or ceiling.
+
+    This is a live bug that shipped and broke a real account's Bot in
+    production (the account ran out of credits while a run was paused on an
+    approval; resuming hit the new credit gate, which failed the run without
+    rotating the session it was abandoning) -- caught, diagnosed from
+    CloudWatch and DynamoDB, and fixed with `_rotate_if_abandoning_a_resume`.
+    These are the regression guard.
+    """
+
+    def test_the_kill_switch_rotates_an_abandoned_resume(self, world):  # noqa: F811
+        from amazai import agents as A, govern, keys as K
+        a_turn_that_pauses_in_the_middle(world)
+        world.drive()
+        resume = decide(world)
+
+        world.store.put(govern.killswitch_row(
+            world.store.owner_id, frozen=True,
+            actor=A.Actor(user_id=world.store.owner_id, org_id=world.store.owner_id),
+            reason="incident"))
+        out = orch._drive(world.store, world.store.get(world.run["pk"], "META"), resume)
+
+        assert out == {"ok": False, "reason": "org frozen"}
+        from amazai import runs
+        assert runs.session_epoch(world.store, world.agent_id, f"dm-{world.agent_id}") == 1
+        # The rotated epoch was also written onto this run's own row, the
+        # same way a mid-turn _mark_dirty does -- a same-run retry must not
+        # land back on the session it just rotated away from.
+        fresh = K.bot_session_id(world.store.owner_id, world.agent_id,
+                                 f"dm-{world.agent_id}", epoch=1)
+        assert world.store.get(world.run["pk"], "META")["sessionId"] == fresh
+
+    def test_running_out_of_credit_rotates_an_abandoned_resume(self, world, monkeypatch):  # noqa: F811
+        from amazai import billing, runs
+        a_turn_that_pauses_in_the_middle(world)
+        world.drive()
+        resume = decide(world)
+
+        monkeypatch.setattr(billing, "has_credit", lambda store: False)
+        out = orch._drive(world.store, world.store.get(world.run["pk"], "META"), resume)
+
+        assert out == {"ok": False, "reason": "out of credits"}
+        assert runs.session_epoch(world.store, world.agent_id, f"dm-{world.agent_id}") == 1
+
+    def test_a_plain_new_run_hitting_the_kill_switch_has_nothing_to_rotate(self, world):  # noqa: F811
+        """The other half of the fix: a run that never paused has no
+        session debt, so a gate firing on it must stay a no-op rotation-wise."""
+        from amazai import agents as A, govern, runs
+        world.script([text("won't get here")])
+        world.store.put(govern.killswitch_row(
+            world.store.owner_id, frozen=True,
+            actor=A.Actor(user_id=world.store.owner_id, org_id=world.store.owner_id),
+            reason="incident"))
+
+        out = orch._drive(world.store, world.store.get(world.run["pk"], "META"),
+                          {"runId": world.run["runId"]})
+
+        assert out == {"ok": False, "reason": "org frozen"}
+        assert runs.session_epoch(world.store, world.agent_id, f"dm-{world.agent_id}") == 0
+
+    def test_a_plain_retry_hitting_the_kill_switch_has_nothing_to_rotate(self, world):  # noqa: F811
+        """`resume: True` alone (no resumeNote) is orchestrator._reinvoke's
+        plain retry, not an approval resume -- continuation.is_approval_resume
+        says so explicitly. Must not be mistaken for one here either."""
+        from amazai import agents as A, govern, runs
+        world.script([text("won't get here")])
+        world.store.put(govern.killswitch_row(
+            world.store.owner_id, frozen=True,
+            actor=A.Actor(user_id=world.store.owner_id, org_id=world.store.owner_id),
+            reason="incident"))
+
+        out = orch._drive(world.store, world.store.get(world.run["pk"], "META"),
+                          {"runId": world.run["runId"], "resume": True})
+
+        assert out == {"ok": False, "reason": "org frozen"}
+        assert runs.session_epoch(world.store, world.agent_id, f"dm-{world.agent_id}") == 0
