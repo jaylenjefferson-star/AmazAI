@@ -194,3 +194,12 @@ def _seal(store: Store, push: Push, run: dict, state: RunState, reason: str, *,
             )
     except Exception:  # noqa: BLE001
         traceback.print_exc()
+
+    # Same reasoning as the child-report above, for the other half of
+    # `orchestrator._wake_coordinator_if_child`: a swept run can also be a
+    # task's own coordinator finishing (or dying) rather than one of its
+    # children.
+    try:
+        handoffs.close_task_if_finished(store, run, state.value)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()

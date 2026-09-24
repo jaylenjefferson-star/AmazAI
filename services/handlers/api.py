@@ -714,6 +714,18 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         return _resp(200, {"coordination": items})
 
     # --- tasks (durable, multi-run coordination) ----------------------
+    # Every task a fan-out has ever created, newest first -- the gsi1 listing
+    # `handoffs.ensure_task`/`close_task_if_finished` keep current. Same shape
+    # as GET /approvals: one index read, filtered by status in code rather
+    # than as a second index key, since task volume is workspace-scale.
+    if path == "/tasks" and method == "GET":
+        qs = event.get("queryStringParameters") or {}
+        wanted = qs.get("status")
+        rows = store.query_index("gsi1", "gsi1pk", "TASKS", limit=200)
+        matched = [t for t in rows if t.get("status") == wanted] if wanted else rows
+        matched.sort(key=lambda t: t.get("createdAt") or "", reverse=True)
+        return _resp(200, {"tasks": matched})
+
     # Read-only. The parent/coordinator's own visible "still working"
     # state while fan-out children are outstanding: `pendingChildren` is the
     # same counter `handoffs.accept`/`notify_coordinator_if_child` maintain

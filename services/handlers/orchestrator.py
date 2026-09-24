@@ -2317,6 +2317,15 @@ def _wake_coordinator_if_child(store: Store, run: dict, state_value: str, summar
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
+    # Separate from the child-report above: this checks whether `run` is
+    # itself a task's *coordinator* settling (the original run, or a
+    # child_completion continuation), not whether it is a child reporting to
+    # one. A run can be neither, either, but never both at once.
+    try:
+        handoffs.close_task_if_finished(store, run, state_value)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
 
 def _reinvoke(run_id: str, owner_id: str, *, delay_note: str = "") -> None:
     fn = os.environ.get("ORCHESTRATOR_FN_ARN")

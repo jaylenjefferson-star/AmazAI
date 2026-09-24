@@ -134,9 +134,16 @@ def ensure_task(store: Store, task_id: str, coordinator_run: dict) -> dict:
     in the same task at nearly the same moment must not race to create two
     task rows for one task.
     """
+    created_at = now_iso()
     item = {
         "pk": K.task_pk(task_id), "sk": "META",
         "entity": "Task", "taskId": task_id,
+        "createdAt": created_at,
+        # Listable by status without a full-table scan -- "every open task"
+        # is otherwise unanswerable, since a Task lives only under its own
+        # pk. gsi1sk is rewritten on every status move (see `_set_status`)
+        # so the listing stays a prefix range on the *current* status.
+        "gsi1pk": "TASKS", "gsi1sk": K.tasks_gsi1_sk("open", created_at),
         "coordinatorAgentId": coordinator_run["agentId"],
         "coordinatorRunId": coordinator_run["runId"],
         "threadId": coordinator_run["threadId"],
@@ -185,6 +192,9 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
     ensure_task(store, task_id, coordinator_run)
     trace_id = (coordinator_run.get("trigger") or {}).get("traceId")
 
+    # The *delivery* still lands in the task's own (the coordinator's) thread --
+    # collab.send's task-context resolution -- so the operator and anyone else
+    # in that conversation sees "handed off to Finance" exactly as before.
     outcome = collab.send(store, sender_agent_id=decided["fromAgentId"],
                           recipient_agent_id=decided["toAgentId"],
                           args={"text": decided.get("goal") or decided.get("requestedAction")
@@ -194,8 +204,32 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
                                 "parent_handoff_id": decided["handoffId"]})
     message = outcome["message"]
 
+    # The *execution* does not: a child run pinned to the coordinator's own
+    # thread would (a) load the coordinator's last MAX_HISTORY messages as its
+    # own context -- everything the operator ever said to the coordinator, not
+    # a bounded brief -- and (b) collide sessions with any other child this
+    # same receiving agent is concurrently running, since AgentCore's session
+    # id is keyed on (owner, agentId, threadId) alone. A thread dedicated to
+    # this one handoff gives the child its own session and starts it with
+    # nothing but the brief `runs.create` sends as its opening turn.
+    child_thread_id = K.handoff_child_thread_id(decided["handoffId"])
+    try:
+        store.put({
+            "pk": K.thread_pk(store.owner_id, child_thread_id), "sk": "META",
+            "entity": "Thread", "threadId": child_thread_id,
+            # Deliberately no gsi1pk/gsi1sk: this is not a conversation the
+            # operator opens from the inbox, only the execution context for
+            # one handoff -- reachable from the TaskChild row's own threadId.
+            "kind": "task_child", "title": f"{decided['toAgentId']}: {decided.get('goal', '')[:80]}",
+            "agentIds": [decided["toAgentId"]],
+            "lastActivity": now_iso(), "createdBy": f"agent:{decided['fromAgentId']}",
+            "taskId": task_id, "handoffId": decided["handoffId"], "status": "active",
+        }, unique=True)
+    except Conflict:
+        pass  # a crashed-and-retried accept() of this same handoff already made it
+
     child = runs.create(
-        store, agent_id=decided["toAgentId"], thread_id=outcome["context"].thread_id,
+        store, agent_id=decided["toAgentId"], thread_id=child_thread_id,
         goal=message["text"],
         trigger={"type": "handoff", "handoffId": decided["handoffId"],
                  "coordinatorRunId": coordinator_run["runId"], "taskId": task_id,
@@ -205,7 +239,7 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
         "pk": K.task_pk(task_id), "sk": K.task_child_sk(child["runId"]),
         "entity": "TaskChild", "taskId": task_id, "runId": child["runId"],
         "agentId": child["agentId"], "handoffId": decided["handoffId"],
-        "coordinatorRunId": coordinator_run["runId"],
+        "coordinatorRunId": coordinator_run["runId"], "threadId": child_thread_id,
         "status": "active",
     })
     # After the child row exists, never before: `notify_coordinator_if_child`
@@ -321,7 +355,55 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
                  "childRunId": run["runId"], "childAgentId": run["agentId"],
                  "outcome": outcome, "childCount": len(children), "doneCount": done})
 
-    store.update(K.task_pk(task_id), "META", {"coordinatorRunId": continuation["runId"]})
+    store.update(K.task_pk(task_id), "META", {
+        "coordinatorRunId": continuation["runId"],
+        "status": "awaiting_synthesis",
+        "gsi1sk": K.tasks_gsi1_sk("awaiting_synthesis", task.get("createdAt", now_iso())),
+    })
     metrics.emit("TaskFanInWake", 1, taskId=task_id, coordinatorRunId=continuation["runId"],
                 childCount=len(children), doneCount=done)
     return continuation
+
+
+#: A coordinator run's terminal `RunState.value` -> the task-level outcome
+#: recorded when that run is the one that actually finishes the task.
+_TASK_OUTCOME = {
+    "COMPLETED": "completed", "PARTIAL": "completed",
+    "FAILED": "failed", "EXPIRED": "failed",
+    "CANCELLED": "cancelled",
+}
+
+
+def close_task_if_finished(store: Store, run: dict, state_value: str) -> None:
+    """A coordinator run that just settled may be the one that finishes its
+    task -- but only if nothing it did on the way out reopened it.
+
+    Checked against the task's *current* `coordinatorRunId`, not "did this
+    run ever coordinate this task": a run that fanned out again before
+    settling leaves `pendingChildren > 0`, so it does not close the task it
+    just re-opened; a run whose task already moved on to a later
+    continuation before this one finished settling is no longer that task's
+    live coordinator, so it must not close a task another run now owns.
+    Called for every settling run (`orchestrator._finish`); most have no
+    task at all, and return on the first, cheapest check.
+    """
+    task_id = _task_id_for(run)
+    task = store.try_get(K.task_pk(task_id), "META")
+    if task is None or task.get("status") == "closed":
+        return
+    if task.get("coordinatorRunId") != run["runId"]:
+        return
+    if int(task.get("pendingChildren") or 0) > 0:
+        return  # this settle itself fanned out again; the task is still open
+
+    outcome = _TASK_OUTCOME.get(state_value, "failed")
+    try:
+        store.update(K.task_pk(task_id), "META", {
+            "status": "closed", "outcome": outcome, "closedAt": now_iso(),
+            "gsi1sk": K.tasks_gsi1_sk("closed", task.get("createdAt", now_iso())),
+        }, expect={"coordinatorRunId": run["runId"]})
+    except Conflict:
+        pass  # lost a race to another settle deciding this differently
+    else:
+        metrics.emit("TaskClosed", 1, dimensions={"Outcome": outcome},
+                     taskId=task_id, coordinatorRunId=run["runId"])
