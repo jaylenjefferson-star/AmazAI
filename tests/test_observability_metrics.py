@@ -77,6 +77,40 @@ class TestRetryAttempt:
         assert emitted[0]["runId"] == world.run["runId"]
 
 
+class TestSessionMarkedDirty:
+    """This rotation used to be invisible end to end: the only way to notice
+    it happening in production was to already suspect it, open a specific
+    run's `lastError`, and grep raw CloudWatch events for that run's id by
+    hand. A metric on the rotation itself is what makes "is this recurring"
+    answerable without redoing that archaeology every time."""
+
+    def test_a_stream_error_that_abandons_a_tool_result_reports_it(self, world, capsys, monkeypatch):
+        import handlers.orchestrator as orch
+        monkeypatch.setattr(orch, "_reinvoke", lambda *a, **k: None)
+
+        def dies(_kw):
+            yield from tool_use("remember", {"title": "t", "body": "b"})
+            raise RuntimeError("Task timed out after 30s")
+
+        world.script(dies, [text("never reached")])
+        out = world.drive()
+
+        assert out["state"] == RunState.RETRYING.value
+        emitted = _metrics(capsys, "SessionMarkedDirty")
+        assert len(emitted) == 1
+        assert emitted[0]["SessionMarkedDirty"] == 1
+        assert emitted[0]["AgentId"] == world.agent_id
+        assert emitted[0]["runId"] == world.run["runId"]
+
+    def test_a_clean_completion_reports_nothing(self, world, capsys):
+        world.script([text("done")])
+
+        out = world.drive()
+
+        assert out["state"] == RunState.COMPLETED.value
+        assert _metrics(capsys, "SessionMarkedDirty") == []
+
+
 class TestRunSettled:
     """Before this, a run's own duration/outcome never reached CloudWatch at
     all -- only sweeper-caused terminations did (`RunSweepSealed`). This is

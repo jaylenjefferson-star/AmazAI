@@ -76,12 +76,19 @@ MAX_WAKE_STAGGER_SLOTS = 4
 #: How many times in a row a task may auto-continue past the round/time ceiling
 #: before it stops and waits for the operator instead -- see
 #: `_continue_automatically`. Bounded so a task that genuinely cannot finish
-#: does not run away on its own; three legs is roughly half an hour of
-#: continuous work before it checks in either way. This is the only ceiling
-#: left that can end a run on its own initiative: per-agent spend/tool-call/
-#: error ceilings were removed in favour of a single account-level credit
-#: gate (`billing.has_credit`).
-MAX_AUTO_CONTINUES = 3
+#: does not run away on its own; five legs is roughly an hour of continuous
+#: work before it checks in either way. This is the only ceiling left that
+#: can end a run on its own initiative: per-agent spend/tool-call/error
+#: ceilings were removed in favour of a single account-level credit gate
+#: (`billing.has_credit`).
+#:
+#: Raised from 3: confirmed in production against a real multi-document
+#: task (read three legal documents, draft detailed edits to each) that a
+#: Bot could describe correctly but never had enough legs left to actually
+#: finish -- it kept hitting this ceiling on "let me read/search" turns
+#: before reaching the write, forcing the operator to re-prompt from
+#: scratch every time rather than the task ever completing in one go.
+MAX_AUTO_CONTINUES = 5
 
 #: The inline tools the code answers itself. Their result goes back to the model;
 #: the tools that run inside the harness (a shell, the files, a browser) never do.
@@ -267,11 +274,19 @@ def _mark_dirty(store: Store, run: dict) -> None:
     Never raised: an exception here must not turn "the model asked for X"
     into "and now the retry fails too, silently, for a second reason nobody
     can see."
+
+    Emits a metric on every real rotation -- this path used to be invisible
+    end to end (found only by hand, reading a specific run's `lastError` and
+    then grepping raw CloudWatch events for its runId). A count over time is
+    what tells anyone whether this is one rare session or a shape that keeps
+    recurring, without repeating that by hand each time.
     """
     try:
         epoch = runs.mark_session_dirty(store, run["agentId"], run["threadId"])
         fresh = K.bot_session_id(store.owner_id, run["agentId"], run["threadId"], epoch=epoch)
         store.update(run["pk"], "META", {"sessionId": fresh})
+        metrics.emit("SessionMarkedDirty", 1, dimensions={"AgentId": run["agentId"]},
+                     runId=run["runId"], agentId=run["agentId"])
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
@@ -1084,6 +1099,19 @@ def _persistence_note() -> str:
     shape now, bounded the same way a round-ceiling auto-continue is. This
     note stays regardless -- catching it a turn late still costs a delay the
     operator notices, so the better fix is still not doing it in the first place.
+
+    A second paragraph, added after a related pattern: a turn that calls two
+    or more round-trip tools "simultaneously" (typically two connector
+    searches in one round) is exactly the shape that has been seen to leave
+    the session owing AgentCore a result it never gets -- a hard stop
+    (`Inline function result is missing toolUseId`) that looks, from the
+    operator's side, identical to the narrate-and-stop pattern above: a
+    reply that only describes what it was about to check, on repeat, no
+    matter how many times the operator re-prompts. Sequencing calls instead
+    of bundling them does not change what the Bot may do, only removes one
+    concrete way that same session gets left in a state nothing but a fresh
+    session (an operator's next message, or the platform's own recovery) can
+    get out of.
     """
     return (
         "\n\n## Finish the task\n"
@@ -1096,7 +1124,13 @@ def _persistence_note() -> str:
         "actual result to give, or you hit a real blocker you cannot resolve "
         "yourself (missing access, a decision only the operator can make, "
         "information nobody has given you). State the blocker plainly when "
-        "that happens; otherwise, finish it."
+        "that happens; otherwise, finish it.\n\n"
+        "When a task touches more than one app or search, call them one at a "
+        "time and read each result before the next call, rather than firing "
+        "several at once and describing it as doing them \"simultaneously\" "
+        "or \"in parallel\" -- that bundling is a real source of a hard stop "
+        "this session cannot recover from mid-turn. One call, its result, "
+        "then the next; slower per call, more likely to actually finish."
     )
 
 

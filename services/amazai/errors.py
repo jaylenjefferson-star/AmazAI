@@ -14,13 +14,19 @@ from enum import Enum
 
 class ErrorClass(str, Enum):
     TRANSIENT = "transient"          # backoff and retry, max 3
-    NEEDS_REPLAN = "needs_replan"    # hand back to the model, max 2
+    NEEDS_REPLAN = "needs_replan"    # hand back to the model, max 3
     NEEDS_HUMAN = "needs_human"      # pause, do not retry
     TERMINAL = "terminal"            # fail now, never retry
 
 
 MAX_TRANSIENT_RETRIES = 3
-MAX_REPLANS = 2
+# Raised from 2: confirmed in production that a session left owing AgentCore
+# an unanswered toolUseId ("Inline function result is missing toolUseId")
+# recovers by rotating onto a fresh session (`orchestrator._mark_dirty`),
+# but the same multi-tool-call turn shape can re-trigger it on the very next
+# attempt too -- one extra replan gives the rotated session a real second
+# chance before the whole run gives up and forces the operator to re-prompt.
+MAX_REPLANS = 3
 BACKOFF_SECONDS = (2, 4, 8)
 
 _TRANSIENT = re.compile(
