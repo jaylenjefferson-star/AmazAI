@@ -154,6 +154,15 @@ INLINE_TOOLS = {
                 "state": {"type": "string", "description": "Where things stand now"},
                 "constraints": {"type": "array", "items": {"type": "string"}},
                 "requestedAction": {"type": "string"},
+                "artifactRefs": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": (
+                        "Ids of artifacts the receiver needs (from create_artifact or "
+                        "an earlier read_artifact) -- named, never their content. The "
+                        "receiver sees each one's name and type in its brief and calls "
+                        "read_artifact itself if it needs the contents."
+                    ),
+                },
             },
             "required": ["to", "goal", "state", "requestedAction"],
         },
@@ -399,6 +408,55 @@ INLINE_TOOLS = {
                 "why": {"type": "string"},
             },
             "required": ["body", "why"],
+        },
+    },
+    "create_artifact": {
+        "description": (
+            "Save a durable work product -- a document, report, brief, dataset "
+            "or piece of code -- that outlives this run and can be referenced "
+            "by id in a handoff, a later conversation, or by another agent. "
+            "Writes immediately, no approval: this creates a new file, it does "
+            "not change anything that already exists. For a short conversational "
+            "answer, just reply -- artifacts are for something worth keeping and "
+            "reusing, not every response. To revise something you or a "
+            "teammate already created, pass parentArtifactId: the original "
+            "stays retrievable, and this becomes the new current version."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "e.g. \"Pricing Model.md\""},
+                "content": {"type": "string"},
+                "contentType": {"type": "string",
+                                "description": "e.g. text/markdown, application/json, text/csv"},
+                "artifactType": {
+                    "type": "string",
+                    "description": ("A free label, not a fixed enum -- document, "
+                                    "spreadsheet, dataset, json, code, report, whatever "
+                                    "fits. \"other\" if nothing fits better."),
+                },
+                "description": {"type": "string"},
+                "parentArtifactId": {
+                    "type": "string",
+                    "description": "The artifact this revises. Omit to create a fresh one.",
+                },
+            },
+            "required": ["name", "content"],
+        },
+    },
+    "read_artifact": {
+        "description": (
+            "Fetch one artifact's content by id, when you actually need it -- "
+            "not automatically alongside a reference to it. A handoff or a "
+            "digest names artifacts by id and title only; call this to see "
+            "what is actually in one."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "artifactId": {"type": "string"},
+            },
+            "required": ["artifactId"],
         },
     },
 }

@@ -244,6 +244,27 @@ def tasks_gsi1_sk(status: str, created_at: str) -> str:
     return f"{status}#{created_at}"
 
 
+def artifact_pk(artifact_id: str) -> str:
+    """Globally unique like `run_pk`/`task_pk`: `artifactId` is `new_id()`-
+    generated, never derived from anything an owner could collide on, so
+    (unlike `agent_pk`/`connector_pk`/`thread_pk`) no owner prefix is needed."""
+    return f"ARTIFACT#{artifact_id}"
+
+
+def artifacts_gsi1_sk(status: str, created_at: str) -> str:
+    """Sort key for the `ARTIFACTS` gsi1 listing -- same shape as
+    `tasks_gsi1_sk`, grouped by status first."""
+    return f"{status}#{created_at}"
+
+
+def artifact_run_gsi2pk(run_id: str) -> str:
+    """A new value in the shared gsi2 partition space (alongside
+    `RUNSTATE#`, `APVEXPIRY`, `CONNECTOR#`, `AGENT#`) -- "every artifact this
+    run produced", queried when a coordinator or the console needs a run's
+    output without a table scan."""
+    return f"RUN#{run_id}"
+
+
 def connection_pk(connection_id: str) -> str:
     return f"CONN#{connection_id}"
 

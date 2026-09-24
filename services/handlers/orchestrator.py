@@ -25,7 +25,7 @@ import boto3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from amazai import (agentcore, agents as A, approvals, billing, collab, composio,
+from amazai import (agentcore, agents as A, approvals, artifacts, billing, collab, composio,
                     connectors, continuation, cost, govern, handoffs, keys as K, memory,
                     metrics, onboarding, org, policy, provisioning, redact, review, router,
                     routines, runs, schedules, skills, standard_runtime, threads)
@@ -35,7 +35,7 @@ from amazai.evidence import EvidenceWriter
 from amazai.policy import Capability
 from amazai.push import Push
 from amazai.states import RunState
-from amazai.store import Store, new_id, now_iso, ordered_suffix
+from amazai.store import NotFound, Store, new_id, now_iso, ordered_suffix
 from amazai.stream import EventKind, StreamParser
 
 MAX_HISTORY = 40
@@ -1437,6 +1437,61 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
                       icon="layers", memId=row["memId"])
         return {"pause": False, "toolResult": {"saved": True, "memId": row["memId"]}}
 
+    if name == "create_artifact":
+        # Same posture as remember: a direct write, no approval, because this
+        # only ever creates a new row (or a new version pointing at a parent
+        # the caller named) -- it can never change what an id someone already
+        # has already resolves to.
+        task_id = (run.get("trigger") or {}).get("taskId") or run["runId"]
+        try:
+            if args.get("parentArtifactId"):
+                row = artifacts.create_version_from_content(
+                    store, args["parentArtifactId"], content=args.get("content", ""),
+                    name=args.get("name"), content_type=args.get("contentType"),
+                    description=args.get("description"),
+                    created_by_agent_id=agent["agentId"], run_id=run["runId"])
+            else:
+                row = artifacts.create_from_content(
+                    store, run_id=run["runId"], name=args.get("name", ""),
+                    content=args.get("content", ""),
+                    content_type=args.get("contentType") or "text/plain",
+                    artifact_type=args.get("artifactType") or "other",
+                    description=args.get("description"),
+                    created_by_agent_id=agent["agentId"],
+                    task_id=task_id, thread_id=run["threadId"])
+        except (artifacts.ValidationError, NotFound) as exc:
+            ev.error(seq, "terminal", str(exc))
+            _step(push, run, turn, "create_artifact", f"not created: {exc}",
+                  review.Review(review.DENIED, "artifact", str(exc)))
+            return {"pause": False, "toolResult": {"error": str(exc)}}
+        ev.action(seq, "create_artifact", row["name"], artifactId=row["artifactId"])
+        _step(push, run, turn, "create_artifact", f"created: {row['name']}",
+              review.scoped("artifact", "a new durable output, not a change to anything existing"))
+        threads.event(store, run["threadId"], f"{agent['name']} created {row['name']}",
+                      icon="file", artifactId=row["artifactId"])
+        return {"pause": False, "toolResult": {
+            "artifactId": row["artifactId"], "name": row["name"], "version": row["version"]}}
+
+    if name == "read_artifact":
+        artifact_id = args.get("artifactId", "")
+        try:
+            row = artifacts.get(store, artifact_id)
+            if row.get("status") == "deleted":
+                raise artifacts.ValidationError(f"artifact {artifact_id!r} was deleted")
+            body = artifacts.read_content(row)
+        except (NotFound, artifacts.ValidationError) as exc:
+            ev.error(seq, "needs_replan", str(exc))
+            _step(push, run, turn, "read_artifact", f"not read: {exc}",
+                  review.Review(review.DENIED, "artifact", str(exc)))
+            return {"pause": False, "toolResult": {"error": str(exc)}}
+        ev.action(seq, "read_artifact", row["name"], artifactId=artifact_id)
+        _step(push, run, turn, "read_artifact", f"read: {row['name']}",
+              review.scoped("artifact", "content, fetched because this call asked for it"))
+        return {"pause": False, "toolResult": {
+            "artifactId": artifact_id, "name": row["name"], "version": row["version"],
+            "contentType": row.get("contentType"),
+            "content": body.decode("utf-8", errors="replace")}}
+
     if name == "propose_shared_memory":
         # Same pattern as propose_agent/propose_skill: the model nominates, a
         # person decides. No memory row is written here at all -- the proposed
@@ -2052,6 +2107,10 @@ def _record_handoff(store: Store, run: dict, args: dict) -> dict:
         "goal": args.get("goal", ""), "state": args.get("state", ""),
         "constraints": args.get("constraints", []),
         "requestedAction": args.get("requestedAction", ""),
+        # Names, never content: the receiver gets these ids and titles folded
+        # into its brief (`handoffs.accept`) and calls read_artifact itself if
+        # it needs what's inside one.
+        "artifactRefs": [a for a in (args.get("artifactRefs") or []) if isinstance(a, str)],
         # Always empty. Grants never travel with a handoff; the field exists to
         # say so at the schema level.
         "grantsOffered": [],

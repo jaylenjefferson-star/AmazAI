@@ -18,8 +18,8 @@ import urllib.parse
 
 import boto3
 
-from amazai import (agentcore, agents as A, approvals, billing, collab, composio,
-                    connectors as C, handoffs, identity, keys as K, memory, models,
+from amazai import (agentcore, agents as A, approvals, artifacts as AR, billing, collab,
+                    composio, connectors as C, handoffs, identity, keys as K, memory, models,
                     onboarding, routines as R, runs, schedules, secrets, settings as S,
                     skills, standard_runtime, stripe_client, threads)
 from amazai import dispatch, directory as D, govern, org, provisioning
@@ -35,9 +35,6 @@ CORS = {
 }
 
 
-_ARTIFACT_KEY = re.compile(r"^evidence/(?P<run_id>[^/]+)/artifacts/(?P<name>.+)$")
-
-
 def _artifact_s3():
     """The one bucket that holds immutable Bot-produced files.
 
@@ -48,45 +45,47 @@ def _artifact_s3():
     return boto3.client("s3")
 
 
-def _artifacts(store: Store) -> list[dict]:
+def _download_url(client, row: dict) -> str | None:
     bucket = os.environ.get("EVIDENCE_BUCKET", "").strip()
-    if not bucket:
-        return []
+    if not bucket or row.get("storageType") != "s3" or not row.get("storageKey"):
+        return None
+    return client.generate_presigned_url(
+        "get_object", Params={"Bucket": bucket, "Key": row["storageKey"]}, ExpiresIn=300)
 
+
+def _artifact_card(client, row: dict) -> dict:
+    # The frontend's contract, unchanged since before this row existed
+    # (`Sections.jsx`, `WorkspaceSheet.jsx`) -- `artifactId` used to be the raw
+    # S3 key; it is now a real id, and nothing that reads this shape needed
+    # to know the difference.
+    return {
+        "artifactId": row["artifactId"],
+        "runId": row.get("runId"),
+        "agentId": row.get("createdByAgentId"),
+        "name": row.get("name", ""),
+        "sizeBytes": row.get("sizeBytes", 0),
+        "updatedAt": row.get("updatedAt") or row.get("createdAt"),
+        "downloadUrl": _download_url(client, row),
+    }
+
+
+def _artifacts(store: Store, *, status: str | None = None, run_id: str | None = None,
+               artifact_type: str | None = None) -> list[dict]:
+    """A single indexed query, not the full-bucket scan this route used to
+    do (`gsi1pk=ARTIFACTS`, one page). `run_id` narrows to `gsi2` instead --
+    a run's own output list -- when the caller asks for one run specifically.
+    """
     client = _artifact_s3()
-    objects: list[dict] = []
-    request: dict = {"Bucket": bucket, "Prefix": "evidence/"}
-    while True:
-        page = client.list_objects_v2(**request)
-        objects.extend(page.get("Contents") or [])
-        token = page.get("NextContinuationToken")
-        if not token:
-            break
-        request["ContinuationToken"] = token
-
-    files: list[dict] = []
-    for obj in objects:
-        key = obj.get("Key", "")
-        match = _ARTIFACT_KEY.match(key)
-        if not match or not match.group("name"):
-            continue
-        # S3 is shared by every workspace, so an object is returned only after
-        # its run has been resolved through this owner's Store. Never use an
-        # object key alone as an authorization decision.
-        run = store.try_get(K.run_pk(match.group("run_id")), "META")
-        if not run:
-            continue
-        files.append({
-            "artifactId": key,
-            "runId": run["runId"],
-            "agentId": run.get("agentId"),
-            "name": match.group("name"),
-            "sizeBytes": obj.get("Size", 0),
-            "updatedAt": obj.get("LastModified"),
-            "downloadUrl": client.generate_presigned_url(
-                "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=300),
-        })
-    return sorted(files, key=lambda f: str(f.get("updatedAt") or ""), reverse=True)
+    if run_id:
+        rows = AR.list_for_run(store, run_id)
+    else:
+        rows = AR.list_for_owner(store, artifact_type=artifact_type)
+    if status:
+        rows = [r for r in rows if r.get("status") == status]
+    else:
+        rows = [r for r in rows if r.get("status") != "deleted"]
+    rows.sort(key=lambda r: str(r.get("updatedAt") or r.get("createdAt") or ""), reverse=True)
+    return [_artifact_card(client, r) for r in rows]
 
 
 def _resp(status: int, body) -> dict:
@@ -875,7 +874,18 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     # manifest is an audit record, not a document, and conversations belong in
     # their threads rather than being presented as files.
     if path == "/artifacts" and method == "GET":
-        return _resp(200, {"artifacts": _artifacts(store)})
+        qs = event.get("queryStringParameters") or {}
+        return _resp(200, {"artifacts": _artifacts(
+            store, status=qs.get("status"), run_id=qs.get("runId"),
+            artifact_type=qs.get("artifactType"))})
+
+    if (p := _match(path, "/artifacts/{id}")) and method == "GET":
+        row = store.get(K.artifact_pk(p[0]), "META")  # 404s, owner-scoped, if not ours
+        return _resp(200, _artifact_card(_artifact_s3(), row))
+
+    if (p := _match(path, "/artifacts/{id}")) and method == "DELETE":
+        row = AR.soft_delete(store, p[0])
+        return _resp(200, {"artifactId": row["artifactId"], "status": row["status"]})
 
     # --- settings ----------------------------------------------------------
     # Owner preferences. One row, defaulted on read rather than seeded on

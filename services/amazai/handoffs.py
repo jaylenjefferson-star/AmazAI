@@ -19,7 +19,7 @@ just because the receiver's grant would otherwise cover the call.
 
 from __future__ import annotations
 
-from amazai import agents as A, collab, connectors, keys as K, metrics, policy, runs
+from amazai import agents as A, artifacts, collab, connectors, keys as K, metrics, policy, runs
 from amazai.store import Conflict, Store, now_iso
 
 #: Outstanding children one task may have at once. A task-level analogue of
@@ -161,6 +161,22 @@ def ensure_task(store: Store, task_id: str, coordinator_run: dict) -> dict:
         return store.get(K.task_pk(task_id), "META")
 
 
+def _artifact_refs_note(store: Store, artifact_ids: list[str]) -> str:
+    """Names and ids only, appended to a handoff's brief -- never content.
+    An id that does not resolve (wrong tenant, already deleted, a typo the
+    model made up) is silently left out rather than failing the whole
+    handoff over a reference that was never load-bearing to begin with."""
+    lines = []
+    for aid in artifact_ids:
+        row = artifacts.try_get(store, aid)
+        if row and row.get("status") != "deleted":
+            lines.append(f"- {row['name']} (artifactId: {aid}, type: {row.get('artifactType', 'other')})")
+    if not lines:
+        return ""
+    return ("\n\nReferenced artifacts (call read_artifact for any you need):\n"
+           + "\n".join(lines))
+
+
 def accept(store: Store, coordinator_run: dict, handoff: dict, *,
           decided_by: str) -> dict:
     """Accept a proposed handoff: claim it, bind it to the task, spawn the
@@ -195,10 +211,11 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
     # The *delivery* still lands in the task's own (the coordinator's) thread --
     # collab.send's task-context resolution -- so the operator and anyone else
     # in that conversation sees "handed off to Finance" exactly as before.
+    brief = decided.get("goal") or decided.get("requestedAction") or "a teammate handed this off to you"
+    brief += _artifact_refs_note(store, decided.get("artifactRefs") or [])
     outcome = collab.send(store, sender_agent_id=decided["fromAgentId"],
                           recipient_agent_id=decided["toAgentId"],
-                          args={"text": decided.get("goal") or decided.get("requestedAction")
-                                or "a teammate handed this off to you",
+                          args={"text": brief,
                                 "task_id": task_id,
                                 **({"trace_id": trace_id} if trace_id else {}),
                                 "parent_handoff_id": decided["handoffId"]})
@@ -279,7 +296,14 @@ def _digest_line(store: Store, child_row: dict) -> str:
         "name", child_row["agentId"])
     status = child_row.get("status", "active")
     summary = (child_row.get("summary") or "").strip()
-    return f"- {name}: {status}" + (f" -- {summary[:300]}" if summary else "")
+    line = f"- {name}: {status}" + (f" -- {summary[:300]}" if summary else "")
+    # Names and ids, never content -- the coordinator retrieves one with
+    # read_artifact only if it actually needs what is inside it.
+    produced = artifacts.list_for_run(store, child_row["runId"], limit=10)
+    if produced:
+        refs = ", ".join(f"{a['name']} (artifactId: {a['artifactId']})" for a in produced)
+        line += f"\n  artifacts: {refs}"
+    return line
 
 
 def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
