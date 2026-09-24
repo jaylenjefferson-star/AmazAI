@@ -59,8 +59,8 @@ fi
 section "Identity"
 IDENT=$(aws sts get-caller-identity --output json 2>&1)
 if echo "$IDENT" | grep -q '"Account"'; then
-  ACCOUNT=$(echo "$IDENT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["Account"])')
-  ARN=$(echo "$IDENT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["Arn"])')
+  ACCOUNT=$(echo "$IDENT" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["Account"])')
+  ARN=$(echo "$IDENT" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["Arn"])')
   if [ "$SHOW_ACCOUNT" = 1 ]; then
     pass "account $ACCOUNT"
   else
@@ -81,14 +81,15 @@ section "Bedrock model access"
 MODELS=$(aws bedrock list-foundation-models --by-provider anthropic \
           --region "$REGION" --output json 2>&1)
 if echo "$MODELS" | grep -q '"modelSummaries"'; then
-  COUNT=$(echo "$MODELS" | python3 -c '
+  COUNT=$(echo "$MODELS" | "$PY" -c '
 import json,sys
 m=[x for x in json.load(sys.stdin)["modelSummaries"] if "claude" in x["modelId"].lower()]
 print(len(m))
 for x in sorted(m, key=lambda y: y["modelId"])[:40]:
     on = "ON_DEMAND" in (x.get("inferenceTypesSupported") or [])
-    print(f"    {"on-demand " if on else "profile-only"} {x["modelId"]}")
-' 2>/dev/null)
+    label = "on-demand " if on else "profile-only"
+    print(f"    {label} {x[\"modelId\"]}")
+')
   N=$(echo "$COUNT" | head -1)
   if [ "${N:-0}" -gt 0 ]; then
     pass "$N Claude foundation models listed"
@@ -103,14 +104,15 @@ fi
 
 PROFILES=$(aws bedrock list-inference-profiles --region "$REGION" --output json 2>&1)
 if echo "$PROFILES" | grep -q 'inferenceProfileSummaries'; then
-  echo "$PROFILES" | python3 -c '
+  echo "$PROFILES" | "$PY" -c '
 import json,sys
 p=[x for x in json.load(sys.stdin)["inferenceProfileSummaries"]
    if "anthropic" in x.get("inferenceProfileId","").lower()]
 print(f"  [ok]   {len(p)} Anthropic inference profiles")
 for x in sorted(p, key=lambda y: y["inferenceProfileId"])[:40]:
-    print(f"    {x.get("status","?"):8s} {x["inferenceProfileId"]}")
-' 2>/dev/null || warn "could not parse inference profiles"
+    status = x.get("status", "?")
+    print(f"    {status:8s} {x[\"inferenceProfileId\"]}")
+' || warn "could not parse inference profiles"
 else
   warn "list-inference-profiles unavailable here"
   echo "$PROFILES" | head -2 | sed 's/^/         /'
@@ -158,7 +160,7 @@ esac
 # ------------------------------------------------------------------- repo
 section "Repository"
 if [ -f "$ROOT/scripts/seats.json" ]; then
-  python3 - "$ROOT/scripts/seats.json" <<'PY'
+  "$PY" - "$ROOT/scripts/seats.json" <<'PY'
 import json, sys
 cfg = json.load(open(sys.argv[1]))
 for s in cfg["seats"]:
