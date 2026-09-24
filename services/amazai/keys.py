@@ -224,6 +224,47 @@ def task_child_sk(run_id: str) -> str:
     return f"CHILD#{run_id}"
 
 
+def handoff_child_thread_id(handoff_id: str) -> str:
+    """The dedicated thread a handoff's own child run executes and holds its
+    session in -- deliberately not the coordinator's thread.
+
+    Deterministic from the handoff id (itself already globally unique, see
+    `_record_handoff`), so `accept()` can be retried without generating a
+    second thread for the same handoff. Kept separate from the *delivery*
+    message, which still lands in the coordinator's own thread via
+    `collab.send` -- this id is only ever used as a `Run`'s own `threadId`,
+    never passed to `collab.resolve_context`.
+    """
+    return f"th-child-{handoff_id}"
+
+
+def tasks_gsi1_sk(status: str, created_at: str) -> str:
+    """Sort key for the `TASKS` gsi1 listing -- grouped by status first so a
+    "what's still open" query is a prefix range, not a full-table filter."""
+    return f"{status}#{created_at}"
+
+
+def artifact_pk(artifact_id: str) -> str:
+    """Globally unique like `run_pk`/`task_pk`: `artifactId` is `new_id()`-
+    generated, never derived from anything an owner could collide on, so
+    (unlike `agent_pk`/`connector_pk`/`thread_pk`) no owner prefix is needed."""
+    return f"ARTIFACT#{artifact_id}"
+
+
+def artifacts_gsi1_sk(status: str, created_at: str) -> str:
+    """Sort key for the `ARTIFACTS` gsi1 listing -- same shape as
+    `tasks_gsi1_sk`, grouped by status first."""
+    return f"{status}#{created_at}"
+
+
+def artifact_run_gsi2pk(run_id: str) -> str:
+    """A new value in the shared gsi2 partition space (alongside
+    `RUNSTATE#`, `APVEXPIRY`, `CONNECTOR#`, `AGENT#`) -- "every artifact this
+    run produced", queried when a coordinator or the console needs a run's
+    output without a table scan."""
+    return f"RUN#{run_id}"
+
+
 def connection_pk(connection_id: str) -> str:
     return f"CONN#{connection_id}"
 

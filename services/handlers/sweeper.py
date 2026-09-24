@@ -171,12 +171,13 @@ def _seal(store: Store, push: Push, run: dict, state: RunState, reason: str, *,
         cost={"totalUsd": run.get("costUsd", 0.0)},
         approvals=approvals.for_run(store, run["pk"]),
     )
-    runs.advance(store, run, state, evidenceKey=ev.key, summary=reason,
-                 sealSha256=manifest.get("sealSha256"))
+    run = runs.advance(store, run, state, evidenceKey=ev.key, summary=reason,
+                       sealSha256=manifest.get("sealSha256"))
     push.run_end(run["runId"], run["threadId"], state.value, reason,
                  run.get("costUsd", 0.0))
     metrics.emit("RunSweepSealed", 1, dimensions={"State": state.value, "Reason": reason_code},
                 runId=run["runId"], agentId=run.get("agentId", ""))
+    metrics.emit_run_settled(run, state.value, error_class=reason_code)
 
     # A swept run can be a coordinator's child too -- the worker that died
     # mid tool-call, or the run that finally expired past its deadline. Same
@@ -192,5 +193,14 @@ def _seal(store: Store, push: Push, run: dict, state: RunState, reason: str, *,
                 Payload=json.dumps({"runId": continuation_run["runId"],
                                     "ownerId": store.owner_id}).encode(),
             )
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+    # Same reasoning as the child-report above, for the other half of
+    # `orchestrator._wake_coordinator_if_child`: a swept run can also be a
+    # task's own coordinator finishing (or dying) rather than one of its
+    # children.
+    try:
+        handoffs.close_task_if_finished(store, run, state.value)
     except Exception:  # noqa: BLE001
         traceback.print_exc()

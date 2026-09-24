@@ -19,7 +19,7 @@ just because the receiver's grant would otherwise cover the call.
 
 from __future__ import annotations
 
-from amazai import agents as A, collab, connectors, keys as K, metrics, policy, runs
+from amazai import agents as A, artifacts, collab, connectors, keys as K, metrics, policy, runs
 from amazai.store import Conflict, Store, now_iso
 
 #: Outstanding children one task may have at once. A task-level analogue of
@@ -134,9 +134,16 @@ def ensure_task(store: Store, task_id: str, coordinator_run: dict) -> dict:
     in the same task at nearly the same moment must not race to create two
     task rows for one task.
     """
+    created_at = now_iso()
     item = {
         "pk": K.task_pk(task_id), "sk": "META",
         "entity": "Task", "taskId": task_id,
+        "createdAt": created_at,
+        # Listable by status without a full-table scan -- "every open task"
+        # is otherwise unanswerable, since a Task lives only under its own
+        # pk. gsi1sk is rewritten on every status move (see `_set_status`)
+        # so the listing stays a prefix range on the *current* status.
+        "gsi1pk": "TASKS", "gsi1sk": K.tasks_gsi1_sk("open", created_at),
         "coordinatorAgentId": coordinator_run["agentId"],
         "coordinatorRunId": coordinator_run["runId"],
         "threadId": coordinator_run["threadId"],
@@ -152,6 +159,22 @@ def ensure_task(store: Store, task_id: str, coordinator_run: dict) -> dict:
         return store.put(item, unique=True)
     except Conflict:
         return store.get(K.task_pk(task_id), "META")
+
+
+def _artifact_refs_note(store: Store, artifact_ids: list[str]) -> str:
+    """Names and ids only, appended to a handoff's brief -- never content.
+    An id that does not resolve (wrong tenant, already deleted, a typo the
+    model made up) is silently left out rather than failing the whole
+    handoff over a reference that was never load-bearing to begin with."""
+    lines = []
+    for aid in artifact_ids:
+        row = artifacts.try_get(store, aid)
+        if row and row.get("status") != "deleted":
+            lines.append(f"- {row['name']} (artifactId: {aid}, type: {row.get('artifactType', 'other')})")
+    if not lines:
+        return ""
+    return ("\n\nReferenced artifacts (call read_artifact for any you need):\n"
+           + "\n".join(lines))
 
 
 def accept(store: Store, coordinator_run: dict, handoff: dict, *,
@@ -185,17 +208,45 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
     ensure_task(store, task_id, coordinator_run)
     trace_id = (coordinator_run.get("trigger") or {}).get("traceId")
 
+    # The *delivery* still lands in the task's own (the coordinator's) thread --
+    # collab.send's task-context resolution -- so the operator and anyone else
+    # in that conversation sees "handed off to Finance" exactly as before.
+    brief = decided.get("goal") or decided.get("requestedAction") or "a teammate handed this off to you"
+    brief += _artifact_refs_note(store, decided.get("artifactRefs") or [])
     outcome = collab.send(store, sender_agent_id=decided["fromAgentId"],
                           recipient_agent_id=decided["toAgentId"],
-                          args={"text": decided.get("goal") or decided.get("requestedAction")
-                                or "a teammate handed this off to you",
+                          args={"text": brief,
                                 "task_id": task_id,
                                 **({"trace_id": trace_id} if trace_id else {}),
                                 "parent_handoff_id": decided["handoffId"]})
     message = outcome["message"]
 
+    # The *execution* does not: a child run pinned to the coordinator's own
+    # thread would (a) load the coordinator's last MAX_HISTORY messages as its
+    # own context -- everything the operator ever said to the coordinator, not
+    # a bounded brief -- and (b) collide sessions with any other child this
+    # same receiving agent is concurrently running, since AgentCore's session
+    # id is keyed on (owner, agentId, threadId) alone. A thread dedicated to
+    # this one handoff gives the child its own session and starts it with
+    # nothing but the brief `runs.create` sends as its opening turn.
+    child_thread_id = K.handoff_child_thread_id(decided["handoffId"])
+    try:
+        store.put({
+            "pk": K.thread_pk(store.owner_id, child_thread_id), "sk": "META",
+            "entity": "Thread", "threadId": child_thread_id,
+            # Deliberately no gsi1pk/gsi1sk: this is not a conversation the
+            # operator opens from the inbox, only the execution context for
+            # one handoff -- reachable from the TaskChild row's own threadId.
+            "kind": "task_child", "title": f"{decided['toAgentId']}: {decided.get('goal', '')[:80]}",
+            "agentIds": [decided["toAgentId"]],
+            "lastActivity": now_iso(), "createdBy": f"agent:{decided['fromAgentId']}",
+            "taskId": task_id, "handoffId": decided["handoffId"], "status": "active",
+        }, unique=True)
+    except Conflict:
+        pass  # a crashed-and-retried accept() of this same handoff already made it
+
     child = runs.create(
-        store, agent_id=decided["toAgentId"], thread_id=outcome["context"].thread_id,
+        store, agent_id=decided["toAgentId"], thread_id=child_thread_id,
         goal=message["text"],
         trigger={"type": "handoff", "handoffId": decided["handoffId"],
                  "coordinatorRunId": coordinator_run["runId"], "taskId": task_id,
@@ -205,7 +256,7 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
         "pk": K.task_pk(task_id), "sk": K.task_child_sk(child["runId"]),
         "entity": "TaskChild", "taskId": task_id, "runId": child["runId"],
         "agentId": child["agentId"], "handoffId": decided["handoffId"],
-        "coordinatorRunId": coordinator_run["runId"],
+        "coordinatorRunId": coordinator_run["runId"], "threadId": child_thread_id,
         "status": "active",
     })
     # After the child row exists, never before: `notify_coordinator_if_child`
@@ -245,7 +296,14 @@ def _digest_line(store: Store, child_row: dict) -> str:
         "name", child_row["agentId"])
     status = child_row.get("status", "active")
     summary = (child_row.get("summary") or "").strip()
-    return f"- {name}: {status}" + (f" -- {summary[:300]}" if summary else "")
+    line = f"- {name}: {status}" + (f" -- {summary[:300]}" if summary else "")
+    # Names and ids, never content -- the coordinator retrieves one with
+    # read_artifact only if it actually needs what is inside it.
+    produced = artifacts.list_for_run(store, child_row["runId"], limit=10)
+    if produced:
+        refs = ", ".join(f"{a['name']} (artifactId: {a['artifactId']})" for a in produced)
+        line += f"\n  artifacts: {refs}"
+    return line
 
 
 def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
@@ -283,9 +341,15 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
         return None
 
     outcome = _CHILD_OUTCOME.get(state_value, "failed")
+    # The structured half of what a coordinator sees: `_digest_line` already
+    # folds this into the wake-up text, but keeping it on the row too means a
+    # task's own compact result set is queryable directly (`GET /tasks/{id}`),
+    # not only recoverable by re-reading a synthesis run's prose.
+    artifact_ids = [a["artifactId"] for a in artifacts.list_for_run(store, run["runId"], limit=20)]
     try:
         store.update(K.task_pk(task_id), K.task_child_sk(run["runId"]), {
             "status": outcome, "endedAt": now_iso(), "summary": (summary or "")[:2000],
+            "artifactIds": artifact_ids,
         }, expect={"status": "active"})
     except Conflict:
         return None
@@ -321,7 +385,82 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
                  "childRunId": run["runId"], "childAgentId": run["agentId"],
                  "outcome": outcome, "childCount": len(children), "doneCount": done})
 
-    store.update(K.task_pk(task_id), "META", {"coordinatorRunId": continuation["runId"]})
+    store.update(K.task_pk(task_id), "META", {
+        "coordinatorRunId": continuation["runId"],
+        "status": "awaiting_synthesis",
+        "gsi1sk": K.tasks_gsi1_sk("awaiting_synthesis", task.get("createdAt", now_iso())),
+    })
     metrics.emit("TaskFanInWake", 1, taskId=task_id, coordinatorRunId=continuation["runId"],
                 childCount=len(children), doneCount=done)
     return continuation
+
+
+#: A coordinator run's terminal `RunState.value` -> the task-level outcome
+#: recorded when that run is the one that actually finishes the task.
+_TASK_OUTCOME = {
+    "COMPLETED": "completed", "PARTIAL": "completed",
+    "FAILED": "failed", "EXPIRED": "failed",
+    "CANCELLED": "cancelled",
+}
+
+
+def close_task_if_finished(store: Store, run: dict, state_value: str) -> None:
+    """A coordinator run that just settled may be the one that finishes its
+    task -- but only if nothing it did on the way out reopened it.
+
+    Checked against the task's *current* `coordinatorRunId`, not "did this
+    run ever coordinate this task": a run that fanned out again before
+    settling leaves `pendingChildren > 0`, so it does not close the task it
+    just re-opened; a run whose task already moved on to a later
+    continuation before this one finished settling is no longer that task's
+    live coordinator, so it must not close a task another run now owns.
+    Called for every settling run (`orchestrator._finish`); most have no
+    task at all, and return on the first, cheapest check.
+    """
+    task_id = _task_id_for(run)
+    task = store.try_get(K.task_pk(task_id), "META")
+    if task is None or task.get("status") == "closed":
+        return
+    if task.get("coordinatorRunId") != run["runId"]:
+        return
+    if int(task.get("pendingChildren") or 0) > 0:
+        return  # this settle itself fanned out again; the task is still open
+
+    outcome = _TASK_OUTCOME.get(state_value, "failed")
+    try:
+        store.update(K.task_pk(task_id), "META", {
+            "status": "closed", "outcome": outcome, "closedAt": now_iso(),
+            "gsi1sk": K.tasks_gsi1_sk("closed", task.get("createdAt", now_iso())),
+        }, expect={"coordinatorRunId": run["runId"]})
+    except Conflict:
+        pass  # lost a race to another settle deciding this differently
+    else:
+        metrics.emit("TaskClosed", 1, dimensions={"Outcome": outcome},
+                     taskId=task_id, coordinatorRunId=run["runId"])
+
+
+def list_artifacts_for_task(store: Store, task_id: str, *, limit_per_run: int = 50) -> list[dict]:
+    """Every artifact a task's own runs have produced -- the coordinator's
+    (task_id is that run's own id) plus every child's -- as a handful of
+    indexed `artifacts.list_for_run` reads, not a stored array that could
+    drift from what actually exists.
+
+    Known gap, not worth the extra bookkeeping for what it would cover: an
+    intermediate synthesis round -- a continuation run that itself created
+    an artifact before being superseded by a *later* continuation -- is not
+    reachable here, because `task["coordinatorRunId"]` only ever holds the
+    *current* one. The original run (`task_id` itself) and every child are
+    always covered; only artifacts from a middle round of a multi-round
+    synthesis chain could be missed.
+    """
+    task = store.try_get(K.task_pk(task_id), "META")
+    if task is None:
+        return []
+    run_ids = {task_id, task.get("coordinatorRunId") or task_id}
+    children = store.query(K.task_pk(task_id), sk_prefix="CHILD#", limit=100)
+    run_ids.update(c["runId"] for c in children if c.get("runId"))
+    rows: list[dict] = []
+    for run_id in run_ids:
+        rows.extend(artifacts.list_for_run(store, run_id, limit=limit_per_run))
+    rows.sort(key=lambda r: r.get("createdAt") or "", reverse=True)
+    return rows
