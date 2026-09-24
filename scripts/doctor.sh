@@ -88,7 +88,8 @@ print(len(m))
 for x in sorted(m, key=lambda y: y["modelId"])[:40]:
     on = "ON_DEMAND" in (x.get("inferenceTypesSupported") or [])
     label = "on-demand " if on else "profile-only"
-    print(f"    {label} {x[\"modelId\"]}")
+    model_id = x["modelId"]
+    print(f"    {label} {model_id}")
 ')
   N=$(echo "$COUNT" | head -1)
   if [ "${N:-0}" -gt 0 ]; then
@@ -111,7 +112,8 @@ p=[x for x in json.load(sys.stdin)["inferenceProfileSummaries"]
 print(f"  [ok]   {len(p)} Anthropic inference profiles")
 for x in sorted(p, key=lambda y: y["inferenceProfileId"])[:40]:
     status = x.get("status", "?")
-    print(f"    {status:8s} {x[\"inferenceProfileId\"]}")
+    profile_id = x["inferenceProfileId"]
+    print(f"    {status:8s} {profile_id}")
 ' || warn "could not parse inference profiles"
 else
   warn "list-inference-profiles unavailable here"
