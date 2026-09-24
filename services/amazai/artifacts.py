@@ -138,7 +138,7 @@ def create_from_content(
 
 
 def create_version_from_content(
-    store: Store, parent_artifact_id: str, *, content: str, name: str | None = None,
+    store: Store, parent_artifact_id: str, *, content: str | bytes, name: str | None = None,
     content_type: str | None = None, description: str | None = None,
     created_by_agent_id: str | None = None, created_by_user_id: str | None = None,
     run_id: str | None = None, metadata: dict | None = None,

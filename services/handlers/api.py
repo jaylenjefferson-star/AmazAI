@@ -738,6 +738,8 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         task["pendingChildren"] = max(0, task.get("pendingChildren", 0))
         task["children"] = children
         task["counts"] = counts
+        task["artifacts"] = [_artifact_card(_artifact_s3(), a)
+                             for a in handoffs.list_artifacts_for_task(store, p[0])]
         return _resp(200, task)
 
     # --- runs --------------------------------------------------------------

@@ -341,9 +341,15 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
         return None
 
     outcome = _CHILD_OUTCOME.get(state_value, "failed")
+    # The structured half of what a coordinator sees: `_digest_line` already
+    # folds this into the wake-up text, but keeping it on the row too means a
+    # task's own compact result set is queryable directly (`GET /tasks/{id}`),
+    # not only recoverable by re-reading a synthesis run's prose.
+    artifact_ids = [a["artifactId"] for a in artifacts.list_for_run(store, run["runId"], limit=20)]
     try:
         store.update(K.task_pk(task_id), K.task_child_sk(run["runId"]), {
             "status": outcome, "endedAt": now_iso(), "summary": (summary or "")[:2000],
+            "artifactIds": artifact_ids,
         }, expect={"status": "active"})
     except Conflict:
         return None
@@ -431,3 +437,30 @@ def close_task_if_finished(store: Store, run: dict, state_value: str) -> None:
     else:
         metrics.emit("TaskClosed", 1, dimensions={"Outcome": outcome},
                      taskId=task_id, coordinatorRunId=run["runId"])
+
+
+def list_artifacts_for_task(store: Store, task_id: str, *, limit_per_run: int = 50) -> list[dict]:
+    """Every artifact a task's own runs have produced -- the coordinator's
+    (task_id is that run's own id) plus every child's -- as a handful of
+    indexed `artifacts.list_for_run` reads, not a stored array that could
+    drift from what actually exists.
+
+    Known gap, not worth the extra bookkeeping for what it would cover: an
+    intermediate synthesis round -- a continuation run that itself created
+    an artifact before being superseded by a *later* continuation -- is not
+    reachable here, because `task["coordinatorRunId"]` only ever holds the
+    *current* one. The original run (`task_id` itself) and every child are
+    always covered; only artifacts from a middle round of a multi-round
+    synthesis chain could be missed.
+    """
+    task = store.try_get(K.task_pk(task_id), "META")
+    if task is None:
+        return []
+    run_ids = {task_id, task.get("coordinatorRunId") or task_id}
+    children = store.query(K.task_pk(task_id), sk_prefix="CHILD#", limit=100)
+    run_ids.update(c["runId"] for c in children if c.get("runId"))
+    rows: list[dict] = []
+    for run_id in run_ids:
+        rows.extend(artifacts.list_for_run(store, run_id, limit=limit_per_run))
+    rows.sort(key=lambda r: r.get("createdAt") or "", reverse=True)
+    return rows

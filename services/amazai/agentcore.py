@@ -420,20 +420,36 @@ INLINE_TOOLS = {
             "answer, just reply -- artifacts are for something worth keeping and "
             "reusing, not every response. To revise something you or a "
             "teammate already created, pass parentArtifactId: the original "
-            "stays retrievable, and this becomes the new current version."
+            "stays retrievable, and this becomes the new current version.\n\n"
+            "For plain text (markdown, JSON, CSV, code), pass content directly. "
+            "For anything else -- a spreadsheet, PDF, slide deck, image, zip, "
+            "or any file you built with shell/code_interpreter -- write it "
+            "under /mnt/data first, then pass its sourcePath instead of "
+            "content; this run's own sandbox disk goes away when the run "
+            "ends, so a generated file is not durable until this is called."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "e.g. \"Pricing Model.md\""},
-                "content": {"type": "string"},
+                "name": {"type": "string", "description": "e.g. \"Pricing Model.xlsx\""},
+                "content": {"type": "string", "description": "Plain text content."},
+                "sourcePath": {
+                    "type": "string",
+                    "description": ("Absolute path under /mnt/data to a file you already "
+                                    "wrote -- use for anything that is not plain text. "
+                                    "Exactly one of content or sourcePath is required."),
+                },
                 "contentType": {"type": "string",
-                                "description": "e.g. text/markdown, application/json, text/csv"},
+                                "description": ("e.g. text/markdown, application/json, "
+                                                "application/vnd.openxmlformats-"
+                                                "officedocument.spreadsheetml.sheet. Guessed "
+                                                "from the file extension when omitted.")},
                 "artifactType": {
                     "type": "string",
                     "description": ("A free label, not a fixed enum -- document, "
-                                    "spreadsheet, dataset, json, code, report, whatever "
-                                    "fits. \"other\" if nothing fits better."),
+                                    "spreadsheet, presentation, image, dataset, json, "
+                                    "code, archive, report, whatever fits. \"other\" if "
+                                    "nothing fits better."),
                 },
                 "description": {"type": "string"},
                 "parentArtifactId": {
@@ -441,7 +457,7 @@ INLINE_TOOLS = {
                     "description": "The artifact this revises. Omit to create a fresh one.",
                 },
             },
-            "required": ["name", "content"],
+            "required": ["name"],
         },
     },
     "read_artifact": {

@@ -14,9 +14,12 @@ resumable state is the RUN# row plus the session ID.
 
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import os
 import re
+import shlex
 import time
 import traceback
 
@@ -35,7 +38,7 @@ from amazai.evidence import EvidenceWriter
 from amazai.policy import Capability
 from amazai.push import Push
 from amazai.states import RunState
-from amazai.store import NotFound, Store, new_id, now_iso, ordered_suffix
+from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
 from amazai.stream import EventKind, StreamParser
 
 MAX_HISTORY = 40
@@ -187,6 +190,15 @@ def handler(event, context):  # noqa: ARG001
         if event.get("cancel"):
             return _settle_paused_cancel(store, run)
         return _drive(store, run, event)
+    except Conflict:
+        # Lost a race on this run's own conditional state transition to
+        # another invocation already holding a newer copy of the same row --
+        # exactly the outcome `runs.advance`'s own contract describes ("the
+        # loser re-reads"), not a failure. The winner is already driving this
+        # run; calling `_fail` here would seal it FAILED out from under
+        # whatever legitimate, still-in-progress work the winner is doing --
+        # the run row itself was never touched by this invocation.
+        return {"ok": True, "runId": run_id, "skipped": "lost a race to another invocation"}
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         _fail(store, run, f"{type(exc).__name__}: {exc}")
@@ -226,10 +238,11 @@ def _fail(store: Store, run: dict, message: str) -> None:
             cost={"totalUsd": fresh.get("costUsd", 0.0)},
             approvals=approvals.for_run(store, fresh["pk"]),
         )
-        runs.advance(store, fresh, RunState.FAILED, evidenceKey=ev.key,
-                     summary=message, sealSha256=manifest.get("sealSha256"))
+        fresh = runs.advance(store, fresh, RunState.FAILED, evidenceKey=ev.key,
+                             summary=message, sealSha256=manifest.get("sealSha256"))
         Push(store).run_end(fresh["runId"], fresh["threadId"],
                             RunState.FAILED.value, message, fresh.get("costUsd", 0.0))
+        metrics.emit_run_settled(fresh, RunState.FAILED.value)
         _wake_coordinator_if_child(store, fresh, RunState.FAILED.value, message)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
@@ -441,6 +454,9 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     # not only the call that stopped it.
     messages.extend(continuation.resume_messages(event, _paused_turn(store, run, event)))
     messages = agentcore.end_on_user(messages, run.get("goal", ""))
+    metrics.emit("RunContextMessages", len(messages),
+                dimensions={"Trigger": (run.get("trigger") or {}).get("type", "user")},
+                runId=run["runId"], agentId=run["agentId"], historyRows=len(history))
 
     # The greeting is stored (so every browser shows the same one) but never sent as
     # a turn; the model is told about it instead. See agentcore.identity_block.
@@ -581,8 +597,16 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                 "blockIndex": getattr(parsed, "block_index", -1),
                 "requiredFieldCount": len(required),
             }))
+        tool_started = time.monotonic()
         result = _handle_tool(store, run, agent, ev, push, resolution,
                               parsed, at_seq, spend, turn)
+        # In-harness tools (shell, browser, ...) never round-trip through
+        # this Lambda at all, so this is specifically the latency of the
+        # inline tools that do -- a connector call, a handoff, an artifact
+        # write -- not a measure of anything that runs inside the microVM.
+        metrics.emit("ToolLatencyMs", (time.monotonic() - tool_started) * 1000,
+                    unit="Milliseconds", dimensions={"Tool": parsed.tool_name},
+                    runId=run["runId"])
         if result.get("pause"):
             pending_approval = result["approval"]
             # Its place in the turn, so the decision is replayed where the model
@@ -850,7 +874,8 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             _reinvoke(run["runId"], store.owner_id, delay_note=cls.reason)
             return {"ok": True, "state": RunState.RETRYING.value, "retry": cls.reason}
 
-        _finish(store, run, RunState.FAILED, stream_error, push, ev=ev, cost=spend, text=text)
+        _finish(store, run, RunState.FAILED, stream_error, push, ev=ev, cost=spend, text=text,
+               error_class=cls.cls.value)
         return {"ok": False, "state": RunState.FAILED.value}
 
     # A stop that arrived after the last stream event still has to stop the run:
@@ -1253,6 +1278,43 @@ def _reporting_note(store: Store, agent: dict) -> str:
     return rendered
 
 
+def _read_sandbox_file(run: dict, path: str) -> bytes:
+    """Pull a file's bytes out of this run's own (disposable) sandbox
+    filesystem, so they can be persisted as a durable artifact before the
+    microVM is gone.
+
+    Uses `AgentCore.exec` -- the same no-model, no-tokens shell channel that
+    already powers the console's Computer tab -- rather than anything new:
+    a run's harness/session are already pinned by the time a tool call can
+    reach this (`standard_runtime.pin_run`, earlier in `_drive`). The size is
+    checked *before* the transfer, not after, so an oversized file fails
+    cheaply instead of after already moving it through the command channel.
+    """
+    harness_arn = run.get("runtimeHarnessArn")
+    session_id = run.get("sessionId")
+    if not harness_arn or not session_id:
+        raise RuntimeError("no active sandbox session to read a file from")
+    core = agentcore.AgentCore()
+    quoted = shlex.quote(path)
+    size = core.exec(harness_arn=harness_arn, session_id=session_id,
+                     command=f"wc -c < {quoted} 2>/dev/null || echo -1")
+    try:
+        n = int((size.get("stdout") or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        n = -1
+    if n < 0:
+        raise RuntimeError(f"no such file: {path}")
+    if n > artifacts.MAX_INLINE_CONTENT_BYTES:
+        raise RuntimeError(
+            f"{path} is {n} bytes, over the {artifacts.MAX_INLINE_CONTENT_BYTES}-byte "
+            "artifact limit")
+    result = core.exec(harness_arn=harness_arn, session_id=session_id,
+                       command=f"base64 -w0 {quoted}")
+    if result.get("exitCode", 0) != 0:
+        raise RuntimeError(f"could not read {path}: {(result.get('stderr') or '')[:200]}")
+    return base64.b64decode(result.get("stdout", ""))
+
+
 def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
                  turn: Turn | None = None) -> dict:
     """Answer an inline function call, or record an in-harness tool call.
@@ -1443,23 +1505,42 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
         # the caller named) -- it can never change what an id someone already
         # has already resolves to.
         task_id = (run.get("trigger") or {}).get("taskId") or run["runId"]
+        name_arg = args.get("name", "")
+        source_path = args.get("sourcePath")
         try:
+            if source_path and args.get("content"):
+                raise artifacts.ValidationError(
+                    "give content or sourcePath, not both")
+            if source_path:
+                # Text goes straight through; anything else -- a spreadsheet,
+                # a PDF, an image, a zip -- has to be pulled out of this run's
+                # own sandbox disk before the microVM (and the file with it)
+                # goes away.
+                content = _read_sandbox_file(run, source_path)
+                content_type = (args.get("contentType")
+                                or mimetypes.guess_type(name_arg or source_path)[0]
+                                or "application/octet-stream")
+            elif args.get("content"):
+                content = args["content"]
+                content_type = args.get("contentType") or "text/plain"
+            else:
+                raise artifacts.ValidationError("give content or sourcePath")
+
             if args.get("parentArtifactId"):
                 row = artifacts.create_version_from_content(
-                    store, args["parentArtifactId"], content=args.get("content", ""),
-                    name=args.get("name"), content_type=args.get("contentType"),
+                    store, args["parentArtifactId"], content=content,
+                    name=name_arg or None, content_type=content_type,
                     description=args.get("description"),
                     created_by_agent_id=agent["agentId"], run_id=run["runId"])
             else:
                 row = artifacts.create_from_content(
-                    store, run_id=run["runId"], name=args.get("name", ""),
-                    content=args.get("content", ""),
-                    content_type=args.get("contentType") or "text/plain",
+                    store, run_id=run["runId"], name=name_arg, content=content,
+                    content_type=content_type,
                     artifact_type=args.get("artifactType") or "other",
                     description=args.get("description"),
                     created_by_agent_id=agent["agentId"],
                     task_id=task_id, thread_id=run["threadId"])
-        except (artifacts.ValidationError, NotFound) as exc:
+        except (artifacts.ValidationError, NotFound, RuntimeError) as exc:
             ev.error(seq, "terminal", str(exc))
             _step(push, run, turn, "create_artifact", f"not created: {exc}",
                   review.Review(review.DENIED, "artifact", str(exc)))
@@ -1469,6 +1550,12 @@ def _handle_tool(store, run, agent, ev, push, resolution, parsed, seq, cost,
               review.scoped("artifact", "a new durable output, not a change to anything existing"))
         threads.event(store, run["threadId"], f"{agent['name']} created {row['name']}",
                       icon="file", artifactId=row["artifactId"])
+        # A real card, not just a history line -- the console already renders
+        # `type: "file"` (`FileCard`); nothing produced one until now.
+        turn.cards.append({"type": "file", "artifactId": row["artifactId"],
+                           "name": row["name"], "meta": row.get("artifactType", "other")})
+        metrics.emit("ArtifactCreated", 1, dimensions={"ArtifactType": row.get("artifactType", "other")},
+                     artifactId=row["artifactId"], runId=run["runId"], agentId=agent["agentId"])
         return {"pause": False, "toolResult": {
             "artifactId": row["artifactId"], "name": row["name"], "version": row["version"]}}
 
@@ -2338,22 +2425,24 @@ def _write_cost(store: Store, run: dict, agent: dict, cost: RunCost) -> None:
 
 def _finish(store: Store, run: dict, state: RunState, summary: str, push: Push,
             *, ev: EvidenceWriter | None = None, cost: RunCost | None = None,
-            text: str = "") -> None:
+            text: str = "", error_class: str = "") -> None:
     fresh = store.get(run["pk"], "META")
     ev = ev or EvidenceWriter(fresh["runId"])
     cost = cost or RunCost()
     if text:
         ev.output("text", value=text[:2000])
 
+    cost_item = cost.to_item()
     manifest = ev.seal(
         run=fresh, outcome=state.value, summary=summary[:2000],
-        cost=cost.to_item(),
+        cost=cost_item,
         approvals=approvals.for_run(store, fresh["pk"]),
     )
-    runs.advance(store, fresh, state, evidenceKey=ev.key, summary=summary[:2000],
-                 sealSha256=manifest.get("sealSha256"))
+    fresh = runs.advance(store, fresh, state, evidenceKey=ev.key, summary=summary[:2000],
+                         sealSha256=manifest.get("sealSha256"))
     push.run_end(fresh["runId"], fresh["threadId"], state.value, summary[:2000],
                  fresh.get("costUsd", 0.0))
+    metrics.emit_run_settled(fresh, state.value, cost_item=cost_item, error_class=error_class)
     _wake_coordinator_if_child(store, fresh, state.value, summary)
 
 

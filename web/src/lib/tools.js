@@ -51,6 +51,8 @@ const STEP = {
   remember: 'Saved to memory',
   message_agent: 'Messaged a teammate',
   handoff: 'Handed off',
+  create_artifact: 'Created a file',
+  read_artifact: 'Opened a file',
 };
 
 /** What each verdict is called, in one vocabulary.

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 
 NAMESPACE = "AmazAI"
 
@@ -49,3 +50,38 @@ def emit(metric: str, value: float, *, unit: str = "Count",
         **properties,
     }
     print(json.dumps(record, default=str))
+
+
+def emit_run_settled(run: dict, state_value: str, *, cost_item: dict | None = None,
+                     error_class: str = "") -> None:
+    """A run's terminal settle, as one metric -- duration, outcome, tool/model
+    call counts, retries, tokens. Every number here already existed on the
+    run row or the cost ledger; none of it reached CloudWatch before this,
+    which meant answering "how long did this take, and how" required opening
+    an evidence bundle in S3 for every run, one at a time.
+
+    Shared by `orchestrator._finish`/`_fail` and the sweeper's `_seal` -- both
+    are a run's terminal settle, and duplicating this per handler would drift.
+    """
+    duration = None
+    started, ended = run.get("startedAt"), run.get("endedAt")
+    if started and ended:
+        try:
+            duration = (datetime.fromisoformat(ended.replace("Z", "+00:00"))
+                       - datetime.fromisoformat(started.replace("Z", "+00:00"))).total_seconds()
+        except ValueError:
+            duration = None
+    dims = {"State": state_value, "Trigger": (run.get("trigger") or {}).get("type", "user")}
+    if error_class:
+        dims["ErrorClass"] = error_class
+    properties = {
+        "runId": run.get("runId", ""), "agentId": run.get("agentId", ""),
+        "toolCallCount": run.get("toolCallCount", 0), "retryCount": run.get("attempt", 0),
+        "iterationCount": (run.get("cursor") or {}).get("turn", 0),
+    }
+    if cost_item:
+        properties.update({"modelCalls": cost_item.get("modelCalls", 0),
+                           "inputTokens": cost_item.get("inputTokens", 0),
+                           "outputTokens": cost_item.get("outputTokens", 0)})
+    emit("RunSettled", duration if duration is not None else 0.0,
+        unit="Seconds", dimensions=dims, **properties)

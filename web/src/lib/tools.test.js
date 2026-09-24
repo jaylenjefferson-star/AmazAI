@@ -27,15 +27,22 @@ describe('stepLabel', () => {
     expect(stepLabel('routine.create')).toBe('Suggested a routine');
   });
 
+  it('labels create_artifact/read_artifact instead of leaking them raw', () => {
+    // Same failure mode as agent.find above: these had no entry either, so a
+    // run that saved or opened a file drew the raw tool name mid-sentence.
+    expect(stepLabel('create_artifact')).toBe('Created a file');
+    expect(stepLabel('read_artifact')).toBe('Opened a file');
+  });
+
   it('reads every label as something already done', () => {
-    const past = /^(Terminal|Files|Browser|Code)$|^(Looked|Used|Asked|Suggested|Created|Refined|Saved|Messaged|Handed|Started)\b/;
+    const past = /^(Terminal|Files|Browser|Code)$|^(Looked|Used|Asked|Suggested|Created|Refined|Saved|Messaged|Handed|Started|Opened)\b/;
     for (const name of ['shell', 'connector_search', 'connector_call', 'request_connector',
                         'request_approval', 'propose_routine', 'routine.create', 'create_agent',
                         'update_agent', 'propose_agent', 'agent.create', 'agent.created',
                         'agent.update', 'find_agents', 'agent.find', 'create_group_chat',
                         'group_chat.create', 'propose_skill', 'skill.create',
                         'propose_shared_memory', 'memory.publish', 'remember',
-                        'message_agent', 'handoff']) {
+                        'message_agent', 'handoff', 'create_artifact', 'read_artifact']) {
       expect(stepLabel(name), name).toMatch(past);
     }
   });
