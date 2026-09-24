@@ -28,10 +28,14 @@ from __future__ import annotations
 #: `claude-opus-5` are known-inaccessible on this account as of 2026-09-22;
 #: keep them present (a later grant should not need a code change to take
 #: effect) but behind the 4.6 generation everywhere they'd otherwise sit first.
+#:
+#: `frontier` puts `claude-sonnet-4-6` ahead of every Opus release by product
+#: decision, not capability -- Opus stays in the ladder as a fallback for an
+#: account that has Opus access but not yet Sonnet 4.6's, never the reverse.
 TIERS: dict[str, list[str]] = {
     "frontier": [
-        "claude-opus-4-6", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7",
-        "claude-sonnet-4-6", "claude-sonnet-5",
+        "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-5", "claude-opus-4-8",
+        "claude-opus-4-7", "claude-sonnet-5",
     ],
     "balanced": [
         "claude-sonnet-4-6", "claude-sonnet-5", "claude-opus-5",
