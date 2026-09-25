@@ -25,9 +25,10 @@ busy:
 The lease is one row per (Bot, thread) that exactly one invocation can hold.
 It is taken the way `standard_runtime` takes its provisioning claim: a unique
 put when nobody has held it, and a compare-and-swap on the token the
-contender saw when the last holder let go or its time ran out. Two contenders
-that read the same token cannot both write it. It expires because a worker
-can die without cleaning up -- Lambda's fifteen-minute kill runs no
+contender saw -- and the expiry it saw -- when the last holder let go or its
+time ran out. Two contenders that read the same row cannot both write it, and
+neither can win against a holder that renewed in between. It expires because
+a worker can die without cleaning up -- Lambda's fifteen-minute kill runs no
 `finally` -- and it is renewed while held because a turn can run for longer
 than any expiry short enough to recover from that.
 
@@ -46,10 +47,13 @@ from amazai import keys as K
 from amazai.store import Conflict, Store, new_id, now_iso
 
 #: How long a lease outlives its last renewal. Longer than any silence a live
-#: holder can have: the harness stream fails after 60 seconds without a byte
-#: (botocore's default read timeout -- `AgentCore` sets none) and a connector
-#: call gives up after 25 (`composio.DEFAULT_TIMEOUT`), so a worker that is
-#: still working renews well inside it. Shorter than the sweeper's ten-minute
+#: holder can have: the loop renews before every call to the harness, and the
+#: longest such a call can block before its first byte -- every attempt timing
+#: out, plus the backoff between -- is bounded by the runtime client's own
+#: settings (`agentcore.RUNTIME_MAX_ATTEMPTS` and its timeouts, sized against
+#: this and tested together). Mid-stream, events renew it, and a stream with no
+#: byte for 60 seconds fails; a connector call gives up after 25
+#: (`composio.DEFAULT_TIMEOUT`). Shorter than the sweeper's ten-minute
 #: staleness, so a worker that died holding it has let go before anything
 #: comes looking for the run.
 LEASE_SECONDS = 300
@@ -57,6 +61,17 @@ LEASE_SECONDS = 300
 #: A holder renews at most this often. The loop offers on every stream event;
 #: one write a minute is what that costs.
 RENEW_SECONDS = 60
+
+#: After a renewal fails for a reason other than losing the lease -- a throttle,
+#: a 5xx -- how soon to try again. Most of the lease is still left: a missed
+#: write is not a lost lease, and must not end a turn that is still the only
+#: one on its session.
+RETRY_RENEW_SECONDS = 5
+
+#: Attempts at a release before leaving the lease to expire on its own. A
+#: release that fails keeps the session held for up to `LEASE_SECONDS`, during
+#: which this run's own next invocation stands down as a duplicate.
+_RELEASE_ATTEMPTS = 3
 
 #: How long a row outlives its expiry before DynamoDB's TTL removes it. Expiry
 #: decides who may hold a lease; this only stops rows piling up per thread.
@@ -107,17 +122,19 @@ class Lease:
     run_id: str
     token: str
     released: bool = False
-    _renewed: float = field(default_factory=time.monotonic)
+    _next_renewal: float = field(default_factory=lambda: time.monotonic() + RENEW_SECONDS)
 
     def keep(self, *, force: bool = False) -> None:
         """Push the expiry out again, at most once per `RENEW_SECONDS`.
 
         Raises `LeaseLost` if the token no longer matches: the lease expired
-        and another worker holds it now.
+        and another worker holds it now. Any other failure is logged and tried
+        again shortly (`RETRY_RENEW_SECONDS`).
         """
         if self.released:
             return
-        if not force and time.monotonic() - self._renewed < RENEW_SECONDS:
+        now = time.monotonic()
+        if not force and now < self._next_renewal:
             return
         try:
             self.store.update(_pk(self.store, self.agent_id), K.session_lease_sk(self.thread_id),
@@ -126,29 +143,41 @@ class Lease:
         except Conflict as exc:
             raise LeaseLost(f"the session lease for run {self.run_id} expired and was "
                             "taken over by another invocation") from exc
-        self._renewed = time.monotonic()
-
-    def release(self) -> None:
-        """Let go now, so the next worker does not wait out the expiry.
-
-        Idempotent, and never raises: it runs on the way out of a turn whose
-        own outcome matters more, and a release that fails still expires on
-        its own.
-        """
-        if self.released:
-            return
-        self.released = True
-        try:
-            self.store.update(_pk(self.store, self.agent_id), K.session_lease_sk(self.thread_id),
-                              {"token": _RELEASED + self.token, "expiresAtMs": 0,
-                               "releasedAt": now_iso()},
-                              expect={"token": self.token})
-        except Conflict:
-            # Taken over after an expiry: the row is another worker's now, and
-            # the token check is what keeps this from releasing it for them.
-            pass
         except Exception:  # noqa: BLE001
             traceback.print_exc()
+            self._next_renewal = now + RETRY_RENEW_SECONDS
+            return
+        self._next_renewal = now + RENEW_SECONDS
+
+    def release(self) -> bool:
+        """Let go now, so the next worker does not wait out the expiry.
+
+        Returns whether this let go of a lease it still held -- False when the
+        lease had already moved on, or every attempt failed. Idempotent, and
+        never raises: it runs on the way out of a turn whose own outcome
+        matters more, and a lease that is not released still expires.
+        """
+        if self.released:
+            return False
+        self.released = True
+        for attempt in range(_RELEASE_ATTEMPTS):
+            try:
+                self.store.update(_pk(self.store, self.agent_id),
+                                  K.session_lease_sk(self.thread_id),
+                                  {"token": _RELEASED + self.token, "expiresAtMs": 0,
+                                   "releasedAt": now_iso()},
+                                  expect={"token": self.token})
+                return True
+            except Conflict:
+                # Taken over after an expiry: the row is another worker's now,
+                # and the token check is what keeps this from releasing it for
+                # them.
+                return False
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+                if attempt + 1 < _RELEASE_ATTEMPTS:
+                    time.sleep(0.2 * (attempt + 1))
+        return False
 
 
 def acquire(store: Store, *, agent_id: str, thread_id: str, run_id: str,
@@ -164,17 +193,10 @@ def acquire(store: Store, *, agent_id: str, thread_id: str, run_id: str,
     held = {"runId": run_id, "token": token, "acquiredAt": now_iso(), **_held_until(now)}
     lease = Lease(store, agent_id, thread_id, run_id, token)
 
-    try:
-        store.put({"pk": pk, "sk": sk, "entity": "SessionLease",
-                   "agentId": agent_id, "threadId": thread_id, **held}, unique=True)
-        return lease
-    except Conflict:
-        pass
-
+    # Read first: after a session's first run the row always exists, and a
+    # unique put that is bound to fail is a billed write for nothing.
     seen = store.try_get(pk, sk, consistent=True)
     if seen is None:
-        # Removed by its TTL between the two calls. One more unique put is
-        # still a fair race: whoever loses it reads a live holder next time.
         try:
             store.put({"pk": pk, "sk": sk, "entity": "SessionLease",
                        "agentId": agent_id, "threadId": thread_id, **held}, unique=True)
@@ -187,18 +209,23 @@ def acquire(store: Store, *, agent_id: str, thread_id: str, run_id: str,
 def _take_over(store: Store, lease: Lease, seen: dict, held: dict, now: float) -> Lease:
     """Replace the lease `seen` describes, if nobody holds it any more.
 
-    The write is conditional on the token that was read, so of any number of
-    contenders that saw the same expired or released lease, one succeeds and
-    the rest find its new holder.
+    The write is conditional on the token *and the expiry* that were read, as
+    `standard_runtime._take_claim` conditions on `claimedAt`. The token alone
+    is not enough: a renewal keeps it, so a holder whose lease had lapsed and
+    who renews between a contender's read and its write would lose the
+    session without knowing -- and keep invoking it for another
+    `RENEW_SECONDS` beside the contender. Of any number of contenders that saw
+    the same expired or released lease, one succeeds and the rest find its
+    new holder.
     """
     if _live(seen, now):
         raise SessionBusy(seen.get("runId"))
     pk, sk = seen["pk"], seen["sk"]
+    fields = ("token", "expiresAtMs")
     try:
-        if seen.get("token"):
-            store.update(pk, sk, held, expect={"token": seen["token"]})
-        else:
-            store.update(pk, sk, held, expect_absent_or_null=("token",))
+        store.update(pk, sk, held,
+                     expect={f: seen[f] for f in fields if seen.get(f) is not None},
+                     expect_absent_or_null=tuple(f for f in fields if seen.get(f) is None))
     except Conflict:
         winner = store.try_get(pk, sk, consistent=True) or {}
         raise SessionBusy(winner.get("runId")) from None
@@ -242,19 +269,25 @@ def waiting(store: Store, *, agent_id: str, thread_id: str, limit: int = 20) -> 
                        limit=limit, consistent=True)
 
 
+def is_waiting(store: Store, *, agent_id: str, thread_id: str, run_id: str) -> bool:
+    """Whether `run_id` is queued for this session."""
+    return store.try_get(_pk(store, agent_id), K.session_waiter_sk(thread_id, run_id),
+                         consistent=True) is not None
+
+
 def done_waiting(store: Store, *, agent_id: str, thread_id: str, run_id: str) -> dict | None:
-    """Take `run_id` off the queue; return the resume it was holding, if any.
+    """Take `run_id` off the queue; return its row if it was on it.
 
     Called by a run once it holds the lease, whoever started it -- the holder
-    that let go, the sweeper, or a Lambda retry -- so what it waited with is
-    never lost to the path that happened to wake it.
+    that let go, the sweeper, or a Lambda retry -- so what it waited with
+    (`row["resume"]`) is never lost to the path that happened to wake it.
     """
     pk, sk = _pk(store, agent_id), K.session_waiter_sk(thread_id, run_id)
     row = store.try_get(pk, sk, consistent=True)
     if row is None:
         return None
     forget(store, row)
-    return row.get("resume")
+    return row
 
 
 def forget(store: Store, row: dict) -> None:

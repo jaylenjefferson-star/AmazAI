@@ -124,13 +124,27 @@ def _sweep_run(store: Store, push: Push, run: dict, state: RunState,
     # A heartbeat moves only on a state transition, so a turn that has been
     # streaming for ten minutes looks exactly like a dead one -- and resuming
     # it put a second worker on its session, while sealing it failed work that
-    # was still going. The session lease is what a live worker renews: while
-    # anyone holds it this run is either being driven or queued behind the one
-    # that is, which will start it when it lets go. A worker that died stops
-    # renewing, and within `session_lease.LEASE_SECONDS` this reads as it did.
-    if run.get("agentId") and run.get("threadId") and session_lease.holder(
-            store, run["agentId"], run["threadId"], now=now.timestamp()):
-        return
+    # was still going. The session lease is what a live worker renews, so it
+    # is what says whether this run is being driven. A worker that died stops
+    # renewing, and within `session_lease.LEASE_SECONDS` its run reads as it
+    # did before there was a lease.
+    session = {"agent_id": run.get("agentId"), "thread_id": run.get("threadId")}
+    if all(session.values()):
+        holder = session_lease.holder(store, **session, now=now.timestamp())
+        if holder == run["runId"]:
+            return
+        if session_lease.is_waiting(store, run_id=run["runId"], **session):
+            if holder:
+                # Queued behind a live worker, which starts it when it lets go.
+                return
+            # Its wake was lost: whoever held the session died without letting
+            # go. Waiting is not dying, and the deadline it spent in line is not
+            # its to lose (`_drive` restarts that clock), so it is started, not
+            # failed. Anything else -- including a run whose worker died while
+            # another run now holds the session -- falls through to the checks
+            # below, exactly as before.
+            _resume(store, run, result)
+            return
 
     pending = run.get("pending")
     if pending and pending.get("kind") == "tool":
@@ -163,6 +177,10 @@ def _sweep_run(store: Store, push: Push, run: dict, state: RunState,
 
     # No unresolved side effect and still inside its deadline: safe to
     # resume on the same session, with the agent's files and git state intact.
+    _resume(store, run, result)
+
+
+def _resume(store: Store, run: dict, result: dict) -> None:
     fn = os.environ.get("ORCHESTRATOR_FN_ARN")
     if fn:
         boto3.client("lambda").invoke(

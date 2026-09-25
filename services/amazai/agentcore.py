@@ -12,8 +12,30 @@ from __future__ import annotations
 import os
 
 import boto3
+from botocore.config import Config
 
 REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-west-2"
+
+#: The runtime client's limits, set here rather than left to botocore's
+#: defaults because `session_lease.LEASE_SECONDS` is sized from them. Nothing
+#: renews a worker's lease while a call to the harness blocks before its first
+#: byte, so the longest that can take -- every attempt timing out, and the
+#: backoff between -- must stay inside the lease, or another worker can take a
+#: session this one is about to invoke. botocore's default of five attempts
+#: does not. Fewer hidden retries also means fewer duplicate turns: an
+#: InvokeHarness retried after its first attempt did reach the service is a
+#: second turn on the same session. A failure surfaces as a stream error
+#: instead, which `errors.classify` retries at the run level, where the lease
+#: is taken again first.
+RUNTIME_CONNECT_TIMEOUT = 10
+RUNTIME_READ_TIMEOUT = 60
+RUNTIME_MAX_ATTEMPTS = 3
+#: botocore's cap on one backoff in its standard retry mode.
+RUNTIME_MAX_BACKOFF_SECONDS = 20
+_RUNTIME_CONFIG = Config(connect_timeout=RUNTIME_CONNECT_TIMEOUT,
+                         read_timeout=RUNTIME_READ_TIMEOUT,
+                         retries={"mode": "standard",
+                                  "total_max_attempts": RUNTIME_MAX_ATTEMPTS})
 
 #: How many `kind: note` memory rows reach the prompt per scope, newest first
 #: (`build_system_prompt`). Notes are the default kind, so this is the window
@@ -527,7 +549,8 @@ class HarnessNotReady(RuntimeError):
 class AgentCore:
     def __init__(self, *, region: str | None = None, runtime=None, control=None) -> None:
         region = region or REGION
-        self._runtime = runtime or boto3.client("bedrock-agentcore", region_name=region)
+        self._runtime = runtime or boto3.client("bedrock-agentcore", region_name=region,
+                                                 config=_RUNTIME_CONFIG)
         self._control = control or boto3.client("bedrock-agentcore-control", region_name=region)
 
     def invoke_stream(self, *, harness_arn: str, session_id: str, messages: list[dict],

@@ -314,6 +314,26 @@ class TestRoomMembers:
         status, body = call("PATCH", f"/threads/{room}", {"agentIds": ids[:cap + 3]})
         assert status == 400 and f"at most {cap}" in body["detail"]
 
+    def test_repeated_ids_do_not_open_a_way_past_the_cap(self, api_table):
+        """A room saved with repeats read as that many members, and the rule
+        that lets an older room keep its size then let it grow to match."""
+        cap = collab.MAX_ROOM_MEMBERS
+        ids = [make_agent(f"Bot{c}") for c in "ABCDEFGHI"]
+        status, room = call("POST", "/threads", {"kind": "room", "title": "Ship it",
+                                                 "agentIds": [ids[0]] * 9})
+        assert status == 201 and room["agentIds"] == [ids[0]]
+        status, body = call("PATCH", f"/threads/{room['threadId']}", {"agentIds": ids})
+        assert status == 400 and f"at most {cap}" in body["detail"]
+
+    def test_a_room_already_saved_with_repeats_cannot_grow_either(self, api_table):
+        cap = collab.MAX_ROOM_MEMBERS
+        ids = [make_agent(f"Bot{c}") for c in "ABCDEFGHI"]
+        room = make_room(ids[0])
+        api.Store("owner-a").update(K.thread_pk("owner-a", room), "META",
+                                    {"agentIds": [ids[0]] * 9})
+        status, body = call("PATCH", f"/threads/{room}", {"agentIds": ids})
+        assert status == 400 and f"at most {cap}" in body["detail"]
+
     def test_a_room_cannot_be_emptied(self, api_table):
         eng = make_agent("Eng")
         room = make_room(eng)

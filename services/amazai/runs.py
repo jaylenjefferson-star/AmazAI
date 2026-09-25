@@ -15,6 +15,13 @@ from amazai.store import Store, new_id, now_iso
 DEFAULT_DEADLINE_MINUTES = 15
 
 
+def deadline_iso(minutes: int = DEFAULT_DEADLINE_MINUTES) -> str:
+    """A run's deadline, `minutes` from now -- what the sweeper reads to tell a
+    run worth resuming from one that has had its chance."""
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    return deadline.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def session_epoch(store: Store, agent_id: str, thread_id: str) -> int:
     """The epoch this (agent, thread) pair's session is currently on. 0 if it
     has never had to rotate."""
@@ -61,7 +68,6 @@ def create(store: Store, *, agent_id: str, thread_id: str, goal: str,
     key for a routine fire): the id it stored must be the id the run has, or a
     retried caller is handed the identifier of a run that never existed."""
     run_id = run_id or new_id("run_")
-    deadline = datetime.now(timezone.utc) + timedelta(minutes=deadline_minutes)
     epoch = session_epoch(store, agent_id, thread_id)
 
     item = {
@@ -91,7 +97,7 @@ def create(store: Store, *, agent_id: str, thread_id: str, goal: str,
         "attempt": 0, "toolErrorCount": 0, "toolCallCount": 0,
         "consecutiveToolErrors": 0,
         "heartbeatAt": now_iso(),
-        "deadlineAt": deadline.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "deadlineAt": deadline_iso(deadline_minutes),
         "costUsd": 0.0,
         "evidenceKey": None,
         "startedAt": now_iso(), "endedAt": None,

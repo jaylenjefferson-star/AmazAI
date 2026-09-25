@@ -238,12 +238,14 @@ class TestWaiting:
         decision = {"resume": True, "resumeNote": "approved"}
         session_lease.wait(store, run_id="run_a", resume=decision, **SESSION)
         session_lease.wait(store, run_id="run_a", **SESSION)
-        assert session_lease.done_waiting(store, run_id="run_a", **SESSION) == decision
+        assert session_lease.done_waiting(store, run_id="run_a", **SESSION)["resume"] == decision
 
     def test_done_waiting_clears_the_place_in_line(self, store):
         session_lease.wait(store, run_id="run_a", **SESSION)
-        assert session_lease.done_waiting(store, run_id="run_a", **SESSION) is None
+        assert session_lease.is_waiting(store, run_id="run_a", **SESSION)
+        assert session_lease.done_waiting(store, run_id="run_a", **SESSION)["runId"] == "run_a"
         assert session_lease.waiting(store, **SESSION) == []
+        assert not session_lease.is_waiting(store, run_id="run_a", **SESSION)
 
     def test_a_run_that_never_waited_has_nothing_to_clear(self, store):
         assert session_lease.done_waiting(store, run_id="run_x", **SESSION) is None
@@ -472,7 +474,8 @@ class TestTheSweeperLeavesAHeldSessionAlone:
 
     def test_a_run_queued_behind_a_live_holder_is_left_for_the_holder_to_start(self, store, monkeypatch):
         fake = _stub_lambda(monkeypatch)
-        _stale_retrying_run(store, agent_id="eng", thread_id="dm-eng")
+        run = _stale_retrying_run(store, agent_id="eng", thread_id="dm-eng")
+        session_lease.wait(store, run_id=run["runId"], **SESSION)
         take(store, "run_holder")
 
         assert sweeper.handler({}, None)["runsResumed"] == 0 and fake.invocations == []
@@ -498,3 +501,234 @@ class TestNothingIsStrandedOnTheWayIn:
         with pytest.raises(RuntimeError):
             world.drive()
         assert held(world) is None
+
+
+class TestReviewedLeaseRaces:
+    def test_a_holder_that_renews_between_a_contenders_read_and_write_keeps_it(self, store,
+                                                                              monkeypatch):
+        """A renewal keeps the token, so the token alone cannot tell a lapsed
+        lease from one its holder has just renewed. The takeover also checks
+        the expiry it read, the way the provisioning claim checks claimedAt."""
+        holder = take(store, "run_h", now=1_000.0)           # lapsed by `later`
+        later = 1_000.0 + LEASE_SECONDS + 1
+        real_try_get = Store.try_get
+        renewed = []
+
+        def renew_right_after_the_read(self, pk, sk, **kw):
+            row = real_try_get(self, pk, sk, **kw)
+            if sk == K.session_lease_sk("dm-eng") and not renewed:
+                renewed.append(True)
+                holder.keep(force=True)                      # lands before the contender writes
+            return row
+
+        monkeypatch.setattr(Store, "try_get", renew_right_after_the_read)
+        with pytest.raises(SessionBusy) as busy:
+            take(store, "run_c", now=later)
+        assert busy.value.holder == "run_h"
+        monkeypatch.setattr(Store, "try_get", real_try_get)
+        holder.keep(force=True)                              # and it never lost it
+
+    def test_a_throttled_renewal_is_not_a_lost_lease(self, store, monkeypatch):
+        lease = take(store, "run_a")
+        real, calls = store.update, []
+
+        def throttled_once(*a, **k):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("ThrottlingException")
+            return real(*a, **k)
+
+        monkeypatch.setattr(store, "update", throttled_once)
+        lease.keep(force=True)                               # logged, not raised
+        lease.keep(force=True)                               # and tried again
+        assert len(calls) == 2
+        assert session_lease.holder(store, **SESSION) == "run_a"
+
+    def test_a_release_that_meets_a_throttle_is_tried_again(self, store, monkeypatch):
+        """A failed release holds the session until it expires, and this run's
+        own next invocation would stand down as a duplicate meanwhile."""
+        monkeypatch.setattr(session_lease.time, "sleep", lambda _s: None)
+        lease = take(store, "run_a")
+        real, calls = store.update, []
+
+        def throttled_once(*a, **k):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("ThrottlingException")
+            return real(*a, **k)
+
+        monkeypatch.setattr(store, "update", throttled_once)
+        assert lease.release() is True
+        assert session_lease.holder(store, **SESSION) is None
+
+
+class TestTheHarnessCannotHoldAWorkerPastItsLease:
+    """Nothing renews a lease while a harness call blocks before its first
+    byte, so the longest that can take has to fit inside the lease."""
+
+    def test_the_longest_a_harness_call_can_block_fits_inside_the_lease(self):
+        from amazai import agentcore
+        worst = (agentcore.RUNTIME_MAX_ATTEMPTS
+                 * (agentcore.RUNTIME_CONNECT_TIMEOUT + agentcore.RUNTIME_READ_TIMEOUT)
+                 + (agentcore.RUNTIME_MAX_ATTEMPTS - 1) * agentcore.RUNTIME_MAX_BACKOFF_SECONDS)
+        assert worst < LEASE_SECONDS
+
+    def test_the_runtime_client_is_built_with_those_limits(self):
+        from amazai import agentcore
+        config = agentcore.AgentCore()._runtime.meta.config
+        assert config.connect_timeout == agentcore.RUNTIME_CONNECT_TIMEOUT
+        assert config.read_timeout == agentcore.RUNTIME_READ_TIMEOUT
+        assert config.retries == {"mode": "standard",
+                                  "total_max_attempts": agentcore.RUNTIME_MAX_ATTEMPTS}
+
+
+class TestReviewedOrchestratorPaths:
+    def test_a_stopped_run_that_was_waiting_settles_without_a_model_call(self, world):  # noqa: F811
+        follow_up = other_run(world)
+        session_lease.wait(world.store, agent_id=world.agent_id,
+                           thread_id=world.run["threadId"], run_id=follow_up["runId"])
+        api._stop_run(world.store, follow_up)            # the operator stops it while it waits
+        fake = world.script([text("should never be asked")])
+
+        orch._drive(world.store, world.store.get(follow_up["pk"], "META"),
+                    {"runId": follow_up["runId"]})
+
+        assert fake.calls == []
+        assert world.store.get(follow_up["pk"], "META")["state"] == RunState.CANCELLED.value
+        assert held(world) is None
+
+    def test_a_run_that_waited_has_its_deadline_restarted(self, world):  # noqa: F811
+        follow_up = other_run(world)
+        world.store.update(follow_up["pk"], "META", {"deadlineAt": "2026-01-01T00:00:00Z"})
+        session_lease.wait(world.store, agent_id=world.agent_id,
+                           thread_id=world.run["threadId"], run_id=follow_up["runId"])
+        world.script([text("done")])
+
+        orch._drive(world.store, world.store.get(follow_up["pk"], "META"),
+                    {"runId": follow_up["runId"]})
+
+        assert not runs.deadline_passed(world.store.get(follow_up["pk"], "META"))
+
+    def test_a_run_that_never_waited_keeps_its_deadline(self, world):  # noqa: F811
+        before = world.store.get(world.run["pk"], "META")["deadlineAt"]
+        world.script([text("done")])
+        world.drive()
+        assert world.store.get(world.run["pk"], "META")["deadlineAt"] == before
+
+    def test_a_stopped_runs_reply_is_saved_before_the_next_run_is_woken(self, world,  # noqa: F811
+                                                                         monkeypatch):
+        replies_at_wake = []
+        monkeypatch.setattr(orch, "_invoke_orchestrator_async", lambda run_id, owner: (
+            replies_at_wake.append([m.get("text", "") for m in world.messages()
+                                    if m.get("role") == "assistant"])))
+        follow_up = other_run(world)
+        session_lease.wait(world.store, agent_id=world.agent_id,
+                           thread_id=world.run["threadId"], run_id=follow_up["runId"])
+
+        def stream(kw):
+            yield text("Working on A…")
+            api._stop_run(world.store, world.store.get(world.run["pk"], "META"))
+            yield text(" still A")
+
+        world.script(stream)
+        world.drive()
+
+        assert len(replies_at_wake) == 1
+        assert any(t.startswith("Working on A") for t in replies_at_wake[0]), \
+            "the waiting run was started before the stopped run's reply was saved"
+
+    def test_a_woken_resume_that_meets_a_closed_gate_still_rotates_and_hands_on(  # noqa: F811
+            self, world, monkeypatch):
+        """Started again with only its id, a queued resume used to meet the
+        gates before its decision was restored: a closed gate then failed it
+        without rotating the session it owed, and the runs behind it were
+        never started."""
+        from amazai import billing
+        monkeypatch.setenv("AMAZAI_CONTINUATION", "tool_result")
+        woken = []
+        monkeypatch.setattr(orch, "_invoke_orchestrator_async",
+                            lambda run_id, owner: woken.append(run_id))
+        a_turn_that_pauses_in_the_middle(world)
+        world.drive()
+        resume = decide(world)
+        busy = session_lease.acquire(world.store, agent_id=world.agent_id,
+                                     thread_id=world.run["threadId"], run_id="run_follow_up")
+        world.drive(resume)                                    # queues with its decision
+        behind = other_run(world, "queued behind the resume")
+        session_lease.wait(world.store, agent_id=world.agent_id,
+                           thread_id=world.run["threadId"], run_id=behind["runId"])
+        busy.release()
+        monkeypatch.setattr(billing, "has_credit", lambda store: False)
+
+        out = world.drive({"runId": world.run["runId"]})       # how the holder wakes it
+
+        assert out == {"ok": False, "reason": "out of credits"}
+        assert runs.session_epoch(world.store, world.agent_id, world.run["threadId"]) == 1
+        assert woken == [behind["runId"]]
+
+    def test_a_duplicate_invocation_cannot_fail_a_live_run_at_a_gate(self, world,  # noqa: F811
+                                                                    monkeypatch):
+        """The sweeper's resume of a turn still streaming reached the gates
+        before the lease: with credits just run out, it failed the run its own
+        worker was still driving."""
+        from amazai import billing
+        session_lease.acquire(world.store, agent_id=world.agent_id,
+                              thread_id=world.run["threadId"], run_id=world.run["runId"])
+        monkeypatch.setattr(billing, "has_credit", lambda store: False)
+
+        out = world.drive({"runId": world.run["runId"], "resume": True})
+
+        assert out["skipped"] == "another invocation is already driving this run"
+        assert world.state() == RunState.QUEUED.value
+
+    def test_a_worker_that_lost_the_session_to_its_own_run_stands_down(self, world,  # noqa: F811
+                                                                      monkeypatch):
+        """Another invocation of this same run has the session: the run is
+        that invocation's to settle, not this one's to retry, rotate or fail."""
+        monkeypatch.setattr(session_lease, "RENEW_SECONDS", 0)
+        reinvoked = []
+        monkeypatch.setattr(orch, "_reinvoke", lambda *a, **k: reinvoked.append(a))
+
+        def resumed_elsewhere(_):
+            import time
+            yield text("Working…")
+            session_lease.acquire(world.store, agent_id=world.agent_id,
+                                  thread_id=world.run["threadId"], run_id=world.run["runId"],
+                                  now=time.time() + LEASE_SECONDS + 1)
+            yield text(" never sent")
+
+        world.script(resumed_elsewhere)
+        out = world.drive()
+
+        assert out["skipped"] == "lost the session to another invocation of this run"
+        assert world.state() == RunState.EXECUTING.value
+        assert reinvoked == []
+        assert runs.session_epoch(world.store, world.agent_id, world.run["threadId"]) == 0
+
+
+class TestTheSweeperOnlySparesTheRunsTheLeaseSpeaksFor:
+    def test_a_run_whose_worker_died_is_not_shielded_by_another_runs_lease(self, store,
+                                                                          monkeypatch):
+        """Its worker died and a follow-up has the session since. Nothing will
+        ever start it, so it is dealt with as it always was -- not skipped for
+        as long as the session happens to be busy."""
+        _stub_lambda(monkeypatch)
+        run = _stuck_run(store, agent_id="eng", thread_id="dm-eng")
+        take(store, "run_follow_up")
+
+        sweeper.handler({}, None)
+
+        assert store.get(run["pk"], "META")["state"] == RunState.FAILED.value
+
+    def test_a_waiter_whose_wake_was_lost_is_started_not_failed(self, store, monkeypatch):
+        """Its holder died without letting go, and its deadline ran out while it
+        stood in line. Waiting is not dying."""
+        fake = _stub_lambda(monkeypatch)
+        run = _stuck_run(store, agent_id="eng", thread_id="dm-eng")   # stale, past its deadline
+        session_lease.wait(store, run_id=run["runId"], **SESSION)
+        take(store, "run_dead", now=1_000.0)                          # its lease ran out long ago
+
+        result = sweeper.handler({}, None)
+
+        assert result["runsResumed"] == 1 and len(fake.invocations) == 1
+        assert store.get(run["pk"], "META")["state"] == RunState.EXECUTING.value

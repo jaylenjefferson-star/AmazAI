@@ -351,59 +351,25 @@ def _rotate_if_abandoning_a_resume(store: Store, run: dict, event: dict) -> None
 
 
 def _drive(store: Store, run: dict, event: dict) -> dict:
-    push = Push(store)
-    agent = store.get(K.agent_pk(store.owner_id, run["agentId"]), "META")
-
-    # The kill switch is the pre-model chokepoint: a frozen org fails every run
-    # closed here, before a single token is spent. Checked ahead of tool
-    # resolution so freezing an org stops work immediately on the next run
-    # rather than after the model has already been invoked. The org id is
-    # the agent's owner today (the one-workspace-per-owner seam).
-    org_id = agent.get("orgId") or store.owner_id
-    if govern.is_frozen(store.try_get(K.org_pk(org_id), "KILLSWITCH")):
-        _rotate_if_abandoning_a_resume(store, run, event)
-        _fail(store, run, "this organization is frozen by an administrator")
-        return {"ok": False, "reason": "org frozen"}
-
-    # The account-wide credit balance, checked right alongside the kill
-    # switch: both are account-level gates that must refuse a run before a
-    # single token is spent. There is deliberately no per-agent spend ceiling
-    # below this any more -- an agent-level budget stopped a run mid-task in a
-    # way an operator could not see coming, so the only ceiling left is this
-    # account-wide one. See billing.py's module docstring for why this is a
-    # coarse pre-flight check, not mid-run metering.
-    if not billing.has_credit(store):
-        _rotate_if_abandoning_a_resume(store, run, event)
-        _fail(store, run, "this account is out of credits")
-        return {"ok": False, "reason": "out of credits"}
-
-    if agent.get("state") != "active":
-        _rotate_if_abandoning_a_resume(store, run, event)
-        _fail(store, run, f"agent {agent.get('name')} is {agent.get('state')}")
-        return {"ok": False, "reason": "agent not active"}
-
-    model_id = (agent.get("model") or {}).get("modelId")
-    if not model_id:
-        # seats.json ships modelId: null until D2 is decided. Failing here with
-        # a clear message beats a Bedrock error that looks like a permissions bug.
-        _rotate_if_abandoning_a_resume(store, run, event)
-        _fail(store, run,
-              "no modelId configured for this seat; resolve the Bedrock inference "
-              "profile and set it in scripts/seats.json (decision D2)")
-        return {"ok": False, "reason": "no model configured"}
-
-    # Taken before the conversation is read, not just before the harness is
-    # called: a run that waited for the session must read what the run it
-    # waited for wrote, and that is only certain once the other has let go.
-    lease, instead = _take_session(store, run, event)
+    # The session comes first, before anything that can settle the run: an
+    # invocation that is not this session's worker -- the sweeper resuming a
+    # turn that is still running, a Lambda retry -- must not be able to fail a
+    # run another is driving at one of the gates. It is also taken before the
+    # conversation is read: a run that waited must read what the run it waited
+    # for wrote, which is only certain once that one has let go.
+    lease, outcome = _take_session(store, run, event)
     if lease is None:
-        return instead
-    if instead:
-        # A resume that queued behind another run, started again with only
-        # its id: `_take_session` has handed back the decision it carried.
-        event = {**event, **instead}
+        return outcome
     try:
-        return _drive_holding(store, run, event, push, agent, model_id, lease)
+        if outcome is not None:
+            # It waited for the session. A queued approval resume's decision
+            # comes back with it -- it was started again with only its id --
+            # before any gate can need it. And its fifteen minutes start now:
+            # the sweeper reads the deadline, and time spent waiting its turn
+            # is not the run's to lose.
+            event = {**event, **(outcome.get("resume") or {})}
+            run = store.update(run["pk"], "META", {"deadlineAt": runs.deadline_iso()})
+        return _drive_holding(store, run, event, lease)
     finally:
         # Every exit that reaches the harness lets go explicitly, before it
         # starts anything else that needs this session; this is for the ones
@@ -414,8 +380,8 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 def _take_session(store: Store, run: dict, event: dict):
     """This run's lease on its session, or the result to return instead of it.
 
-    Returns `(lease, resume)` -- `resume` being the decision a queued approval
-    resume left with its place in line, if this is that run coming back -- or
+    Returns `(lease, waited)` -- `waited` being this run's place in line if it
+    had one, carrying the decision a queued approval resume set aside -- or
     `(None, result)` when this invocation must not drive the run now.
 
     Losing is not failing. The run that lost is one of three things:
@@ -487,11 +453,13 @@ def _let_go(store: Store, lease: session_lease.Lease) -> None:
     Left to a `finally`, the release would come after those had started, and
     each would find the session still held and queue behind a worker that was
     already on its way out. Idempotent: `_drive`'s `finally` calls it again.
+    A worker whose lease had already moved on has nothing to hand over, so it
+    wakes no one: whoever holds the session now will.
     """
     if lease.released:
         return
-    lease.release()
-    _wake_next_waiter(store, lease)
+    if lease.release():
+        _wake_next_waiter(store, lease)
 
 
 def _wake_next_waiter(store: Store, lease: session_lease.Lease) -> None:
@@ -517,10 +485,57 @@ def _wake_next_waiter(store: Store, lease: session_lease.Lease) -> None:
         traceback.print_exc()
 
 
-def _drive_holding(store: Store, run: dict, event: dict, push: Push, agent: dict,
-                   model_id: str, lease: session_lease.Lease) -> dict:
-    """The part of `_drive` that runs holding the session: everything from
-    reading the conversation to settling the run."""
+def _drive_holding(store: Store, run: dict, event: dict,
+                   lease: session_lease.Lease) -> dict:
+    """`_drive` from the point it holds the session: the pre-model gates, then
+    everything from reading the conversation to settling the run."""
+    if RunState(run["state"]) is RunState.CANCELLING:
+        # Stopped before it had a turn -- in practice, while it waited for the
+        # session. Settled here without a model call, the way a paused run is.
+        _let_go(store, lease)
+        return _settle_paused_cancel(store, run)
+
+    push = Push(store)
+    agent = store.get(K.agent_pk(store.owner_id, run["agentId"]), "META")
+
+    # The kill switch is the pre-model chokepoint: a frozen org fails every run
+    # closed here, before a single token is spent. Checked ahead of tool
+    # resolution so freezing an org stops work immediately on the next run
+    # rather than after the model has already been invoked. The org id is
+    # the agent's owner today (the one-workspace-per-owner seam).
+    org_id = agent.get("orgId") or store.owner_id
+    if govern.is_frozen(store.try_get(K.org_pk(org_id), "KILLSWITCH")):
+        _rotate_if_abandoning_a_resume(store, run, event)
+        _fail(store, run, "this organization is frozen by an administrator")
+        return {"ok": False, "reason": "org frozen"}
+
+    # The account-wide credit balance, checked right alongside the kill
+    # switch: both are account-level gates that must refuse a run before a
+    # single token is spent. There is deliberately no per-agent spend ceiling
+    # below this any more -- an agent-level budget stopped a run mid-task in a
+    # way an operator could not see coming, so the only ceiling left is this
+    # account-wide one. See billing.py's module docstring for why this is a
+    # coarse pre-flight check, not mid-run metering.
+    if not billing.has_credit(store):
+        _rotate_if_abandoning_a_resume(store, run, event)
+        _fail(store, run, "this account is out of credits")
+        return {"ok": False, "reason": "out of credits"}
+
+    if agent.get("state") != "active":
+        _rotate_if_abandoning_a_resume(store, run, event)
+        _fail(store, run, f"agent {agent.get('name')} is {agent.get('state')}")
+        return {"ok": False, "reason": "agent not active"}
+
+    model_id = (agent.get("model") or {}).get("modelId")
+    if not model_id:
+        # seats.json ships modelId: null until D2 is decided. Failing here with
+        # a clear message beats a Bedrock error that looks like a permissions bug.
+        _rotate_if_abandoning_a_resume(store, run, event)
+        _fail(store, run,
+              "no modelId configured for this seat; resolve the Bedrock inference "
+              "profile and set it in scripts/seats.json (decision D2)")
+        return {"ok": False, "reason": "no model configured"}
+
     # --- tool resolution: grants ∩ rate limits ------------------------------
     # Intersected with the org install and the catalog on every run, not
     # trusted as written. A grant row that outlived its install — a revoke
@@ -762,9 +777,13 @@ def _drive_holding(store: Store, run: dict, event: dict, push: Push, agent: dict
                              "input": parsed.tool_input, "result": out,
                              "error": failed})
 
+    lost = False
     try:
         while True:
-            lease.keep()
+            # Forced: nothing renews while the call below blocks before its
+            # first byte, so it starts with the whole lease in hand -- the most
+            # it can block is bounded inside that (agentcore.RUNTIME_*).
+            lease.keep(force=True)
             parser = StreamParser()
             answered.clear()
             round_from = len(buffer)
@@ -839,8 +858,8 @@ def _drive_holding(store: Store, run: dict, event: dict, push: Push, agent: dict
                     # settle below, the same way a stream error abandons them.
                     if answered or carried:
                         _mark_dirty(store, run)
-                    _let_go(store, lease)
-                    return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at)
+                    return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn,
+                                             started_at, lease=lease)
 
             if not stream_error:
                 for parsed in parser.flush():
@@ -880,8 +899,8 @@ def _drive_holding(store: Store, run: dict, event: dict, push: Push, agent: dict
                 # Reached only once `answered` is known non-empty (the guard
                 # just above already ruled out the empty case).
                 _mark_dirty(store, run)
-                _let_go(store, lease)
-                return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at)
+                return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn,
+                                         started_at, lease=lease)
             rounds += 1
             out_of_rounds = rounds > MAX_TOOL_ROUNDS
             out_of_time = time.monotonic() - drive_started > ROUND_BUDGET_SECONDS
@@ -927,6 +946,7 @@ def _drive_holding(store: Store, run: dict, event: dict, push: Push, agent: dict
 
     except Exception as exc:  # noqa: BLE001
         stream_error = f"{type(exc).__name__}: {exc}"
+        lost = isinstance(exc, session_lease.LeaseLost)
         # Whatever `answer()` had already computed when this was raised --
         # including a Lambda-level failure with no chance to reach any of the
         # checks above -- is abandoned along with everything else in this
@@ -937,6 +957,16 @@ def _drive_holding(store: Store, run: dict, event: dict, push: Push, agent: dict
         # can be failing to discover before it has parsed anything of its own.
         dirty_exit = (bool(answered) or bool(carried)
                      or _leaves_session_owing(stream_error))
+
+    if lost and session_lease.holder(store, run["agentId"], run["threadId"]) == run["runId"]:
+        # Another invocation of this same run holds the session now: the
+        # sweeper resumed it after this one went quiet past its lease. The run
+        # is that invocation's to settle -- rotating, retrying or failing it
+        # from here would do it under that invocation's feet. What this one
+        # spent is still spent.
+        billing.spend(store, spend.total_usd, run_id=run["runId"], agent_id=agent["agentId"])
+        return {"ok": True, "runId": run["runId"],
+                "skipped": "lost the session to another invocation of this run"}
 
     # Wall clock, not a price. What a harness second costs is not established
     # for this account, so the seconds are recorded and rated at zero rather
@@ -1035,7 +1065,8 @@ def _drive_holding(store: Store, run: dict, event: dict, push: Push, agent: dict
 
 
 def _settle_cancelled(store, run, agent, push, ev, cost, buffer, turn, started_at,
-                      *, persisted: bool = False) -> dict:
+                      *, persisted: bool = False,
+                      lease: session_lease.Lease | None = None) -> dict:
     """A stop, and -- if the operator sent something new while it ran -- the
     redirect that follows it.
 
@@ -1047,6 +1078,11 @@ def _settle_cancelled(store, run, agent, push, ev, cost, buffer, turn, started_a
     if not persisted and (text or turn.steps or turn.cards):
         _persist_message(store, run, agent, text, cost, steps=turn.steps,
                          cards=turn.cards, started_at=started_at)
+    if lease is not None:
+        # After the reply is saved, so a run waiting for this session reads it;
+        # before the redirect starts, so the redirect does not queue behind a
+        # worker that is on its way out.
+        _let_go(store, lease)
     _finish(store, run, RunState.CANCELLED,
             "cancelled by you; the in-flight action was allowed to finish",
             push, ev=ev, cost=cost, text=text)

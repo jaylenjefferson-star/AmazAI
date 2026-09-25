@@ -43,7 +43,7 @@ export default function RoomInfo({ thread, agents, activityCount = 0, onActivity
       <div className="ri-stack" aria-hidden="true">
         {members.slice(0, 4).map((a) => <Companion key={a.agentId} archetype={a.archetype} color={a.color} state={a.state} size={44} decorative />)}
       </div>
-      <p className="ri-count">{ids.length} of {MAX_MEMBERS} agents{closed ? ` · ${thread.status || 'closed'}` : ''}</p>
+      <p className="ri-count">{ids.length > MAX_MEMBERS ? `${ids.length} agents` : `${ids.length} of ${MAX_MEMBERS} agents`}{closed ? ` · ${thread.status || 'closed'}` : ''}</p>
 
       {problem && <Problem message={problem.message} error={problem.error} inline />}
 
