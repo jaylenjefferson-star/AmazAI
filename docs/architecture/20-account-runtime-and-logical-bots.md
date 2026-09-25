@@ -155,10 +155,12 @@ also retained until a separate, audited garbage-collection operation exists.
 - It does not merge chats. Group members share the stored room transcript by
   product design; direct threads remain separate.
 - It does not weaken approvals. Authority remains per Bot and per run.
-- It does not solve two simultaneous runs for the **same Bot in the same
-  thread**. The console's redirect path already avoids the normal case, but a
-  universal server-side session lease remains required before adding more
-  inbound triggers.
+- It does not, on its own, stop two simultaneous runs for the **same Bot in the
+  same thread**. The console's redirect path avoids that only when a redirect
+  is sent, and the main composer, rooms and the WebSocket path never send one.
+  `amazai.session_lease` is what stops it: a conditional-write lease on
+  (owner, Bot, thread), held by `_drive` for as long as it uses the harness, so
+  a second run waits its turn and a duplicate invocation stands down.
 - It does not adopt the incomplete EC2 provider in PR #22. That branch remains
   a future dedicated-compute escape hatch and must be reconciled with current
   per-invocation tools and run semantics before merge.

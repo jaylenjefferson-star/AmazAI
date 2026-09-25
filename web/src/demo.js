@@ -1190,7 +1190,7 @@ if (import.meta.env.DEV) {
       if (changes.agentIds) {
         const ids = [...new Set(changes.agentIds)];
         if (!ids.length) throw new Error('a room needs at least one agent');
-        if (ids.length > 6) throw new Error('a room holds at most 6 agents');
+        if (ids.length > Math.max(4, room.agentIds.length)) throw new Error('a room holds at most 4 agents');
         const unknown = ids.find((a) => !AGENTS.some((x) => x.agentId === a));
         if (unknown) throw new Error(`no such agent '${unknown}'`);
         ids.filter((a) => !room.agentIds.includes(a)).forEach((a) => event(id, `${nameOf(a)} joined`));

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from amazai import identity, keys as K
+from amazai import collab, identity, keys as K
 from amazai.store import Store
 
 import handlers.api as api
@@ -620,13 +620,22 @@ class TestPinned:
 class TestRoomSize:
     ROOM = {"kind": "room", "title": "Ship it"}
 
-    def test_a_room_of_six_is_allowed(self, api_table):
-        status, room = call("POST", "/threads", {**self.ROOM, "agentIds": [f"a{i}" for i in range(6)]})
-        assert status == 201 and len(room["agentIds"]) == 6
+    def test_a_full_room_is_allowed(self, api_table):
+        cap = collab.MAX_ROOM_MEMBERS
+        status, room = call("POST", "/threads", {**self.ROOM, "agentIds": [f"a{i}" for i in range(cap)]})
+        assert status == 201 and len(room["agentIds"]) == cap
 
-    def test_a_seventh_agent_is_refused(self, api_table):
-        status, body = call("POST", "/threads", {**self.ROOM, "agentIds": [f"a{i}" for i in range(7)]})
-        assert status == 400 and "at most 6" in body["detail"]
+    def test_one_agent_past_the_cap_is_refused(self, api_table):
+        cap = collab.MAX_ROOM_MEMBERS
+        status, body = call("POST", "/threads", {**self.ROOM, "agentIds": [f"a{i}" for i in range(cap + 1)]})
+        assert status == 400 and f"at most {cap}" in body["detail"]
+
+    def test_the_cap_stays_inside_what_the_shared_harness_has_been_seen_to_survive(self):
+        """Five members woken at once put five invocations on the one shared
+        harness and none completed (orchestrator.WAKE_STAGGER_SECONDS, commit
+        4b645de). Nothing has measured a room since; raising this needs that
+        probe first."""
+        assert collab.MAX_ROOM_MEMBERS <= 4
 
     def test_the_same_agent_twice_counts_once(self, api_table):
         status, _ = call("POST", "/threads", {**self.ROOM, "agentIds": ["a0"] * 9})

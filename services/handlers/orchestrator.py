@@ -31,13 +31,14 @@ from datetime import datetime, timezone
 from amazai import (agentcore, agents as A, approvals, artifacts, billing, collab, composio,
                     connectors, continuation, cost, govern, handoffs, keys as K, memory,
                     metrics, onboarding, org, policy, provisioning, redact, review, router,
-                    routines, runs, schedules, skills, standard_runtime, threads)
+                    routines, runs, schedules, session_lease, skills, standard_runtime,
+                    threads)
 from amazai.cost import RunCost
 from amazai.errors import ErrorClass, classify
 from amazai.evidence import EvidenceWriter
 from amazai.policy import Capability
 from amazai.push import Push
-from amazai.states import RunState
+from amazai.states import TERMINAL, RunState
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
 from amazai.stream import EventKind, StreamParser
 
@@ -350,6 +351,150 @@ def _rotate_if_abandoning_a_resume(store: Store, run: dict, event: dict) -> None
 
 
 def _drive(store: Store, run: dict, event: dict) -> dict:
+    # The session comes first, before anything that can settle the run: an
+    # invocation that is not this session's worker -- the sweeper resuming a
+    # turn that is still running, a Lambda retry -- must not be able to fail a
+    # run another is driving at one of the gates. It is also taken before the
+    # conversation is read: a run that waited must read what the run it waited
+    # for wrote, which is only certain once that one has let go.
+    lease, outcome = _take_session(store, run, event)
+    if lease is None:
+        return outcome
+    try:
+        if outcome is not None:
+            # It waited for the session. A queued approval resume's decision
+            # comes back with it -- it was started again with only its id --
+            # before any gate can need it. And its fifteen minutes start now:
+            # the sweeper reads the deadline, and time spent waiting its turn
+            # is not the run's to lose.
+            event = {**event, **(outcome.get("resume") or {})}
+            run = store.update(run["pk"], "META", {"deadlineAt": runs.deadline_iso()})
+        return _drive_holding(store, run, event, lease)
+    finally:
+        # Every exit that reaches the harness lets go explicitly, before it
+        # starts anything else that needs this session; this is for the ones
+        # that raise instead.
+        _let_go(store, lease)
+
+
+def _take_session(store: Store, run: dict, event: dict):
+    """This run's lease on its session, or the result to return instead of it.
+
+    Returns `(lease, waited)` -- `waited` being this run's place in line if it
+    had one, carrying the decision a queued approval resume set aside -- or
+    `(None, result)` when this invocation must not drive the run now.
+
+    Losing is not failing. The run that lost is one of three things:
+
+    * **This run, driven by another invocation** -- the sweeper resuming a turn
+      it thought had died, or Lambda retrying one that timed out. The run is
+      fine; the invocation stands down without touching it, exactly as a lost
+      race on the run's own state transition already does in `handler`.
+    * **A different run for the same Bot in the same thread** -- a message
+      sent while the Bot was still answering the last one, or a teammate's
+      priority wake. Failing it would turn an ordinary follow-up into an error
+      the operator has to retype, so it waits its turn instead: queued behind
+      the holder, which starts it when it lets go (`_wake_next_waiter`), and
+      reading the conversation then, the holder's answer included.
+    * **An approval resume** among those: it waits too, carrying the decision,
+      because an approved action that the operator already said yes to should
+      not be dropped for arriving while the Bot was busy.
+    """
+    ids = {"agent_id": run["agentId"], "thread_id": run["threadId"]}
+    try:
+        return _hold(store, run, ids)
+    except session_lease.SessionBusy as busy:
+        holder = busy.holder
+
+    if holder != run["runId"]:
+        session_lease.wait(store, run_id=run["runId"],
+                           resume=continuation.resume_fields(event), **ids)
+        # The holder may have let go between that refusal and the wait being
+        # written, and then found no one waiting. Asking once more after
+        # writing it closes that window: either this takes the lease, or
+        # whoever holds it now will see the wait when they let go.
+        try:
+            return _hold(store, run, ids)
+        except session_lease.SessionBusy as again:
+            holder = again.holder
+
+    duplicate = holder == run["runId"]
+    metrics.emit("SessionLeaseConflict", 1,
+                 dimensions={"Outcome": "duplicate" if duplicate else "waiting"},
+                 runId=run["runId"], agentId=run["agentId"], holder=holder)
+    if duplicate:
+        return None, {"ok": True, "runId": run["runId"],
+                      "skipped": "another invocation is already driving this run"}
+    return None, {"ok": True, "runId": run["runId"], "state": run["state"],
+                  "waitingFor": holder}
+
+
+def _hold(store: Store, run: dict, ids: dict):
+    """Take the lease, and this run's place in line with it if it had one.
+
+    Released again if the second half fails: `_drive` only lets go of a lease
+    it has been handed, and one stranded here would hold the session until it
+    expired.
+    """
+    lease = session_lease.acquire(store, run_id=run["runId"], **ids)
+    try:
+        return lease, session_lease.done_waiting(store, run_id=run["runId"], **ids)
+    except Exception:
+        lease.release()
+        raise
+
+
+def _let_go(store: Store, lease: session_lease.Lease) -> None:
+    """Release this worker's session and start the next run waiting for it.
+
+    Called as soon as this invocation is done with the harness, and before it
+    starts anything that needs the same session -- a retry (`_reinvoke`), the
+    next leg (`_continue_automatically`), a redirect (`_chain_redirect`).
+    Left to a `finally`, the release would come after those had started, and
+    each would find the session still held and queue behind a worker that was
+    already on its way out. Idempotent: `_drive`'s `finally` calls it again.
+    A worker whose lease had already moved on has nothing to hand over, so it
+    wakes no one: whoever holds the session now will.
+    """
+    if lease.released:
+        return
+    if lease.release():
+        _wake_next_waiter(store, lease)
+
+
+def _wake_next_waiter(store: Store, lease: session_lease.Lease) -> None:
+    """Start the oldest run queued behind this session, if there is one.
+
+    One, not all: the one started takes the lease, and wakes the next when it
+    lets go in turn. The row stays until that run holds the lease
+    (`session_lease.done_waiting`), so a wake that never arrives leaves it for
+    the sweeper to find rather than losing it. Best-effort for the same
+    reason: the sweeper resumes a queued run whose session has gone quiet.
+    """
+    try:
+        for row in session_lease.waiting(store, agent_id=lease.agent_id,
+                                         thread_id=lease.thread_id):
+            waiter = store.try_get(K.run_pk(row["runId"]), "META")
+            if (row["runId"] == lease.run_id or waiter is None
+                    or RunState(waiter["state"]) in TERMINAL):
+                session_lease.forget(store, row)
+                continue
+            _invoke_orchestrator_async(row["runId"], store.owner_id)
+            return
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
+def _drive_holding(store: Store, run: dict, event: dict,
+                   lease: session_lease.Lease) -> dict:
+    """`_drive` from the point it holds the session: the pre-model gates, then
+    everything from reading the conversation to settling the run."""
+    if RunState(run["state"]) is RunState.CANCELLING:
+        # Stopped before it had a turn -- in practice, while it waited for the
+        # session. Settled here without a model call, the way a paused run is.
+        _let_go(store, lease)
+        return _settle_paused_cancel(store, run)
+
     push = Push(store)
     agent = store.get(K.agent_pk(store.owner_id, run["agentId"]), "META")
 
@@ -632,8 +777,13 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                              "input": parsed.tool_input, "result": out,
                              "error": failed})
 
+    lost = False
     try:
         while True:
+            # Forced: nothing renews while the call below blocks before its
+            # first byte, so it starts with the whole lease in hand -- the most
+            # it can block is bounded inside that (agentcore.RUNTIME_*).
+            lease.keep(force=True)
             parser = StreamParser()
             answered.clear()
             round_from = len(buffer)
@@ -647,6 +797,10 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
             )
 
             for raw in stream:
+                # At most one write a minute (`session_lease.RENEW_SECONDS`). A
+                # lost lease raises out of the loop and ends the turn as a stream
+                # error: carrying on would make this the session's second worker.
+                lease.keep()
                 for parsed in parser.feed(raw):
                     seq += 1
 
@@ -704,7 +858,8 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                     # settle below, the same way a stream error abandons them.
                     if answered or carried:
                         _mark_dirty(store, run)
-                    return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at)
+                    return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn,
+                                             started_at, lease=lease)
 
             if not stream_error:
                 for parsed in parser.flush():
@@ -744,7 +899,8 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
                 # Reached only once `answered` is known non-empty (the guard
                 # just above already ruled out the empty case).
                 _mark_dirty(store, run)
-                return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn, started_at)
+                return _settle_cancelled(store, run, agent, push, ev, spend, buffer, turn,
+                                         started_at, lease=lease)
             rounds += 1
             out_of_rounds = rounds > MAX_TOOL_ROUNDS
             out_of_time = time.monotonic() - drive_started > ROUND_BUDGET_SECONDS
@@ -790,6 +946,7 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
     except Exception as exc:  # noqa: BLE001
         stream_error = f"{type(exc).__name__}: {exc}"
+        lost = isinstance(exc, session_lease.LeaseLost)
         # Whatever `answer()` had already computed when this was raised --
         # including a Lambda-level failure with no chance to reach any of the
         # checks above -- is abandoned along with everything else in this
@@ -800,6 +957,16 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
         # can be failing to discover before it has parsed anything of its own.
         dirty_exit = (bool(answered) or bool(carried)
                      or _leaves_session_owing(stream_error))
+
+    if lost and session_lease.holder(store, run["agentId"], run["threadId"]) == run["runId"]:
+        # Another invocation of this same run holds the session now: the
+        # sweeper resumed it after this one went quiet past its lease. The run
+        # is that invocation's to settle -- rotating, retrying or failing it
+        # from here would do it under that invocation's feet. What this one
+        # spent is still spent.
+        billing.spend(store, spend.total_usd, run_id=run["runId"], agent_id=agent["agentId"])
+        return {"ok": True, "runId": run["runId"],
+                "skipped": "lost the session to another invocation of this run"}
 
     # Wall clock, not a price. What a harness second costs is not established
     # for this account, so the seconds are recorded and rated at zero rather
@@ -831,6 +998,11 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
     if dirty_exit and not pending_approval:
         _mark_dirty(store, run)
         run = store.get(run["pk"], "META")
+
+    # Done with the harness for this invocation. Let go after the rotation, so
+    # the next worker never lands on a session this one left owing, and before
+    # the settle below, which can start the next worker itself.
+    _let_go(store, lease)
 
     # --- settle ------------------------------------------------------------
     if pending_approval:
@@ -893,7 +1065,8 @@ def _drive(store: Store, run: dict, event: dict) -> dict:
 
 
 def _settle_cancelled(store, run, agent, push, ev, cost, buffer, turn, started_at,
-                      *, persisted: bool = False) -> dict:
+                      *, persisted: bool = False,
+                      lease: session_lease.Lease | None = None) -> dict:
     """A stop, and -- if the operator sent something new while it ran -- the
     redirect that follows it.
 
@@ -905,6 +1078,11 @@ def _settle_cancelled(store, run, agent, push, ev, cost, buffer, turn, started_a
     if not persisted and (text or turn.steps or turn.cards):
         _persist_message(store, run, agent, text, cost, steps=turn.steps,
                          cards=turn.cards, started_at=started_at)
+    if lease is not None:
+        # After the reply is saved, so a run waiting for this session reads it;
+        # before the redirect starts, so the redirect does not queue behind a
+        # worker that is on its way out.
+        _let_go(store, lease)
     _finish(store, run, RunState.CANCELLED,
             "cancelled by you; the in-flight action was allowed to finish",
             push, ev=ev, cost=cost, text=text)

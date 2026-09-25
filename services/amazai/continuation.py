@@ -55,6 +55,20 @@ def is_approval_resume(event: dict) -> bool:
     return bool(event.get("resume") and event.get("resumeNote"))
 
 
+def resume_fields(event: dict) -> dict | None:
+    """What an approval resume carries -- the decision -- or None if it is not one.
+
+    For a resume that has to wait its turn on a busy session
+    (`orchestrator._take_session`): it is started again later with nothing but
+    its run id, so the decision is set aside and handed back then. Which
+    fields make up that decision is this module's to say, like everything else
+    about the shape of a resume.
+    """
+    if not is_approval_resume(event):
+        return None
+    return {k: event[k] for k in ("resume", "resumeNote", "resumeApproval") if k in event}
+
+
 #: How much of one tool's result the model is handed back. A tool can return a whole
 #: mailbox; the model needs enough to act on, not all of it.
 MAX_RESULT_CHARS = 40_000

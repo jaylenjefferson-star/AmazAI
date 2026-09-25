@@ -634,7 +634,10 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         agent_ids = body.get("agentIds", [])
         if not isinstance(agent_ids, list) or not all(isinstance(a, str) for a in agent_ids):
             raise A.ValidationError("agentIds must be a list of agent ids")
-        if len(set(agent_ids)) > collab.MAX_ROOM_MEMBERS:
+        # Stored as counted. A room saved with repeats is a room whose size
+        # every later check misreads -- and one that wakes a Bot once per copy.
+        agent_ids = list(dict.fromkeys(agent_ids))
+        if len(agent_ids) > collab.MAX_ROOM_MEMBERS:
             raise A.ValidationError(
                 f"a room holds at most {collab.MAX_ROOM_MEMBERS} agents")
         thread_id = new_id("th_")
@@ -1911,13 +1914,15 @@ def _patch_room(store: Store, thread_id: str, body: dict):
         ids = list(dict.fromkeys(ids))
         if not ids:
             raise A.ValidationError("a room needs at least one agent")
-        if len(ids) > collab.MAX_ROOM_MEMBERS:
+        before = thread.get("agentIds") or []
+        # A room made while the cap was higher keeps what it has -- it can lose
+        # a member or swap one for another -- but it cannot grow past the cap.
+        if len(ids) > max(collab.MAX_ROOM_MEMBERS, len(set(before))):
             raise A.ValidationError(f"a room holds at most {collab.MAX_ROOM_MEMBERS} agents")
         for agent_id in ids:
             row = store.try_get(K.agent_pk(store.owner_id, agent_id), "META")
             if not row or row.get("status", row.get("state")) not in A.SEATED:
                 raise A.ValidationError(f"no such agent {agent_id!r}")
-        before = thread.get("agentIds") or []
         added = [a for a in ids if a not in before]
         removed = [a for a in before if a not in ids]
         changes["agentIds"] = ids
