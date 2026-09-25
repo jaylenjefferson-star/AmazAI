@@ -8,7 +8,7 @@ import Problem from './Problem';
 import Sheet from './Sheet';
 
 // Mirrors `collab.MAX_ROOM_MEMBERS`; the API is the authority.
-const MAX_MEMBERS = 6;
+const MAX_MEMBERS = 4;
 
 /**
  * Who is in a room, and who can be added.

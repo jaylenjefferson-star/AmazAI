@@ -8,7 +8,7 @@ import Sheet, { SheetRow } from './Sheet';
 import ToolsSheet from './ToolsSheet';
 
 // Mirrors `collab.MAX_ROOM_MEMBERS`; the API is the authority.
-const MAX_ROOM = 6;
+const MAX_ROOM = 4;
 
 function Picker({ agents, picked, setPicked, max = MAX_ROOM, single = false }) {
   return (
@@ -81,7 +81,7 @@ export default function CreateMenu({ agents, onClose, onCreated }) {
             <input data-autofocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ship the console" />
           </label>
           <div>
-            <span className="cm-label">Who is in it? Up to six.</span>
+            <span className="cm-label">Who is in it? Up to four.</span>
             <Picker agents={agents} picked={picked} setPicked={setPicked} />
           </div>
           {problem && <Problem message={problem.message} error={problem.error} inline />}

@@ -98,8 +98,9 @@ the starter message. It does not touch approval semantics.
 
 ## Limits (from [16](16-grokbot-ux-alignment.md) and the memos)
 
-Pins are ≤ 12 (`settings.MAX_PINNED`), rooms ≤ 6 agents
-(`collab.MAX_ROOM_MEMBERS`). Agents per org stay at 25
+Pins are ≤ 12 (`settings.MAX_PINNED`), rooms ≤ 4 agents
+(`collab.MAX_ROOM_MEMBERS`; 6 until a five-member wake was seen to overwhelm the
+shared harness -- see the constant's comment). Agents per org stay at 25
 (`agents.DEFAULT_MAX_AGENTS`), not the memos' 50.
 
 ## Deliberately not done

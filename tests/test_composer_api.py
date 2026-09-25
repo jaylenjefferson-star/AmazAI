@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import handlers.api as api
-from amazai import approvals, dispatch, keys as K, routines, runs
+from amazai import approvals, collab, dispatch, keys as K, routines, runs
 from amazai.states import RunState
 from amazai.store import Store
 
@@ -291,11 +291,28 @@ class TestRoomMembers:
         lines = [m["text"] for m in messages(room) if m.get("kind") == "event"]
         assert sorted(lines) == ["Ops left", "Res joined"]
 
-    def test_the_cap_of_six_applies_to_adding_too(self, api_table):
-        ids = [make_agent(f"Bot{c}") for c in "ABCDEFG"]
-        room = make_room(*ids[:6])
+    def test_the_cap_applies_to_adding_too(self, api_table):
+        cap = collab.MAX_ROOM_MEMBERS
+        ids = [make_agent(f"Bot{c}") for c in "ABCDEFG"[:cap + 1]]
+        room = make_room(*ids[:cap])
         status, body = call("PATCH", f"/threads/{room}", {"agentIds": ids})
-        assert status == 400 and "at most 6" in body["detail"]
+        assert status == 400 and f"at most {cap}" in body["detail"]
+
+    def test_a_room_made_under_a_higher_cap_can_shrink_or_swap_but_not_grow(self, api_table):
+        """Lowering the cap must not lock anyone out of a room they already
+        have: a member can still leave, or be swapped for another."""
+        cap = collab.MAX_ROOM_MEMBERS
+        ids = [make_agent(f"Bot{c}") for c in "ABCDEFGH"[:cap + 3]]
+        room = make_room(*ids[:cap])
+        api.Store("owner-a").update(K.thread_pk("owner-a", room), "META",
+                                    {"agentIds": ids[:cap + 2]})       # made when the cap was higher
+
+        status, _ = call("PATCH", f"/threads/{room}", {"agentIds": ids[:cap + 1]})
+        assert status == 200, "a member could not leave an oversized room"
+        status, _ = call("PATCH", f"/threads/{room}", {"agentIds": ids[1:cap + 2]})
+        assert status == 200, "a member could not be swapped in an oversized room"
+        status, body = call("PATCH", f"/threads/{room}", {"agentIds": ids[:cap + 3]})
+        assert status == 400 and f"at most {cap}" in body["detail"]
 
     def test_a_room_cannot_be_emptied(self, api_table):
         eng = make_agent("Eng")

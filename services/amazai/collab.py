@@ -35,7 +35,18 @@ from amazai.store import Store, new_id, now_iso, ordered_suffix
 #: docs/architecture/09-multi-agent.md -- one shared notion of "too deep".
 #: Most agents one room holds. Past this a room stops being a conversation and
 #: becomes a broadcast, and every participant's turn is a run someone pays for.
-MAX_ROOM_MEMBERS = 6
+#:
+#: Set to 4, not higher, until a live concurrency probe (see
+#: WAKE_STAGGER_SECONDS in orchestrator.py) confirms the account harness can
+#: sustain more simultaneous invocations. Raising this without that probe
+#: repeats a failure already observed: a five-member room wake, before the
+#: stagger existed, put five invocations on the shared harness at once and
+#: none of them completed -- four read timeouts and an event-stream error
+#: (commit 4b645de). The stagger spreads when each member *starts*, not how
+#: many are running, and nothing has measured any room size since, four
+#: included. Rooms made when this was 6 keep their members (`api._patch_room`);
+#: they cannot grow.
+MAX_ROOM_MEMBERS = 4
 
 #: A direct conversation between two Bots -- the third kind of context, opened on
 #: demand by `direct_context`. A Bot that shared no task or room with a teammate

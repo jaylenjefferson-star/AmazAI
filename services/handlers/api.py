@@ -1911,13 +1911,15 @@ def _patch_room(store: Store, thread_id: str, body: dict):
         ids = list(dict.fromkeys(ids))
         if not ids:
             raise A.ValidationError("a room needs at least one agent")
-        if len(ids) > collab.MAX_ROOM_MEMBERS:
+        before = thread.get("agentIds") or []
+        # A room made while the cap was higher keeps what it has -- it can lose
+        # a member or swap one for another -- but it cannot grow past the cap.
+        if len(ids) > max(collab.MAX_ROOM_MEMBERS, len(before)):
             raise A.ValidationError(f"a room holds at most {collab.MAX_ROOM_MEMBERS} agents")
         for agent_id in ids:
             row = store.try_get(K.agent_pk(store.owner_id, agent_id), "META")
             if not row or row.get("status", row.get("state")) not in A.SEATED:
                 raise A.ValidationError(f"no such agent {agent_id!r}")
-        before = thread.get("agentIds") or []
         added = [a for a in ids if a not in before]
         removed = [a for a in before if a not in ids]
         changes["agentIds"] = ids
