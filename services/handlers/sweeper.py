@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 import boto3
 
-from amazai import approvals, handoffs, keys as K, metrics, runs
+from amazai import approvals, handoffs, keys as K, metrics, runs, session_lease
 from amazai.evidence import EvidenceWriter
 from amazai.push import Push
 from amazai.states import PAUSED, SWEEPABLE, RunState
@@ -119,6 +119,17 @@ def _sweep_run(store: Store, push: Push, run: dict, state: RunState,
         return
 
     if not runs.heartbeat_stale(run, minutes=STALE_MINUTES, now=now):
+        return
+
+    # A heartbeat moves only on a state transition, so a turn that has been
+    # streaming for ten minutes looks exactly like a dead one -- and resuming
+    # it put a second worker on its session, while sealing it failed work that
+    # was still going. The session lease is what a live worker renews: while
+    # anyone holds it this run is either being driven or queued behind the one
+    # that is, which will start it when it lets go. A worker that died stops
+    # renewing, and within `session_lease.LEASE_SECONDS` this reads as it did.
+    if run.get("agentId") and run.get("threadId") and session_lease.holder(
+            store, run["agentId"], run["threadId"], now=now.timestamp()):
         return
 
     pending = run.get("pending")

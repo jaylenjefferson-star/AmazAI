@@ -359,6 +359,25 @@ def session_epoch_sk(thread_id: str) -> str:
     return f"SESSEPOCH#{thread_id}"
 
 
+def session_lease_sk(thread_id: str) -> str:
+    """Who is driving one (agent, thread) pair's session right now.
+
+    Beside the epoch, and for the same reason: it is a fact about the pair,
+    not about any one run. See `amazai.session_lease`.
+    """
+    return f"SESSLEASE#{thread_id}"
+
+
+def session_waiter_prefix(thread_id: str) -> str:
+    return f"SESSWAIT#{thread_id}#"
+
+
+def session_waiter_sk(thread_id: str, run_id: str) -> str:
+    """A run waiting its turn on that session. `run_` ids are time-ordered
+    (`store.new_id`), so a prefix query returns waiters oldest first."""
+    return f"{session_waiter_prefix(thread_id)}{run_id}"
+
+
 def schedule_idempotency_key(routine_id: str, scheduled_time: str) -> str:
     """EventBridge Scheduler is at-least-once; this makes the second fire a no-op."""
     return f"sched:{routine_id}:{scheduled_time}"
