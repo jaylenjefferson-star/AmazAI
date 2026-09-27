@@ -647,6 +647,24 @@ export const demoApi = {
   decide: async () => (await wait(200), {}),
   approvals: async () => (await wait(80), { approvals: [APPROVAL] }),
 
+  // The durable-state presence snapshot the shell seeds from on load. A small
+  // static array in the same shape services/amazai/presence.py derives, filtered
+  // to the Bots this demo actually keeps so `offer`/`fresh` modes stay coherent.
+  presence: async () => {
+    await wait(80);
+    const here = new Set(liveBots().map((a) => a.agentId));
+    const snapshot = [
+      { agentId: 'eng', name: 'Engineering', state: 'thinking', action: 'Planning',
+        runId: 'run-demo-eng', threadId: 't-deploy', since: iso(-5 * 60_000) },
+      { agentId: 'ops', name: 'Cloud Operations', state: 'needs_approval',
+        action: 'Waiting for your approval', runId: 'run-9a22', threadId: 't-alarm',
+        since: iso(-90_000) },
+      { agentId: 'cos', name: 'Chief', state: 'waiting', action: 'Waiting on 1 teammate',
+        runId: null, threadId: 't-brief', since: iso(-3 * 60_000) },
+    ];
+    return { presence: snapshot.filter((p) => here.has(p.agentId)) };
+  },
+
   // Routines and artifacts, kept to the shape `amazai/routines.py` and the
   // `/artifacts` route actually return. Both screens went un-reviewable the
   // day they were wired to real routes, because this file had no matching

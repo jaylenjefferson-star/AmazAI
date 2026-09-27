@@ -81,6 +81,12 @@ const live = {
   approvals: (status = 'pending') =>
     call('GET', `/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`),
 
+  // What each Companion is doing right now, derived from durable RUN#/TASK#
+  // rows rather than the live socket. Read once on load to seed the presence
+  // store so a reload shows the true state instead of an empty cache; the
+  // socket then keeps it live. A plain read -- never a write path.
+  presence: () => call('GET', '/presence'),
+
   // Run now: the same fire a schedule uses. The key makes a double-click one run.
   runRoutine: (id, key) => call('POST', `/routines/${id}/run`, {},
     key ? { 'idempotency-key': key } : undefined),

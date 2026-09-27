@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { api } from '../api';
-import { applyEvent, resetPresence, setConnection } from '../presence';
+import { applyEvent, resetPresence, seed, setConnection } from '../presence';
 import { connect } from '../ws';
 
 /**
@@ -22,13 +22,18 @@ export default function PresenceFeed() {
     const threads = new Map();   // threadId -> { agentIds, kind }
     const names = new Map();     // agentId -> display name
 
-    Promise.allSettled([api.threads(), api.agents()]).then(([t, a]) => {
+    Promise.allSettled([api.threads(), api.agents(), api.presence()]).then(([t, a, p]) => {
       if (t.status === 'fulfilled') {
         for (const th of t.value?.threads || []) threads.set(th.threadId, th);
       }
       if (a.status === 'fulfilled') {
         for (const ag of a.value?.agents || []) names.set(ag.agentId, ag.name);
       }
+      // Seed the store from durable state so a reload reflects what the org is
+      // doing rather than an empty cache; the socket below then keeps it live.
+      // Quiet on failure, like the socket itself -- a missed seed is a stale
+      // animation until the next event, never a wrong answer.
+      if (p.status === 'fulfilled') seed(p.value);
     });
 
     const ctx = {

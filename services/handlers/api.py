@@ -22,7 +22,7 @@ from amazai import (agentcore, agents as A, approvals, artifacts as AR, billing,
                     composio, connectors as C, handoffs, identity, keys as K, memory, models,
                     onboarding, routines as R, runs, schedules, secrets, settings as S,
                     skills, standard_runtime, stripe_client, threads)
-from amazai import dispatch, directory as D, govern, org, provisioning
+from amazai import dispatch, directory as D, govern, org, presence, provisioning
 from amazai.policy import Capability
 from amazai.states import PAUSED, RunState, TERMINAL
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
@@ -727,6 +727,15 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         matched = [t for t in rows if t.get("status") == wanted] if wanted else rows
         matched.sort(key=lambda t: t.get("createdAt") or "", reverse=True)
         return _resp(200, {"tasks": matched})
+
+    # --- presence (durable-state derivation) ---------------------------
+    # What each Companion is doing right now, read back from the RUN#/TASK#
+    # rows that already exist rather than from the live socket. This is what
+    # the console seeds its presence store from on load so a reload shows the
+    # true state instead of an empty cache; `web/src/presence.js` then keeps it
+    # live. A plain read -- no writes, no model calls -- so it is safe to poll.
+    if path == "/presence" and method == "GET":
+        return _resp(200, {"presence": presence.derive(store)})
 
     # Read-only. The parent/coordinator's own visible "still working"
     # state while fan-out children are outstanding: `pendingChildren` is the
