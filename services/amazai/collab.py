@@ -27,9 +27,9 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from amazai import keys as K
+from amazai import agents as A, keys as K, runs
 from amazai.states import TERMINAL
-from amazai.store import Store, new_id, now_iso, ordered_suffix
+from amazai.store import Conflict, Store, new_id, now_iso, ordered_suffix
 
 #: Mirrors the handoff loop-prevention depth in
 #: docs/architecture/09-multi-agent.md -- one shared notion of "too deep".
@@ -398,8 +398,9 @@ def send(store: Store, *, sender_agent_id: str, recipient_agent_id: str, args: d
 
     stamp = now_iso()
     message_id = new_id("msg_")
+    message_sk = K.message_sk(stamp, ordered_suffix())
     row = {
-        "pk": _context_pk(store.owner_id, context), "sk": K.message_sk(stamp, ordered_suffix()),
+        "pk": _context_pk(store.owner_id, context), "sk": message_sk,
         "entity": "AgentMessage", "messageId": message_id,
         "gsi1pk": "MESSAGES", "gsi1sk": f"{stamp}#{message_id}",
         "senderAgentId": sender_agent_id, "recipientAgentId": recipient_agent_id,
@@ -417,6 +418,27 @@ def send(store: Store, *, sender_agent_id: str, recipient_agent_id: str, args: d
         "at": stamp,
     }
     store.put(row)
+
+    # A message that was NOT granted a priority wake would otherwise strand:
+    # the row is durable, but nothing ever wakes its recipient, so non-urgent
+    # Companion-to-Companion work sits forever. Drop a lightweight marker the
+    # sweeper can find and drain. The priority path deliberately writes none --
+    # `orchestrator._message_agent` wakes the recipient itself, and a marker
+    # there would race that immediate wake into a duplicate run.
+    if not priority_granted:
+        store.put({
+            "pk": row["pk"], "sk": K.pending_wake_sk(message_id),
+            "entity": "PendingWake", "status": "pending",
+            "gsi1pk": K.PENDING_WAKES_GSI1PK,
+            "gsi1sk": K.pending_wake_gsi1_sk(stamp, message_id),
+            "messageId": message_id, "messageSk": message_sk,
+            "threadId": context.thread_id,
+            "recipientAgentId": recipient_agent_id, "senderAgentId": sender_agent_id,
+            "taskId": row["taskId"], "collaborationContextId": row["collaborationContextId"],
+            "contextKind": context.kind, "traceId": trace_id, "text": text,
+            "createdAt": stamp,
+        })
+
     return {"message": row, "context": context, "priority_granted": priority_granted}
 
 
@@ -469,3 +491,69 @@ def may_wake_now(store: Store, recipient_agent: dict, limits: MessagingLimits) -
         return False, f"recipient at its concurrency ceiling ({max_concurrent})"
 
     return True, "ok"
+
+
+def drain_deferred_wakes(store: Store, *, limit: int = 25) -> list[dict]:
+    """Wake the recipients of deferred (`priority: false`) messages that the
+    immediate path never woke -- the other half of the marker `send` writes.
+
+    A deferred `AgentMessage` is durable but inert: `orchestrator._message_agent`
+    only spawns a recipient run on the priority path, so without this a
+    non-urgent Companion-to-Companion message sits forever. Runs every five
+    minutes off the recovery sweep (`handlers.sweeper`) rather than on its own
+    engine.
+
+    Each marker is claimed with a conditional `pending -> draining` update, so
+    two overlapping sweeps cannot both wake one message. A claimed marker is
+    then held to exactly the concurrency budget the priority path is
+    (`may_wake_now`): if the recipient has capacity a run is created on the
+    message's own thread with the same trigger shape `_message_agent` uses and
+    the marker moves to `delivered`; if the recipient is at its ceiling the
+    marker is released back to `pending` for a later sweep; if the recipient no
+    longer exists or is not runnable the marker is `dropped`.
+
+    Returns the markers that produced a run (each carrying the `runId` created),
+    so the caller can fire the async orchestrator invoke the same way it wakes a
+    recovered run -- the boto3 seam stays in the handler, not here.
+    """
+    limits = limits_for_org(store)
+    markers = store.query_index(
+        "gsi1", "gsi1pk", K.PENDING_WAKES_GSI1PK, limit=limit,
+        predicate=lambda r: r.get("entity") == "PendingWake" and r.get("status") == "pending")
+
+    woken: list[dict] = []
+    for marker in markers:
+        try:
+            # The claim: only one sweep can move this marker off `pending`, so
+            # two overlapping sweeps cannot both wake the same message.
+            store.update(marker["pk"], marker["sk"], {"status": "draining"},
+                         expect={"status": "pending"})
+        except Conflict:
+            continue  # another sweep claimed it first
+
+        recipient = store.try_get(
+            K.agent_pk(store.owner_id, marker["recipientAgentId"]), "META")
+        if recipient is None or recipient.get("status") not in A.RUNNABLE:
+            # Nothing left to wake -- do not leave the marker to be retried forever.
+            store.update(marker["pk"], marker["sk"], {"status": "dropped"})
+            continue
+
+        allowed, _reason = may_wake_now(store, recipient, limits)
+        if not allowed:
+            # At its ceiling: release the claim so a later sweep retries once
+            # capacity frees, rather than dropping the work.
+            store.update(marker["pk"], marker["sk"], {"status": "pending"})
+            continue
+
+        new_run = runs.create(
+            store, agent_id=marker["recipientAgentId"], thread_id=marker["threadId"],
+            goal=marker.get("text", ""),
+            trigger={"type": "agent", "fromAgentId": marker.get("senderAgentId"),
+                     "taskId": marker.get("taskId"),
+                     "collaborationContextId": marker.get("collaborationContextId"),
+                     "traceId": marker.get("traceId")})
+        store.update(marker["pk"], marker["sk"],
+                     {"status": "delivered", "runId": new_run["runId"]})
+        woken.append({**marker, "runId": new_run["runId"]})
+
+    return woken

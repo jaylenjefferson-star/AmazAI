@@ -238,6 +238,25 @@ def handoff_child_thread_id(handoff_id: str) -> str:
     return f"th-child-{handoff_id}"
 
 
+def pending_wake_sk(message_id: str) -> str:
+    """A deferred-message wake marker, kept under the recipient's own thread
+    partition alongside the `AgentMessage` it stands for. Keyed by the
+    message id (already `new_id()`-unique) so `collab.send` writing one twice
+    for the same message is idempotent, and so the sweeper's conditional
+    claim (`pending` -> `draining` -> `delivered`) targets exactly one row."""
+    return f"PWAKE#{message_id}"
+
+
+PENDING_WAKES_GSI1PK = "PENDING_WAKES"
+
+
+def pending_wake_gsi1_sk(created_at: str, message_id: str) -> str:
+    """Sort key for the `PENDING_WAKES` gsi1 listing -- timestamp first so the
+    sweeper drains oldest-deferred-first, message id appended only to keep two
+    markers written in the same second distinct."""
+    return f"{created_at}#{message_id}"
+
+
 def tasks_gsi1_sk(status: str, created_at: str) -> str:
     """Sort key for the `TASKS` gsi1 listing -- grouped by status first so a
     "what's still open" query is a prefix range, not a full-table filter."""
