@@ -130,9 +130,12 @@ class TestAcceptRaisesAtTheCeiling:
 
 
 class TestContinuationCarriesDepthForward:
-    def test_the_synthesis_continuation_keeps_the_batch_depth(self, agents):
-        """A coordinator that fans out again from the fan-in continuation must
-        still be counted from where the batch left off, not reset to zero."""
+    def test_the_synthesis_continuation_resumes_at_the_coordinators_level(self, agents):
+        """The fan-in continuation is the same coordinator resuming, so it must
+        resume at the *coordinator's* level -- not the children's -- so a fresh
+        handoff from synthesis lands at the same depth the first batch did,
+        rather than one deeper. The bound is a tree depth, not a count of how
+        many sequential batches a coordinator has run."""
         parent = _run_at_depth(agents, 2)
         h = orch._record_handoff(agents, parent, {"to": "ops", "goal": "task one"})
         accepted = handoffs.accept(agents, parent, h, decided_by="system:auto-accept")
@@ -141,6 +144,31 @@ class TestContinuationCarriesDepthForward:
         continuation = handoffs.notify_coordinator_if_child(
             agents, accepted["child"], RunState.COMPLETED.value, "done")
         assert continuation is not None
-        # The child sat at depth 3; the continuation resumes at that level so a
-        # fresh handoff from synthesis is a genuinely deeper level 4.
-        assert continuation["trigger"]["delegationDepth"] == 3
+        # The coordinator was at depth 2 and its children at 3; the continuation
+        # resumes at 2, so a fresh handoff from it lands its child back at 3 --
+        # the same level the first batch was, not one deeper.
+        assert continuation["trigger"]["delegationDepth"] == 2
+
+    def test_sequential_fan_in_cycles_do_not_climb_a_level_per_cycle(self, agents):
+        """Two fan-out/join cycles from one coordinator: the tree never nests
+        deeper, so each cycle's children must land at the *same* depth. The old
+        code carried the children's level onto the continuation, so each cycle
+        climbed one level and an iterating coordinator hit the ceiling after a
+        few iterations even though no chain got any deeper -- this guards that
+        regression."""
+        coordinator = _run_at_depth(agents, 1)
+
+        # Cycle one: fan out, the child lands at depth 2, then join.
+        h1 = orch._record_handoff(agents, coordinator, {"to": "ops", "goal": "cycle one"})
+        child1 = handoffs.accept(agents, coordinator, h1, decided_by="system:auto-accept")["child"]
+        assert child1["trigger"]["delegationDepth"] == 2
+        continuation = handoffs.notify_coordinator_if_child(
+            agents, child1, RunState.COMPLETED.value, "done one")
+        assert continuation is not None
+        assert continuation["trigger"]["delegationDepth"] == 1  # back at the coordinator's level
+
+        # Cycle two: the continuation fans out again. Its child must land at the
+        # SAME depth (2) the first cycle's child did, not one deeper.
+        h2 = orch._record_handoff(agents, continuation, {"to": "ops", "goal": "cycle two"})
+        child2 = handoffs.accept(agents, continuation, h2, decided_by="system:auto-accept")["child"]
+        assert child2["trigger"]["delegationDepth"] == 2

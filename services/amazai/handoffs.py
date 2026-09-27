@@ -433,18 +433,25 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
            f"({done} succeeded). Here's what came back:\n{lines}\n\n"
            "Continue the task: hand off the next step, or post the result.")
 
-    # Carry the fan-out's own depth onto the synthesis run so a coordinator
-    # that fans out *again* from the continuation is still counted from where
-    # this batch left off, not reset to zero. Kept at the children's level
-    # (not children - 1): the continuation is the same coordinator resuming,
-    # and a fresh handoff from it is a genuinely deeper level.
+    # Carry the *coordinator's own* level onto the synthesis run, not the
+    # children's. The children sit one deeper than the coordinator
+    # (`batch_depth = coordinator_depth + 1`); the continuation is the same
+    # coordinator resuming on the same thread, so it must resume at the
+    # coordinator's level (`batch_depth - 1`). That keeps the bound a TREE
+    # depth: a fresh handoff from the continuation lands at the same level the
+    # original fan-out did, rather than one deeper every fan-out/join cycle --
+    # otherwise an iterating coordinator climbs a level per cycle and hits
+    # MAX_DELEGATION_DEPTH after a handful of iterations even though no chain
+    # is getting any deeper. `max(0, ...)` guards a batch whose children
+    # somehow carried no depth.
     batch_depth = max((int(c.get("delegationDepth") or 0) for c in children), default=0)
+    coordinator_depth = max(0, batch_depth - 1)
     continuation = runs.create(
         store, agent_id=task["coordinatorAgentId"], thread_id=task["threadId"], goal=goal,
         trigger={"type": "child_completion", "taskId": task_id,
                  "childRunId": run["runId"], "childAgentId": run["agentId"],
                  "outcome": outcome, "childCount": len(children), "doneCount": done,
-                 "delegationDepth": batch_depth})
+                 "delegationDepth": coordinator_depth})
 
     store.update(K.task_pk(task_id), "META", {
         "coordinatorRunId": continuation["runId"],

@@ -13,7 +13,7 @@ budget the priority path respects. See `amazai/collab.py`,
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -165,4 +165,49 @@ class TestConcurrencyCeiling:
         result = sweeper._sweep_owner(agents, Push(agents), datetime.now(timezone.utc))
         assert result["deferredWakesDrained"] == 0
         assert _pending_wakes(agents)[0]["status"] == "dropped"
+        assert _recipient_runs(agents) == []
+
+
+class TestStrandedDrainingReclaim:
+    """A marker claimed `pending -> draining` whose sweep then died before the
+    terminal write must not strand in `draining` forever -- the exact "message
+    sits forever" bug the feature exists to prevent, now reachable through a
+    mid-drain fault. A later sweep reclaims it once its claim is stale, while a
+    *fresh* `draining` claim (an in-flight sibling sweep) is left alone."""
+
+    def _strand(self, store, room, *, claimed_at: str):
+        """A marker left in `draining`, as if a sweep claimed it and died before
+        settling it. `claimed_at` sets how long ago that claim happened."""
+        _send_deferred(store, room)
+        marker = _pending_wakes(store)[0]
+        store.update(marker["pk"], marker["sk"],
+                     {"status": "draining", "claimedAt": claimed_at})
+        return marker
+
+    def test_a_stale_draining_marker_is_reclaimed_and_delivered(
+            self, agents, room, monkeypatch):
+        _stub_lambda(monkeypatch)
+        stale = (datetime.now(timezone.utc)
+                 - timedelta(minutes=collab.DRAINING_STALE_MINUTES + 1)).isoformat(
+                     timespec="seconds").replace("+00:00", "Z")
+        self._strand(agents, room, claimed_at=stale)
+
+        result = sweeper._sweep_owner(agents, Push(agents), datetime.now(timezone.utc))
+        assert result["deferredWakesDrained"] == 1
+        marker = _pending_wakes(agents)[0]
+        assert marker["status"] == "delivered"
+        assert len(_recipient_runs(agents)) == 1
+
+    def test_a_fresh_draining_marker_is_not_stolen(self, agents, room, monkeypatch):
+        """A recently-claimed `draining` marker is presumed to be an in-flight
+        sibling sweep's -- reclaiming it would double-wake the recipient."""
+        _stub_lambda(monkeypatch)
+        fresh = datetime.now(timezone.utc).isoformat(
+            timespec="seconds").replace("+00:00", "Z")
+        self._strand(agents, room, claimed_at=fresh)
+
+        result = sweeper._sweep_owner(agents, Push(agents), datetime.now(timezone.utc))
+        assert result["deferredWakesDrained"] == 0
+        # Untouched: still draining, no run spawned behind it.
+        assert _pending_wakes(agents)[0]["status"] == "draining"
         assert _recipient_runs(agents) == []

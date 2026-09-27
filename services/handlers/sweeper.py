@@ -111,7 +111,7 @@ def _sweep_owner(store: Store, push: Push, now: datetime) -> dict:
     # respects, and hands back the ones that produced a run so we fire the
     # async invoke here -- the same seam `_resume` uses.
     try:
-        for marker in collab.drain_deferred_wakes(store):
+        for marker in collab.drain_deferred_wakes(store, now=now):
             _resume_drained(store, marker["runId"])
             result["deferredWakesDrained"] += 1
     except Exception:  # noqa: BLE001

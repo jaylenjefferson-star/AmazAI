@@ -182,6 +182,29 @@ describe('seeding from durable state on load', () => {
     act(() => { seed(undefined); seed({}); seed({ presence: [] }); });
     expect(result.current).toEqual({});
   });
+
+  it('does not overwrite an agent a live event already touched', () => {
+    // The socket opens synchronously; the /presence snapshot resolves later, so
+    // a live run.state can land first. That live state is fresher than the
+    // snapshot racing it, so the seed must not clobber it.
+    const { result } = renderHook(() => usePresence());
+
+    // A live event gets there first.
+    act(() => applyEvent(
+      { type: 'run.state', state: 'EXECUTING', threadId: 'dm-eng', runId: 'run-live' }, ctx));
+    expect(result.current.eng).toMatchObject({ state: 'thinking', runId: 'run-live' });
+
+    // The older snapshot resolves and tries to seed a stale state for the same
+    // agent (and a fresh agent the socket has not touched).
+    act(() => seed({ presence: [
+      { agentId: 'eng', state: 'done', action: 'Shipped', runId: 'run-old' },
+      { agentId: 'ops', state: 'thinking', action: 'Planning', runId: 'run-2' },
+    ] }));
+
+    // eng keeps its live state; ops (untouched by any event) is filled in.
+    expect(result.current.eng).toMatchObject({ state: 'thinking', runId: 'run-live' });
+    expect(result.current.ops).toMatchObject({ state: 'thinking', action: 'Planning' });
+  });
 });
 
 describe('whether the console is hearing anything', () => {

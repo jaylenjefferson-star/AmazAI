@@ -493,7 +493,21 @@ def may_wake_now(store: Store, recipient_agent: dict, limits: MessagingLimits) -
     return True, "ok"
 
 
-def drain_deferred_wakes(store: Store, *, limit: int = 25) -> list[dict]:
+#: How long a marker may sit in `draining` before a later sweep is allowed to
+#: reclaim it back to `pending`. A marker moves `pending -> draining` for only
+#: as long as one sweep's own drain of it takes (a `runs.create` and an
+#: `update`), so anything still `draining` a sweep interval later is not an
+#: in-flight sibling sweep's claim -- it is a claim whose sweep died mid-drain
+#: (a `runs.create` that threw, a process killed between the claim and the
+#: `delivered`/`pending`/`dropped` write). Mirrors `sweeper.STALE_MINUTES` for
+#: run recovery: kept here as its own constant so `collab` does not import the
+#: handler layer, and generous enough (the sweep runs every five minutes) that
+#: a healthy overlapping sweep's fresh `draining` claim is never stolen.
+DRAINING_STALE_MINUTES = 10
+
+
+def drain_deferred_wakes(store: Store, *, limit: int = 25,
+                         now: datetime | None = None) -> list[dict]:
     """Wake the recipients of deferred (`priority: false`) messages that the
     immediate path never woke -- the other half of the marker `send` writes.
 
@@ -512,24 +526,64 @@ def drain_deferred_wakes(store: Store, *, limit: int = 25) -> list[dict]:
     marker is released back to `pending` for a later sweep; if the recipient no
     longer exists or is not runnable the marker is `dropped`.
 
+    A marker that reaches `draining` and then never settles -- its sweep's
+    `runs.create` threw, or the process died between the claim and the terminal
+    write -- would otherwise strand there forever, reintroducing the exact
+    "message sits forever" bug this feature exists to prevent, now reachable
+    through a mid-drain fault rather than the original no-marker path. So a
+    marker whose claim (`claimedAt`) is older than `DRAINING_STALE_MINUTES` is
+    treated as reclaimable and swept alongside the `pending` ones. The reclaim
+    itself is a conditional `draining -> pending` update keyed on the stale
+    `claimedAt`, so two sweeps that both spot the same stale marker cannot both
+    grab it -- the loser's reclaim conflicts and is skipped, exactly as the
+    fresh `pending` claim already handles that race. This mirrors the
+    run-recovery staleness the sweeper already applies to dead workers.
+
     Returns the markers that produced a run (each carrying the `runId` created),
     so the caller can fire the async orchestrator invoke the same way it wakes a
     recovered run -- the boto3 seam stays in the handler, not here.
     """
+    now = now or datetime.now(timezone.utc)
     limits = limits_for_org(store)
+    stale_before = (now - timedelta(minutes=DRAINING_STALE_MINUTES)).isoformat(
+        timespec="seconds").replace("+00:00", "Z")
+
+    def _eligible(r: dict) -> bool:
+        if r.get("entity") != "PendingWake":
+            return False
+        if r.get("status") == "pending":
+            return True
+        # A `draining` marker is only eligible once its claim is stale enough
+        # that no live sibling sweep could still be working it -- a fresh claim
+        # (an in-flight sweep, `claimedAt` recent) is left alone.
+        return (r.get("status") == "draining"
+                and bool(r.get("claimedAt")) and r["claimedAt"] < stale_before)
+
     markers = store.query_index(
-        "gsi1", "gsi1pk", K.PENDING_WAKES_GSI1PK, limit=limit,
-        predicate=lambda r: r.get("entity") == "PendingWake" and r.get("status") == "pending")
+        "gsi1", "gsi1pk", K.PENDING_WAKES_GSI1PK, limit=limit, predicate=_eligible)
 
     woken: list[dict] = []
     for marker in markers:
         try:
+            if marker.get("status") == "draining":
+                # Reclaim a strand: the conditional `claimedAt` keeps two sweeps
+                # that both saw this stale marker from both grabbing it, and
+                # keeps us from stealing a claim a sibling sweep refreshed in
+                # the meantime. Winner moves it back to `pending` and re-claims
+                # below.
+                store.update(marker["pk"], marker["sk"], {"status": "pending"},
+                             expect={"status": "draining",
+                                     "claimedAt": marker.get("claimedAt")})
             # The claim: only one sweep can move this marker off `pending`, so
-            # two overlapping sweeps cannot both wake the same message.
-            store.update(marker["pk"], marker["sk"], {"status": "draining"},
+            # two overlapping sweeps cannot both wake the same message. A
+            # `claimedAt` is stamped so a claim this sweep never gets to settle
+            # (a mid-drain fault) becomes reclaimable by a later sweep once it
+            # is `DRAINING_STALE_MINUTES` old.
+            store.update(marker["pk"], marker["sk"],
+                         {"status": "draining", "claimedAt": now_iso()},
                          expect={"status": "pending"})
         except Conflict:
-            continue  # another sweep claimed it first
+            continue  # another sweep claimed (or reclaimed) it first
 
         recipient = store.try_get(
             K.agent_pk(store.owner_id, marker["recipientAgentId"]), "META")
