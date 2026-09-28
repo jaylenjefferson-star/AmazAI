@@ -8,6 +8,11 @@ import Companions from './home/Companions';
 import Rooms from './home/Rooms';
 import Routines from './home/Routines';
 import Artifacts from './home/Artifacts';
+import Connectors from './home/Connectors';
+import LiveDemo from './home/LiveDemo';
+import VirtualComputer from './home/VirtualComputer';
+import SocialProof from './home/SocialProof';
+import FinalCta from './home/FinalCta';
 
 /**
  * The public homepage.
@@ -41,6 +46,11 @@ export default function Landing() {
         <Rooms />
         <Routines />
         <Artifacts />
+        <Connectors />
+        <LiveDemo />
+        <VirtualComputer />
+        <SocialProof />
+        <FinalCta />
       </main>
 
       <PublicFooter />

@@ -21,9 +21,13 @@ describe('Pricing', () => {
     mockIsAuthenticated = false;
   });
 
+  // The four plans render Personal / Pro / Business as "Get started" buttons in
+  // that order; Enterprise is a "Talk to sales" link, not a checkout button,
+  // so it never appears in this list. ("Get started" is kept distinct from the
+  // nav's "Start free" CTA so these queries only match the plan buttons.)
   it('a signed-out visitor gets Universal Login signup, not a checkout call', async () => {
     renderIt();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Get started' })[1]); // Personal
+    fireEvent.click(screen.getAllByRole('button', { name: 'Get started' })[0]); // Personal
     expect(mockLoginWithRedirect).toHaveBeenCalledWith(
       expect.objectContaining({ signup: true, returnTo: '/welcome' }));
     expect(api.billing.checkout).not.toHaveBeenCalled();
@@ -33,9 +37,9 @@ describe('Pricing', () => {
     mockIsAuthenticated = true;
     api.billing.checkout.mockResolvedValue({ url: 'https://checkout.stripe.com/x' });
     renderIt();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Get started' })[2]); // Personal+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Get started' })[2]); // Business
     await waitFor(() => expect(api.billing.checkout)
-      .toHaveBeenCalledWith({ planKey: 'personal_plus' }));
+      .toHaveBeenCalledWith({ planKey: 'business' }));
     expect(mockLoginWithRedirect).not.toHaveBeenCalled();
   });
 
@@ -43,7 +47,7 @@ describe('Pricing', () => {
     mockIsAuthenticated = true;
     api.billing.checkout.mockRejectedValue(new Error('Stripe unavailable'));
     renderIt();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Get started' })[0]); // Explore
+    fireEvent.click(screen.getAllByRole('button', { name: 'Get started' })[1]); // Pro
     expect(await screen.findByText('Stripe unavailable')).toBeTruthy();
   });
 });

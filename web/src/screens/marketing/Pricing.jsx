@@ -5,20 +5,45 @@ import Seo from '../../components/Seo';
 import { api } from '../../api';
 import { startLogin, useAuth0 } from '../../auth0';
 
+// Four plans, not a fragmented ladder. Each answers the same three questions
+// so a visitor can self-select: who it is for, how much work it includes, and
+// the one capability that changes at this level. Enterprise is a conversation
+// rather than a checkout (contact === true), so it renders a link, not a
+// Stripe button. Plan keys are the identifiers the billing API expects.
 const TIERS = [
-  { key: 'explore', name: 'Explore', price: '$0', period: '/month', credits: '100 Amaz Credits', tagline: 'Build your first AI team', includes: ['Try skills, agents, and safe tasks'] },
-  { key: 'personal', name: 'Personal', price: '$19', period: '/month', credits: '1,000 Amaz Credits', tagline: 'Your work, delegated', includes: ['Agent workspace', 'Connected tools', 'Approval-first actions'] },
-  { key: 'personal_plus', name: 'Personal+', price: '$39', period: '/month', credits: '2,500 Amaz Credits', tagline: 'More capacity for daily work', includes: ['More agents', 'More routines', 'Add-on credits'], featured: true },
-  { key: 'pro', name: 'Pro', price: '$79', period: '/month', credits: '6,000 Amaz Credits', tagline: 'For power users', includes: ['Priority runs', 'Advanced Skills', 'More connected work'] },
-  { key: 'power', name: 'Power', price: '$149', period: '/month', credits: '12,000 Amaz Credits', tagline: 'For people who run their work through AmazAI', includes: ['Maximum capacity', 'Advanced controls', 'Priority support'] },
+  {
+    key: 'personal', name: 'Personal', price: '$19', period: '/month',
+    who: 'For individuals delegating their own work.',
+    usage: '1,000 Amaz Credits each month',
+    unlocks: 'One workspace with connected tools and approval-first actions',
+  },
+  {
+    key: 'pro', name: 'Pro', price: '$49', period: '/month', featured: true,
+    who: 'For power users who run their day through AmazAI.',
+    usage: '5,000 Amaz Credits each month',
+    unlocks: 'More companions, more routines, and priority runs',
+  },
+  {
+    key: 'business', name: 'Business', price: '$99', period: '/seat / month',
+    who: 'For teams working together in shared rooms.',
+    usage: 'Pooled team credits across every seat',
+    unlocks: 'Shared workspaces, admin controls, and audit history',
+  },
+  {
+    key: 'enterprise', name: 'Enterprise', price: 'Custom', period: '',
+    contact: true,
+    who: 'For organizations with security and scale requirements.',
+    usage: 'Volume credits with custom limits',
+    unlocks: 'SSO, advanced governance, and dedicated support',
+  },
 ];
 
 const FAQ = [
+  { q: 'Is there a free way to start?', a: 'Yes. Start free with no credit card — create your first companion and try real tasks before you pick a paid plan.' },
   { q: 'What is an Amaz Credit?', a: 'One unit of metered agent work — a model call, a tool use, a scheduled routine tick. Read-only checks and approvals themselves never cost credits.' },
   { q: 'What happens if I run out?', a: 'Agents pause new work and tell you what they were about to do. Nothing queues up silently and nothing overspends without your say-so — top up with add-on credits or wait for your next cycle.' },
   { q: 'Do unused credits roll over?', a: 'No — each plan renews with a fresh allotment every billing cycle, which keeps usage predictable for you and for us.' },
-  { q: 'Can I add credits without upgrading my plan?', a: 'Yes. Add-on credit packs are available on every paid tier for a month with more going on than usual.' },
-  { q: 'What is the difference between a personal plan and For Teams?', a: 'Personal plans are one seat, one workspace. For Teams adds shared workspaces, pooled team credits, admin controls, and audit history across everyone on the team.' },
+  { q: 'What is the difference between Personal, Pro, and Business?', a: 'Personal and Pro are single-seat plans; Pro simply includes more capacity and priority. Business adds shared workspaces, pooled team credits, admin controls, and audit history across everyone on the team.' },
 ];
 
 export default function Pricing() {
@@ -57,12 +82,12 @@ export default function Pricing() {
     <PublicShell wide>
       <Seo
         title="Pricing"
-        description="Plans from Explore to Power, all built on the same approval-first guardrails. Pay for the work your team runs, not the number of seats."
+        description="Four simple plans — Personal, Pro, Business, and Enterprise — all built on the same approval-first guardrails. Start free, no credit card required."
         path="/pricing"
       />
       <section className="about-hero">
-        <h1>Pricing that scales with the work, not the seat.</h1>
-        <p>Every plan includes the same approval-first guardrails. What changes is how much work your team can run.</p>
+        <h1>Simple plans that scale with the work.</h1>
+        <p>Every plan runs on the same approval-first guardrails. Start free — no credit card required — and pick a plan when your team is ready.</p>
       </section>
 
       {error && <div className="err"><span className="msg-text">{error}</span></div>}
@@ -73,31 +98,26 @@ export default function Pricing() {
             {t.featured && <span className="pricing-badge">Most popular</span>}
             <h2>{t.name}</h2>
             <p className="pricing-price"><strong>{t.price}</strong>{t.period}</p>
-            <p className="pricing-credits">{t.credits}</p>
-            <p className="pricing-tagline">{t.tagline}</p>
+            <p className="pricing-tagline">{t.who}</p>
             <ul>
-              {t.includes.map((i) => <li key={i}>{i}</li>)}
+              <li><span className="pricing-q">Usage</span>{t.usage}</li>
+              <li><span className="pricing-q">Unlocks</span>{t.unlocks}</li>
             </ul>
-            <button
-              className={t.featured ? 'primary' : 'ghost'}
-              disabled={busy === t.key}
-              onClick={() => getStarted(t.key)}
-            >
-              {busy === t.key ? 'Redirecting…' : 'Get started'}
-            </button>
+            {t.contact ? (
+              <Link to="/contact" className="ghost" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
+                Talk to sales
+              </Link>
+            ) : (
+              <button
+                className={t.featured ? 'primary' : 'ghost'}
+                disabled={busy === t.key}
+                onClick={() => getStarted(t.key)}
+              >
+                {busy === t.key ? 'Redirecting…' : 'Get started'}
+              </button>
+            )}
           </article>
         ))}
-      </section>
-
-      <section className="pricing-teams">
-        <h2>For Teams</h2>
-        <p>
-          Startup and SMB plans add shared workspaces, team credits, approval
-          controls, audit history, and administration.
-        </p>
-        <Link to="/for-teams" className="primary" style={{ display: 'inline-block', textDecoration: 'none' }}>
-          Talk to us
-        </Link>
       </section>
 
       <section className="about-contact">

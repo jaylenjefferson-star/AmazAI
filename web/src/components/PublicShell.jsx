@@ -148,6 +148,75 @@ export function TopNav() {
   );
 }
 
+/**
+ * The footer.
+ *
+ * Six restrained groups — Product, Solutions, Resources, Developers, Company,
+ * Legal — that act as the site's sitemap. Every link points at a route that
+ * already exists (marketing pages, homepage anchors, or legal documents); no
+ * new routes are invented here. The Developers group has no dedicated route
+ * yet, so it points at the closest existing pages (Integrations, the API-flavoured
+ * How it works) rather than fabricating links.
+ *
+ * Kept visually quiet on purpose: it follows the final CTA and must not
+ * compete with it, so it is plain columns of text links, not a second hero.
+ */
+const HOME_ANCHOR = '/welcome-to-amazai';
+const FOOTER_GROUPS = [
+  {
+    heading: 'Product',
+    links: [
+      { to: `${HOME_ANCHOR}#companions`, label: 'Companions' },
+      { to: `${HOME_ANCHOR}#rooms`, label: 'Rooms' },
+      { to: `${HOME_ANCHOR}#routines`, label: 'Routines' },
+      { to: '/product', label: 'Overview' },
+      { to: '/pricing', label: 'Pricing' },
+    ],
+  },
+  {
+    heading: 'Solutions',
+    links: [
+      { to: '/use-cases', label: 'Use cases' },
+      { to: '/for-teams', label: 'For teams' },
+      { to: '/enterprise', label: 'Enterprise' },
+    ],
+  },
+  {
+    heading: 'Resources',
+    links: [
+      { to: '/how-it-works', label: 'How it works' },
+      { to: '/integrations', label: 'Integrations' },
+      { to: '/faq', label: 'FAQ' },
+    ],
+  },
+  {
+    heading: 'Developers',
+    links: [
+      { to: '/integrations', label: 'Connectors' },
+      { to: `${HOME_ANCHOR}#browser-computer`, label: 'Browser & Computer' },
+    ],
+  },
+  {
+    heading: 'Company',
+    links: [
+      { to: '/about', label: 'About' },
+      { to: '/contact', label: 'Contact' },
+      { to: '/security', label: 'Security' },
+    ],
+  },
+  {
+    heading: 'Legal',
+    links: [
+      { to: '/legal', label: 'Legal & Trust' },
+      { to: '/terms', label: 'Terms' },
+      { to: '/privacy', label: 'Privacy' },
+      { to: '/cookie-policy', label: 'Cookies' },
+      { to: '/acceptable-use', label: 'Acceptable use' },
+      { to: '/security-disclosure', label: 'Security disclosure' },
+    ],
+  },
+];
+
 export function PublicFooter() {
   const year = new Date().getFullYear();
   return (
@@ -158,29 +227,15 @@ export function PublicFooter() {
           <p>A customizable AI team that gets work done — with you in control.</p>
         </div>
 
-        <div className="public-foot-col">
-          <h3>Product</h3>
-          <Link to="/how-it-works">How it works</Link>
-          <Link to="/product">Agents &amp; Skills</Link>
-          <Link to="/pricing">Pricing</Link>
-          <Link to="/integrations">Integrations</Link>
-          <Link to="/security">Security</Link>
-        </div>
-
-        <div className="public-foot-col">
-          <h3>Resources</h3>
-          <Link to="/use-cases">Use Cases</Link>
-          <Link to="/faq">FAQ</Link>
-          <Link to="/for-teams">For Teams</Link>
-          <Link to="/enterprise">Enterprise</Link>
-          <Link to="/contact">Contact / Demo</Link>
-        </div>
-
-        <div className="public-foot-col">
-          <h3>Company</h3>
-          <Link to="/about">About us</Link>
-          <Link to="/legal">Legal &amp; Trust</Link>
-          <a href="mailto:hello@amazai.co">hello@amazai.co</a>
+        <div className="public-foot-groups">
+          {FOOTER_GROUPS.map((group) => (
+            <div key={group.heading} className="public-foot-col">
+              <h3>{group.heading}</h3>
+              {group.links.map((l) => (
+                <Link key={l.label} to={l.to}>{l.label}</Link>
+              ))}
+            </div>
+          ))}
         </div>
       </div>
 

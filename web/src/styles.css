@@ -1561,7 +1561,13 @@ button.lg { min-height: 46px; padding: 0 24px; font-size: 14.5px; }
 }
 .public-foot-top {
   display: grid; gap: 28px; max-width: 980px; margin: 0 auto;
-  grid-template-columns: 1.4fr repeat(3, 1fr);
+  grid-template-columns: 1.4fr 3.4fr;
+}
+/* Six restrained groups sit in their own grid so the brand column keeps its
+   width and the footer stays a quiet sitemap, not a second hero. */
+.public-foot-groups {
+  display: grid; gap: 24px 20px;
+  grid-template-columns: repeat(3, 1fr);
 }
 .public-foot-brand { display: flex; flex-direction: column; gap: 10px; max-width: 26ch; }
 .public-foot-brand p { margin: 0; color: var(--faint); font-size: 12.5px; line-height: 1.5; }
@@ -1578,7 +1584,8 @@ button.lg { min-height: 46px; padding: 0 24px; font-size: 14.5px; }
 }
 
 @media (max-width: 720px) {
-  .public-foot-top { grid-template-columns: 1fr 1fr; }
+  .public-foot-top { grid-template-columns: 1fr; }
+  .public-foot-groups { grid-template-columns: 1fr 1fr; }
   .public-nav-links { display: none; }
 }
 
@@ -1677,8 +1684,15 @@ button.lg { min-height: 46px; padding: 0 24px; font-size: 14.5px; }
 .pricing-credits { margin: 0; font-size: 13px; color: var(--faint); }
 .pricing-tagline { margin: 4px 0 6px; font-size: 13px; color: var(--dim); }
 .pricing-card ul { margin: 0 0 14px; padding-left: 18px; color: var(--dim); flex: 1; }
-.pricing-card li { font-size: 12.5px; line-height: 1.6; margin-bottom: 4px; }
-.pricing-card button { margin-top: auto; }
+.pricing-card li { font-size: 12.5px; line-height: 1.6; margin-bottom: 8px; list-style: none; }
+/* the "Usage" / "Unlocks" label above each answer — the three questions every
+   plan answers, quietly set off from the answer text */
+.pricing-q {
+  display: block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--faint); margin-bottom: 1px;
+}
+.pricing-card ul { padding-left: 0; }
+.pricing-card button, .pricing-card .ghost { margin-top: auto; }
 
 .pricing-teams {
   text-align: center; padding: 28px 20px; margin-bottom: 44px;
@@ -3385,3 +3399,220 @@ a.row-card:hover { border-color: var(--btn-line); }
   .mkt-flow .mkt-flow-routine { opacity: 1; transform: none; transition: none; }
 }
 
+
+/* =================================================== marketing homepage, part 2
+ *
+ * Steps 12-18 of the redesign (FEAT-003): Connectors, live product demo,
+ * virtual computer, social-proof framework, final CTA. Same rules as part 1 —
+ * white canvas, selective purple, real product-frame markup, CSS-only motion
+ * that degrades to a legible still under prefers-reduced-motion (block at the
+ * very end). Reuses the .mkt-* token layer and .pf/.pf-chrome primitives.
+ */
+
+/* ---- connectors ---- */
+.mkt-connectors-head { max-width: 40ch; }
+.mkt-connectors-head .mkt-title { margin: 0; }
+.mkt-connectors-stage {
+  margin-top: clamp(1.75rem, 1rem + 3vw, 3rem);
+  display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: clamp(1.5rem, 1rem + 2vw, 3rem); align-items: center;
+}
+.mkt-conn-tools {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem;
+}
+.mkt-conn-tool {
+  display: flex; align-items: center; gap: 0.55rem;
+  padding: 0.7rem 0.85rem; border-radius: 12px;
+  border: 1px solid var(--mkt-hairline); background: var(--mkt-surface);
+}
+.mkt-conn-tool-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ok, #12a594); flex: none; }
+.mkt-conn-tool.is-upcoming .mkt-conn-tool-dot { background: var(--mkt-line); }
+.mkt-conn-tool-name { font-size: 0.9rem; font-weight: 640; color: var(--mkt-ink); }
+.mkt-conn-tool.is-upcoming .mkt-conn-tool-name { color: var(--mkt-dim); font-weight: 600; }
+.mkt-conn-tag {
+  margin-left: auto; font-size: 0.5625rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--mkt-accent); background: var(--mkt-accent-wash);
+  border: 1px solid var(--mkt-accent-edge); padding: 0.1rem 0.35rem; border-radius: 999px;
+}
+.mkt-conn-flow {
+  border: 1px solid var(--mkt-hairline); border-radius: 16px; overflow: hidden;
+  background: var(--mkt-surface); box-shadow: var(--mkt-pop);
+}
+.mkt-conn-flow-cap {
+  margin: 0; padding: 0.75rem 1rem; border-bottom: 1px solid var(--mkt-hairline);
+  background: var(--mkt-raised); font-size: 0.75rem; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--mkt-faint);
+}
+.mkt-conn-steps { list-style: none; margin: 0; padding: 0.6rem 1rem; display: grid; gap: 0; }
+.mkt-conn-step {
+  display: flex; align-items: baseline; gap: 0.75rem; padding: 0.6rem 0; position: relative; padding-left: 1.4rem;
+}
+.mkt-conn-step::before { content: ""; position: absolute; left: 5px; top: 0; bottom: 0; width: 2px; background: var(--mkt-hairline); }
+.mkt-conn-step:first-child::before { top: 50%; }
+.mkt-conn-step:last-child::before { bottom: 50%; }
+.mkt-conn-step::after {
+  content: ""; position: absolute; left: 0; top: 0.7rem; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--mkt-accent); box-shadow: 0 0 0 3px var(--mkt-accent-wash); z-index: 1;
+}
+.mkt-conn-step-tool { font-size: 0.85rem; font-weight: 700; color: var(--mkt-ink); min-width: 9ch; }
+.mkt-conn-step-action { font-size: 0.875rem; color: var(--mkt-dim); }
+/* staggered reveal keyed off the boolean */
+.mkt-conn-flow .mkt-conn-step { opacity: 0; transform: translateY(8px); transition: opacity .45s var(--ease-out), transform .45s var(--ease-out); }
+.mkt-conn-flow.is-in .mkt-conn-step { opacity: 1; transform: none; transition-delay: calc(var(--i) * 0.12s + 0.05s); }
+
+/* ---- live product demo (browser frame) ---- */
+.mkt-demo { background: var(--mkt-raised); border-block: 1px solid var(--mkt-hairline); }
+.mkt-demo-head { max-width: 42ch; margin-bottom: clamp(1.75rem, 1rem + 3vw, 3rem); }
+.mkt-demo-head .mkt-title { margin: 0; }
+.pf-demo { max-width: 860px; margin-inline: auto; }
+.pf-demo-body { padding: clamp(1rem, 0.5rem + 2vw, 1.75rem); display: grid; gap: 1rem; }
+.pf-demo-request {
+  background: var(--mkt-raised); border: 1px solid var(--mkt-hairline); border-radius: 12px;
+  padding: 0.9rem 1.1rem;
+}
+.pf-demo-you {
+  display: inline-block; font-size: 0.625rem; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--mkt-faint); margin-bottom: 0.3rem;
+}
+.pf-demo-request p { margin: 0; font-size: 1.0625rem; font-weight: 600; color: var(--mkt-ink); }
+.pf-demo-stream { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.85rem; }
+.pf-demo-agent {
+  border: 1px solid var(--mkt-hairline); border-radius: 12px; background: var(--mkt-surface);
+  padding: 0.85rem 1rem;
+}
+.pf-demo-agent-head { display: flex; align-items: center; gap: 0.6rem; }
+.pf-demo-agent-name { font-size: 0.9rem; font-weight: 680; color: var(--mkt-ink); }
+/* quiet status, not a loud badge: plain text set off only by colour + weight */
+.pf-demo-agent-status { margin-left: auto; font-size: 0.8125rem; color: var(--mkt-accent); font-weight: 600; }
+.pf-demo-acts { list-style: none; margin: 0.7rem 0 0; padding: 0; display: grid; gap: 0.45rem; }
+.pf-demo-act { display: flex; align-items: baseline; gap: 0.6rem; font-size: 0.875rem; }
+.pf-demo-verb { font-weight: 700; color: var(--mkt-ink-2); flex: none; min-width: 7.5ch; }
+.pf-demo-detail { color: var(--mkt-dim); }
+.pf-demo-artifact {
+  display: flex; align-items: center; gap: 0.6rem; width: 100%;
+  padding: 0.55rem 0.7rem; border: 1px solid var(--mkt-hairline); border-radius: 10px;
+  background: var(--mkt-raised);
+}
+.pf-demo-art-icon { width: 26px; height: 32px; border-radius: 5px; flex: none; background: linear-gradient(160deg, var(--mkt-accent), var(--mkt-accent-2)); }
+.pf-demo-art-text { display: grid; gap: 0.1rem; }
+.pf-demo-art-title { font-size: 0.8125rem; font-weight: 640; color: var(--mkt-ink); }
+/* whole-agent stagger; each agent block slides in after the request */
+.pf-demo .pf-demo-agent { opacity: 0; transform: translateY(10px); transition: opacity .5s var(--ease-out), transform .5s var(--ease-out); }
+.pf-demo.is-in .pf-demo-agent { opacity: 1; transform: none; transition-delay: calc(var(--i) * 0.35s + 0.2s); }
+
+/* ---- virtual computer ---- */
+.mkt-computer-head { max-width: 46ch; margin-bottom: clamp(1.75rem, 1rem + 3vw, 3rem); }
+.mkt-computer-head .mkt-eyebrow { color: var(--mkt-dim); text-transform: none; letter-spacing: 0; font-size: var(--mkt-fs-lede); font-weight: 600; }
+.mkt-computer-title {
+  margin: 0.3rem 0 0; font-size: var(--mkt-fs-hero); line-height: var(--mkt-lh-tight);
+  letter-spacing: -0.03em; font-weight: 700; color: var(--mkt-ink);
+}
+.mkt-computer-head .mkt-lede { margin-top: 1rem; }
+.mkt-computer-stage {
+  display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.8fr);
+  gap: clamp(1.25rem, 0.75rem + 2vw, 2rem); align-items: stretch;
+}
+.pf-screen { display: flex; flex-direction: column; }
+.pf-screen-page { position: relative; flex: 1; padding: 1.1rem; display: grid; gap: 0.9rem; align-content: start; background: var(--mkt-surface); }
+.pf-screen-nav { display: flex; align-items: center; gap: 0.6rem; }
+.pf-screen-logo { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(160deg, var(--mkt-accent), var(--mkt-accent-2)); flex: none; }
+.pf-screen-navline { height: 8px; width: 90px; border-radius: 999px; background: var(--mkt-hairline); }
+.pf-screen-navline.short { width: 60px; }
+.pf-screen-h { height: 16px; width: 55%; border-radius: 999px; background: var(--mkt-line); }
+.pf-screen-plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.7rem; margin-top: 0.4rem; }
+.pf-screen-plan {
+  border: 1px solid var(--mkt-hairline); border-radius: 10px; padding: 0.8rem 0.7rem;
+  display: grid; gap: 0.4rem; background: var(--mkt-raised);
+}
+.pf-screen-plan:nth-child(2) { border-color: var(--mkt-accent-edge); box-shadow: 0 0 0 3px var(--mkt-accent-wash); }
+.pf-screen-price { font-size: 1.15rem; font-weight: 700; color: var(--mkt-ink); }
+.pf-screen-planline { height: 7px; border-radius: 999px; background: var(--mkt-hairline); }
+.pf-screen-planline.short { width: 65%; }
+.pf-screen-cursor {
+  position: absolute; left: 46%; top: 58%; width: 14px; height: 14px;
+  border-radius: 50%; border: 2px solid var(--mkt-accent); background: var(--mkt-accent-wash);
+  animation: pf-cursor 3.2s var(--ease-out) infinite;
+}
+@keyframes pf-cursor {
+  0%, 100% { transform: translate(0, 0); }
+  40% { transform: translate(6px, -18px); }
+  70% { transform: translate(-4px, 10px); }
+}
+.pf-task { display: flex; flex-direction: column; }
+.pf-task-head {
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.9rem 1rem; border-bottom: 1px solid var(--mkt-hairline); background: var(--mkt-raised);
+}
+.pf-task-head > div { display: grid; }
+.pf-task-owner { font-size: 0.95rem; font-weight: 680; color: var(--mkt-ink); }
+.pf-task-state { font-size: 0.8125rem; color: var(--mkt-accent); font-weight: 600; }
+.pf-task-body { padding: 1rem; }
+.pf-task-label { margin: 0 0 0.35rem; font-size: 0.625rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mkt-faint); }
+.pf-task-label + .pf-task-label { margin-top: 1rem; }
+.pf-task-desc { margin: 0 0 0.4rem; font-size: 0.9375rem; color: var(--mkt-ink); }
+.pf-task-acts { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.pf-task-act { display: flex; align-items: center; gap: 0.6rem; font-size: 0.875rem; color: var(--mkt-ink-2); }
+.pf-task-tick { width: 16px; height: 16px; border-radius: 50%; flex: none; border: 2px solid var(--mkt-line); }
+.pf-task-act.is-done .pf-task-tick { background: var(--ok, #12a594); border-color: var(--ok, #12a594); }
+.pf-task-act.is-now .pf-task-tick { border-color: var(--mkt-accent); box-shadow: 0 0 0 3px var(--mkt-accent-wash); }
+.pf-task-act.is-now { color: var(--mkt-accent); font-weight: 600; }
+/* each activity line settles in when the section is revealed */
+.mkt-computer-stage .pf-task-act { opacity: 0; transform: translateX(-6px); transition: opacity .4s var(--ease-out), transform .4s var(--ease-out); }
+.mkt-computer-stage.is-in .pf-task-act { opacity: 1; transform: none; transition-delay: calc(var(--i) * 0.15s + 0.2s); }
+
+/* ---- social proof (placeholder framework) ---- */
+.mkt-proof { background: var(--mkt-raised); border-block: 1px solid var(--mkt-hairline); }
+.mkt-proof-head { max-width: 40ch; margin-inline: auto; text-align: center; }
+.mkt-proof-head .mkt-title { margin: 0; }
+.mkt-proof-head .mkt-lede { margin-inline: auto; }
+.mkt-proof-card {
+  position: relative; margin: clamp(1.75rem, 1rem + 3vw, 3rem) auto 0; max-width: 900px;
+  border: 1px dashed var(--mkt-line); border-radius: 18px; background: var(--mkt-surface);
+  padding: clamp(1.5rem, 1rem + 2vw, 2.5rem);
+}
+.mkt-proof-tag {
+  position: absolute; top: -0.7rem; left: 50%; transform: translateX(-50%);
+  font-size: 0.625rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--mkt-faint); background: var(--mkt-surface);
+  border: 1px solid var(--mkt-hairline); padding: 0.2rem 0.7rem; border-radius: 999px;
+}
+.mkt-proof-slots { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.9rem; }
+.mkt-proof-slot { display: grid; gap: 0.25rem; padding: 0.9rem 1rem; border: 1px solid var(--mkt-hairline); border-radius: 12px; background: var(--mkt-raised); }
+/* the quote slot spans the full width, as it will in a real case study */
+.mkt-proof-slot:first-child { grid-column: 1 / -1; }
+.mkt-proof-slot-label { font-size: 0.8125rem; font-weight: 700; color: var(--mkt-ink-2); }
+.mkt-proof-slot-hint { font-size: 0.8125rem; color: var(--mkt-faint); }
+
+/* ---- final CTA (lots of whitespace; louder than the footer) ---- */
+.mkt-final { padding-block: clamp(5rem, 3rem + 8vw, 10rem); }
+.mkt-final-inner { text-align: center; display: grid; justify-items: center; gap: 0.5rem; }
+.mkt-final-title {
+  margin: 0; font-size: var(--mkt-fs-hero); line-height: var(--mkt-lh-tight);
+  letter-spacing: -0.03em; font-weight: 700; color: var(--mkt-ink);
+}
+.mkt-final-sub { margin: 0.5rem 0 0; font-size: var(--mkt-fs-lede); color: var(--mkt-dim); max-width: 46ch; }
+.mkt-final-cta { margin-top: 1.75rem; padding-inline: 2rem; }
+
+/* ---- responsive: keep the narrative, no overflow ---- */
+@media (max-width: 880px) {
+  .mkt-connectors-stage { grid-template-columns: 1fr; }
+  .mkt-computer-stage { grid-template-columns: 1fr; }
+  .mkt-proof-slots { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .mkt-conn-tools { grid-template-columns: 1fr; }
+  .pf-screen-plans { grid-template-columns: 1fr; }
+  .pf-demo-verb { min-width: 6ch; }
+}
+
+/* Motion demonstrates product behaviour; never load-bearing. Stilled for
+   anyone who asks for reduced motion — the final state is fully legible. */
+@media (prefers-reduced-motion: reduce) {
+  .mkt-conn-flow .mkt-conn-step,
+  .pf-demo .pf-demo-agent,
+  .mkt-computer-stage .pf-task-act {
+    opacity: 1; transform: none; transition: none;
+  }
+  .pf-screen-cursor { animation: none; }
+}
