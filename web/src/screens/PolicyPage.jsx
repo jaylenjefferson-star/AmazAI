@@ -20,11 +20,15 @@ function splitFrontmatter(raw) {
   return { meta, body: raw.slice(m[0].length) };
 }
 
-function formatDate(iso) {
+export function formatDate(iso) {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  // Frontmatter uses calendar dates, not instants. Date-only ISO strings parse
+  // at midnight UTC, which otherwise displays as the prior day in U.S. zones.
+  return d.toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
+  });
 }
 
 /** Internal doc links (`/privacy`, `/terms`, ...) route through react-router
