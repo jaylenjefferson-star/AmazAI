@@ -124,6 +124,43 @@ class TestRunContextMessages:
         assert emitted[0]["runId"] == world.run["runId"]
 
 
+class TestSessionMarkedDirty:
+    """Every real session rotation is now counted. A turn that answered a tool
+    call and then lost the stream leaves that session owing a result it will
+    never get; `_mark_dirty` rotates it, and this is the only end-to-end signal
+    that it happened -- a session that keeps rotating (a cause other than the
+    known dirty-session one) had no counter to alarm on before this."""
+
+    def test_a_turn_that_abandons_a_tool_result_emits_one_dirty_rotation(self, world, capsys, monkeypatch):
+        import handlers.orchestrator as orch
+        monkeypatch.setattr(orch, "_reinvoke", lambda *a, **k: None)
+
+        def answers_then_loses_the_stream(kw):
+            # The tool call is answered inline (so `answered` is non-empty),
+            # then the stream dies mid-turn before that result is sent back --
+            # the session is left owing it, and rotation is the fix.
+            yield from tool_use("remember", {"scope": "agent", "body": "a fact"})
+            raise RuntimeError("service unavailable")
+
+        world.script(answers_then_loses_the_stream)
+        out = world.drive()
+
+        assert out["state"] == RunState.RETRYING.value
+        emitted = _metrics(capsys, "SessionMarkedDirty")
+        assert len(emitted) == 1
+        assert emitted[0]["SessionMarkedDirty"] == 1
+        assert emitted[0]["AgentId"] == world.agent_id
+        assert emitted[0]["runId"] == world.run["runId"]
+
+    def test_a_clean_completion_emits_no_dirty_rotation(self, world, capsys):
+        world.script([text("done")])
+
+        out = world.drive()
+
+        assert out["state"] == RunState.COMPLETED.value
+        assert _metrics(capsys, "SessionMarkedDirty") == []
+
+
 class TestToolLatency:
     def test_an_inline_tool_call_reports_its_own_latency(self, world, capsys):
         world.script([*tool_use("remember", {"scope": "agent", "body": "the sky is blue"}),

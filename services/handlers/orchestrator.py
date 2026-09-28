@@ -77,12 +77,12 @@ MAX_WAKE_STAGGER_SLOTS = 4
 #: How many times in a row a task may auto-continue past the round/time ceiling
 #: before it stops and waits for the operator instead -- see
 #: `_continue_automatically`. Bounded so a task that genuinely cannot finish
-#: does not run away on its own; three legs is roughly half an hour of
+#: does not run away on its own; five legs is roughly an hour of
 #: continuous work before it checks in either way. This is the only ceiling
 #: left that can end a run on its own initiative: per-agent spend/tool-call/
 #: error ceilings were removed in favour of a single account-level credit
 #: gate (`billing.has_credit`).
-MAX_AUTO_CONTINUES = 3
+MAX_AUTO_CONTINUES = 5
 
 #: The inline tools the code answers itself. Their result goes back to the model;
 #: the tools that run inside the harness (a shell, the files, a browser) never do.
@@ -274,11 +274,18 @@ def _mark_dirty(store: Store, run: dict) -> None:
     Never raised: an exception here must not turn "the model asked for X"
     into "and now the retry fails too, silently, for a second reason nobody
     can see."
+
+    Emits a `SessionMarkedDirty` metric on every real rotation -- this path
+    was previously invisible end-to-end, so a session that kept rotating (the
+    signature of a cause other than the known dirty-session one) left no
+    counter to alarm on.
     """
     try:
         epoch = runs.mark_session_dirty(store, run["agentId"], run["threadId"])
         fresh = K.bot_session_id(store.owner_id, run["agentId"], run["threadId"], epoch=epoch)
         store.update(run["pk"], "META", {"sessionId": fresh})
+        metrics.emit("SessionMarkedDirty", 1, dimensions={"AgentId": run["agentId"]},
+                     runId=run["runId"], agentId=run["agentId"])
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
@@ -1273,6 +1280,14 @@ def _persistence_note() -> str:
     shape now, bounded the same way a round-ceiling auto-continue is. This
     note stays regardless -- catching it a turn late still costs a delay the
     operator notices, so the better fix is still not doing it in the first place.
+
+    Also sequences multi-step work: when a task touches more than one app or
+    search, the note asks the model to call them one at a time and read each
+    result before the next call, rather than firing several at once and
+    describing it as doing them "simultaneously" or "in parallel". Bundling
+    multiple round-trip tool calls in one turn is a real source of the
+    `Inline function result is missing toolUseId` hard stop this session
+    cannot recover from mid-turn.
     """
     return (
         "\n\n## Finish the task\n"
@@ -1285,7 +1300,13 @@ def _persistence_note() -> str:
         "actual result to give, or you hit a real blocker you cannot resolve "
         "yourself (missing access, a decision only the operator can make, "
         "information nobody has given you). State the blocker plainly when "
-        "that happens; otherwise, finish it."
+        "that happens; otherwise, finish it.\n\n"
+        "When a task touches more than one app or search, call them one at a "
+        "time and read each result before the next call, rather than firing "
+        "several at once and describing it as doing them \"simultaneously\" "
+        "or \"in parallel\" -- that bundling is a real source of a hard stop "
+        "this session cannot recover from mid-turn. One call, its result, "
+        "then the next; slower per call, more likely to actually finish."
     )
 
 
