@@ -1,0 +1,30 @@
+{
+  "project_type": "React 18 + Vite 6 SPA marketing/console for AmazAI (an AI agent operator platform). Only the PUBLIC marketing site is in scope.",
+  "language": "JavaScript (JSX), plain CSS. No TypeScript in web/, no Tailwind, no CSS-in-JS.",
+  "build_system": "npm + Vite. node/npm are NOT on PATH by default in this sandbox; they come from nvm. Every npm command must be preceded by: export NVM_DIR=/root/.nvm && . /root/.nvm/nvm.sh  (default node is v22.23.2, npm 11.4.2). Run all npm commands with cwd /projects/sandbox/AmazAI/web.",
+  "test_framework": "vitest + @testing-library/react + jsdom. setupFiles: src/test/setup.js. Test files are *.test.jsx colocated with source. Existing marketing test: src/screens/marketing/Pricing.test.jsx.",
+  "build_command": "cd /projects/sandbox/AmazAI/web && export NVM_DIR=/root/.nvm && . /root/.nvm/nvm.sh && npm run build",
+  "test_command": "cd /projects/sandbox/AmazAI/web && export NVM_DIR=/root/.nvm && . /root/.nvm/nvm.sh && npm test",
+  "verification_instructions": "Baseline (before changes): npm run build is clean and npm test shows 28 files / 194 tests passing. After each feature, re-run both and keep them green. To eyeball the site, npm run dev (port 5173 strict) then open /welcome-to-amazai. Marketing routes render without any AWS/auth backend. Do NOT depend on api.js/live data in marketing compositions.",
+  "snapshot_or_generated_files": "None. No snapshot tests, no generated fixtures for the web app. dist/ is the build output (gitignored via web/.gitignore).",
+  "setup_instructions": "cd /projects/sandbox/AmazAI/web && export NVM_DIR=/root/.nvm && . /root/.nvm/nvm.sh && npm install (node_modules already present). Then npm run build / npm test.",
+  "environment_constraints": "Network is OPEN (npm registry reachable) but the user requires NO heavy new dependencies. Prefer CSS-only/lightweight motion (CSS transitions/keyframes, IntersectionObserver, small React state). Do NOT add animation libraries unless genuinely unavoidable; the existing Companion character system already animates via CSS on SVG and respects prefers-reduced-motion. No Docker for the web app.",
+  "contribution_requirements": "CLAUDE.md: match surrounding code; comments explain WHY not WHAT; tests assert behaviour that would actually regress. CI (.github/workflows/ci.yml) runs `npm ci && npm run build` and requires dist/index.html to exist; the `web` job does NOT run vitest, but keep tests green anyway. Theme tokens: light is :root default, dark is duplicated in TWO blocks (prefers-color-scheme media query AND [data-theme=dark]) that must stay in step. The public marketing site is ALWAYS light (theme.js modeForPath forces light for public paths); do not rely on dark-mode behaviour for marketing.",
+  "key_patterns": "Marketing screens live in web/src/screens/marketing/*.jsx and web/src/screens/Landing.jsx. They are static composed JSX wrapped in <PublicShell> (or, for Landing, TopNav+PublicFooter directly) with a <Seo> tag per route. Styling is via semantic CSS classes defined in web/src/styles.css (e.g. .about-hero, .pricing-grid, .product-section, .faq-item, .public-nav, .public-foot, .landing-*). Buttons use classes .primary / .ghost / .lg. Auth CTAs call startLogin(loginWithRedirect, {signup?, returnTo}) from src/auth0.jsx. The visual brand language is the Companion character system (src/characters/Companion.jsx + archetypes.jsx + characters.css): archetypes are pebble/paper/jelly/cloud/lantern/moth; states idle/thinking/working/waiting/approval/complete/blocked/offline; each Companion animates in CSS and is accessible. Logo is src/components/Logo.jsx (LogoMark + wordmark). Reusable product surfaces to draw marketing 'product frames' from (recreate as lightweight static compositions, do NOT import the live app screens which depend on api/auth): Room.jsx, Rooms.jsx, Sections.jsx (Artifacts + Routines), Composer.jsx, PresenceFeed/CoordinationFeed/Delegation/Handoff, ApprovalCard.jsx, ConnectionBar, Cards.jsx, AgentAvatar/AgentProfile.",
+  "relevant_files": [
+    "web/src/main.jsx (route table; /welcome-to-amazai -> Landing under <PublicOnly>; all marketing routes; PUBLIC_PATHS array must be kept in sync if routes change)",
+    "web/src/screens/Landing.jsx (current hero/landing to REPLACE with the new editorial hero + full homepage narrative)",
+    "web/src/components/PublicShell.jsx (TopNav + PublicFooter to REPLACE per new nav/footer spec)",
+    "web/src/screens/marketing/Pricing.jsx (+Pricing.test.jsx) (pricing source; may restructure to Personal/Pro/Business/Enterprise; MUST keep the test green or update it)",
+    "web/src/screens/marketing/Product.jsx, HowItWorks.jsx, Integrations.jsx, UseCases.jsx, ForTeams.jsx, Enterprise.jsx, FAQ.jsx, Contact.jsx, Legal.jsx, SecurityOverview.jsx (existing marketing screens)",
+    "web/src/components/Seo.jsx (per-route title/description/canonical/OG; reuse on every marketing page)",
+    "web/src/auth0.jsx (startLogin/useAuth0 for Sign in / Start free CTAs)",
+    "web/src/styles.css (design tokens in :root + dark blocks; existing .public-*/.landing-*/.about-*/.pricing-* marketing CSS; ADD marketing-scoped tokens/classes here, additive)",
+    "web/src/premium.css, web/src/theme.js (+theme.test.js) (theme selection; public paths forced light)",
+    "web/src/characters/Companion.jsx, archetypes.jsx, characters.css (companion avatars as primary visual language)",
+    "web/src/components/Logo.jsx (brand mark)",
+    "web/index.html (Vite HTML entry; baseline SEO/meta + before-paint theme script)",
+    "web/public/ (static assets)"
+  ],
+  "directory_structure": "web/ = React console + marketing (Vite). web/src/screens/marketing/ = marketing pages. web/src/screens/Landing.jsx = current landing. web/src/components/ = shared UI incl PublicShell, Seo, Logo, and real product components. web/src/characters/ = Companion avatar system. web/src/styles.css = all global CSS incl marketing classes. web/src/content/*.md = legal doc markdown. Authenticated app (src/app/Shell.jsx + Protected routes) is OUT OF SCOPE."
+}

@@ -1,0 +1,7 @@
+{
+  "task_id": "task-marketing-site-redesign",
+  "task_description": "Redesign the PUBLIC AmazAI marketing website (React 18 + Vite SPA in web/) into a premium light-mode, editorial, product-led experience, using RevenueCat only as a high-level reference for restraint/IA/typography/whitespace (no cloning). Reuse AmazAI's real product UI (Companion system + product-frame compositions) as the primary visual language. Follow the user's fixed 20-step build order across four features: FEAT-001 baseline+audit/migration-map+tokens+nav, FEAT-002 hero through Artifacts, FEAT-003 Connectors through footer + pricing restructure, FEAT-004 mobile polish + a11y/SEO/perf. No fabricated logos/testimonials/metrics; only real-or-marked-upcoming integrations; selective CSS-only motion; no new heavy deps. Authenticated product UX is OUT OF SCOPE.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}
