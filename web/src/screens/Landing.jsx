@@ -26,6 +26,13 @@ import FinalCta from './home/FinalCta';
  * Sections live as small components in ./home so this file stays a readable
  * table of contents and later features can append more sections (Connectors,
  * live demo, pricing, final CTA, footer — FEAT-003).
+ *
+ * Why this renders TopNav/main/PublicFooter directly instead of wrapping in
+ * PublicShell: the homepage is deliberately special. It owns its own full-bleed
+ * <main> (edge-to-edge sections, no `.public-main` max-width gutter) and its own
+ * `.mkt` token scope, which PublicShell's constrained content column would fight.
+ * The shared chrome pieces (TopNav, PublicFooter) are still reused as-is, so the
+ * nav/footer contract stays single-sourced; only the page container differs.
  */
 export default function Landing() {
   return (

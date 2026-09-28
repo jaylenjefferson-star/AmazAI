@@ -54,7 +54,10 @@ export default function Artifacts() {
               <span className="pf-viewer-meta">Document · created by Marketing Companion</span>
             </div>
             <div className="pf-viewer-doc" aria-hidden="true">
-              <h4>Weekly Growth Brief</h4>
+              {/* Decorative document title inside an aria-hidden frame, not a
+                  page heading: a <div> keeps the outline clean and avoids the
+                  h2->h4 jump. */}
+              <div className="pf-doc-title">Weekly Growth Brief</div>
               <p className="pf-doc-lead">Signups grew 18% week over week, led by the launch campaign.</p>
               <p className="pf-doc-h">Highlights</p>
               <span className="pf-doc-line" />

@@ -2960,6 +2960,7 @@ a.row-card:hover { border-color: var(--btn-line); }
   margin: 0 0 0.6rem; font-size: 0.75rem; font-weight: 600;
   letter-spacing: 0.09em; text-transform: uppercase; color: var(--mkt-faint);
 }
+.mkt-mega-group ul { list-style: none; margin: 0; padding: 0; }
 .mkt-mega-group a {
   display: block; padding: 0.4rem 0.5rem; margin-inline: -0.5rem;
   border-radius: var(--mkt-r-sm);
@@ -3113,7 +3114,7 @@ a.row-card:hover { border-color: var(--btn-line); }
   display: flex; align-items: center; justify-content: space-between;
   padding: 0.75rem 1rem; border-bottom: 1px solid var(--mkt-hairline);
 }
-.pf-room-head h3 { margin: 0; font-size: 0.95rem; font-weight: 650; color: var(--mkt-ink); }
+.pf-room-title { margin: 0; font-size: 0.95rem; font-weight: 650; color: var(--mkt-ink); }
 .pf-avatars { display: flex; align-items: center; gap: 0.3rem; }
 .pf-person {
   width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
@@ -3416,7 +3417,7 @@ a.row-card:hover { border-color: var(--btn-line); }
 .pf-viewer-title { display: block; font-weight: 680; color: var(--mkt-ink); }
 .pf-viewer-meta { display: block; font-size: 0.75rem; color: var(--mkt-faint); }
 .pf-viewer-doc { padding: 1.4rem clamp(1.1rem, 0.5rem + 2vw, 2.2rem); }
-.pf-viewer-doc h4 { margin: 0; font-size: 1.25rem; color: var(--mkt-ink); }
+.pf-doc-title { margin: 0; font-size: 1.25rem; font-weight: 650; color: var(--mkt-ink); }
 .pf-doc-lead { margin: 0.5rem 0 1.1rem; color: var(--mkt-dim); font-size: 0.95rem; }
 .pf-doc-h { margin: 1rem 0 0.5rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--mkt-accent); }
 .pf-doc-line { display: block; height: 9px; border-radius: 999px; background: var(--mkt-hairline); margin-bottom: 0.5rem; }

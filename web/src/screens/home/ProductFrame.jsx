@@ -47,7 +47,10 @@ export default function ProductFrame() {
         {/* --- main: the room --- */}
         <div className="pf-main">
           <div className="pf-room-head" aria-hidden="true">
-            <h3># Growth</h3>
+            {/* Decorative label inside an aria-hidden product frame, not a
+                real section heading: a <span> keeps it out of the page's
+                heading outline. */}
+            <span className="pf-room-title"># Growth</span>
             <div className="pf-avatars">
               <Companion archetype="paper" color="#2b6bff" state="working" size={30} decorative />
               <Companion archetype="moth" color="#e93d82" state="thinking" size={30} decorative />

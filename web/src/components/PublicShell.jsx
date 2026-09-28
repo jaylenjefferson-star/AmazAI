@@ -113,25 +113,31 @@ export function TopNav() {
 
         <nav className="mkt-nav-primary" aria-label="Primary">
           <div className="mkt-mega-wrap">
+            {/* A disclosure, not an application menu: the panel is plain
+                navigation links, so we advertise aria-expanded/aria-controls
+                only. role="menu"/"menuitem" would promise arrow-key menu
+                navigation this widget doesn't implement; Tab/Enter reach the
+                links, which is the behavior that actually exists. */}
             <button
               type="button"
               className="mkt-nav-item"
               aria-expanded={open === 'product'}
-              aria-haspopup="true"
               aria-controls="mkt-product-menu"
               onClick={() => toggle('product')}
             >
               Product <span className="mkt-nav-caret" aria-hidden="true">▾</span>
             </button>
             {open === 'product' && (
-              <div className="mkt-mega" id="mkt-product-menu" role="menu" aria-label="Product">
+              <div className="mkt-mega" id="mkt-product-menu" aria-label="Product">
                 <div className="mkt-mega-panel">
                   {PRODUCT_MENU.map((group) => (
                     <div key={group.heading} className="mkt-mega-group">
                       <h3>{group.heading}</h3>
-                      {group.items.map((it) => (
-                        <Link key={it.label} to={it.to} role="menuitem">{it.label}</Link>
-                      ))}
+                      <ul>
+                        {group.items.map((it) => (
+                          <li key={it.label}><Link to={it.to}>{it.label}</Link></li>
+                        ))}
+                      </ul>
                     </div>
                   ))}
                 </div>
