@@ -1,10 +1,20 @@
 /*
  * Theme.
  *
- * The signed-in app is dark by default (a near-black charcoal, not pure black);
- * the public site stays light. An explicit [data-theme] on <html> overrides both. The dark values appear twice
- * because plain CSS has no way to reuse a block across a media query and an
- * attribute selector; they are kept adjacent so they stay in step.
+ * The signed-in app is LIGHT by default now: the console is the same premium
+ * editorial surface as the public site (white canvas, near-black ink, hairline
+ * neutral borders, the AmazAI purple as a selective accent). Dark is still a
+ * first-class explicit choice via [data-theme="dark"] on <html> (and 'system'
+ * follows the machine). The dark values appear twice because plain CSS has no
+ * way to reuse a block across a media query and an attribute selector; they are
+ * kept adjacent so they stay in step.
+ *
+ * The light tokens deliberately reuse the marketing layer's sensibilities:
+ * --canvas/--panel align to --mkt-canvas (#ffffff), --hairline/--line to
+ * --mkt-hairline/--mkt-line, --text to --mkt-ink (#0b0c0f), and --accent is
+ * promoted to the brand purple (--brand-3) so the console and the site read as
+ * one design system rather than two. The --mkt-* block below is the shared
+ * reference; these names are the app's half of the same foundation.
  *
  * Colour carries meaning and nothing else: warn and danger are reserved for
  * approvals and irreversibility. Nothing decorative borrows them, or the one
@@ -15,24 +25,30 @@
 :root {
   color-scheme: light;
 
-  /* ---- surface ---- */
-  --canvas:    #fbfbfd;
+  /* ---- surface: white is the primary canvas, editorial and quiet ---- */
+  --canvas:    #ffffff;   /* == --mkt-canvas: the page is white, not off-white */
   --panel:     #ffffff;
-  --raised:    #f5f6f8;
-  --raised-2:  #eceef2;
-  --line:      #e2e5ea;
-  --hairline:  #edeff3;
+  --raised:    #f7f7fa;   /* == --mkt-raised: faint fill for quiet strips */
+  --raised-2:  #eef0f4;
+  --line:      #d9dbe2;   /* == --mkt-line: emphasis edge */
+  --hairline:  #e8e9ee;   /* == --mkt-hairline: subtle neutral border */
 
-  /* ---- ink ---- */
-  --text:      #16181d;
-  --dim:       #5c6370;
-  --faint:     #8a909c;
+  /* ---- ink: near-black type on white, with a measured dim/faint ramp ---- */
+  --text:      #0b0c0f;   /* == --mkt-ink */
+  --dim:       #5c6270;   /* == --mkt-dim */
+  --faint:     #868c99;   /* == --mkt-faint */
+  /* A switched-off agent: a muted neutral that still reads on white but is
+     plainly quieter than --faint (idle), so "off" looks less alive than "idle".
+     Was a hardcoded dark slate that vanished on the light canvas. */
+  --disabled:  #aeb3bf;
 
-  /* ---- signal ---- */
-  --accent:     #2b6bff;
+  /* ---- signal ----
+     The accent is the AmazAI purple, used selectively (reuses --brand-3), the
+     same restraint as marketing. warn/danger/ok stay reserved for meaning. */
+  --accent:     var(--brand-3);   /* #8b2fe0 */
   --accent-ink: #ffffff;
   --warn-ink:   #ffffff;
-  --accent-dim: #b6c9ff;
+  --accent-dim: #d9c2f4;
   --ok:         #16885f;
   --warn:       #a96a06;
   --danger:     #c8372c;
@@ -41,25 +57,26 @@
   --warn-edge:   rgba(169, 106, 6, .30);
   --danger-wash: rgba(200, 55, 44, .06);
   --danger-edge: rgba(200, 55, 44, .28);
-  --accent-wash: rgba(43, 107, 255, .09);
+  --accent-wash: rgba(139, 47, 224, .07);   /* == --mkt-accent-wash */
 
-  --hover:     rgba(16, 24, 40, .045);
+  --hover:     rgba(11, 12, 15, .045);
 
   /* Conversation bubbles: what you said is the darkest thing on the page, what
-     they said is a quiet surface. */
-  --bubble-bot:      #eceef2;
-  --bubble-user:     #0d0f14;
+     they said is a quiet surface a hair off the white canvas. */
+  --bubble-bot:      #f0f1f5;
+  --bubble-user:     #0b0c0f;
   --bubble-user-ink: #ffffff;
-  --scrim:     rgba(16, 24, 40, .28);
-  --track:     rgba(16, 24, 40, .08);
+  --scrim:     rgba(11, 12, 15, .28);
+  --track:     rgba(11, 12, 15, .08);
   --btn:       #ffffff;
-  --btn-hover: #f4f5f7;
-  --btn-line:  #d8dce3;
+  --btn-hover: #f5f5f8;
+  --btn-line:  #d9dbe2;   /* == --mkt-line */
 
-  /* Light elevation is a shadow; dark elevation is a top highlight. Both
-     live behind the same two names so components never branch on theme. */
-  --lift: 0 1px 2px rgba(16, 24, 40, .05);
-  --pop:  0 1px 2px rgba(16, 24, 40, .06), 0 12px 28px -10px rgba(16, 24, 40, .18);
+  /* Light elevation is a soft editorial shadow (matching --mkt-lift/--mkt-pop);
+     dark elevation is a top highlight. Both live behind the same two names so
+     components never branch on theme. */
+  --lift: 0 1px 2px rgba(16, 20, 40, .05);
+  --pop:  0 2px 6px rgba(16, 20, 40, .06), 0 24px 48px -22px rgba(16, 20, 40, .22);
 
   /* ---- form ---- */
   --r-sm: 7px;
@@ -111,6 +128,7 @@
     --text:      #f5f5f7;
     --dim:       #97979f;
     --faint:     #66666d;
+    --disabled:  #3c434f;
 
     --accent:     #7b93ff;
     --accent-ink: #0a0c1c;
@@ -155,6 +173,7 @@
   --text:      #f5f5f7;
   --dim:       #97979f;
   --faint:     #66666d;
+  --disabled:  #3c434f;
 
   --accent:     #7b93ff;
   --accent-ink: #0a0c1c;

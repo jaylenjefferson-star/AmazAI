@@ -19,12 +19,13 @@ export { isPublicPath } from './publicRoutes';
 const KEY = 'amazai.theme';
 export const MODES = ['light', 'dark', 'system'];
 
-/** What the signed-in app shows until its owner chooses otherwise: dark.
+/** What the signed-in app shows until its owner chooses otherwise: light.
  *
- *  The public site is a different case and stays light (see `modeForPath`): a
- *  visitor on a dark-mode laptop should see the brand as designed rather than a
- *  dark variant they never asked for. 'system' remains available in both. */
-export const DEFAULT_MODE = 'dark';
+ *  The console is a premium light-mode editorial surface (the same white
+ *  canvas, near-black ink and hairline borders as the public site), so light is
+ *  the intended default everywhere, not just for signed-out visitors. Dark and
+ *  'system' remain first-class choices for anyone who prefers them. */
+export const DEFAULT_MODE = 'light';
 
 export function storedMode() {
   try {
@@ -74,14 +75,15 @@ export function hasSessionHint() {
   return false;
 }
 
-/** The mode a path should show. The signed-in app is dark unless they chose;
- *  anything a signed-out visitor can see is light unless they chose dark/system. */
+/** The mode a path should show. The signed-in app is light unless they chose
+ *  otherwise (its premium look is the light editorial one); anything a
+ *  signed-out visitor can see is likewise light unless they chose dark/system. */
 export function modeForPath(pathname, signedIn = hasSessionHint()) {
   const chosen = explicitMode();
   if (isPublicPath(pathname) || !signedIn) {
     return chosen === 'dark' || chosen === 'system' ? chosen : 'light';
   }
-  return chosen ?? 'dark';
+  return chosen ?? 'light';
 }
 
 /** Show that mode without persisting it: navigating is not a preference. */

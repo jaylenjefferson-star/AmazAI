@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AmazAI</title>
-    <meta name="theme-color" content="#101011" />
+    <meta name="theme-color" content="#ffffff" />
     <meta name="description" content="Build a team of AI companions that research, create, use your tools, run recurring work, and collaborate with you from one workspace." />
 
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
@@ -20,8 +20,9 @@
     <meta name="twitter:card" content="summary_large_image" />
     <script>
       // Before first paint, so no route flashes the wrong theme. The signed-in app
-      // is dark unless its owner chose otherwise; the public site is light unless
-      // they chose dark or system. Keep in step with modeForPath in src/theme.js.
+      // is light unless its owner chose otherwise (its premium look is the light
+      // editorial one); the public site is likewise light unless they chose dark
+      // or system. Keep in step with modeForPath in src/theme.js.
       try {
         var pub = /^\/(welcome-to-amazai|about|how-it-works|product|pricing|integrations|use-cases|security|for-teams|enterprise|faq|contact|legal|terms|privacy|cookie-policy|acceptable-use|security-disclosure|security-responsible-disclosure)(\/|$)/;
         var m = localStorage.getItem('amazai.theme');
@@ -33,10 +34,12 @@
         if (/[?&]demo=1/.test(location.search)) signedIn = true;
         var mode = (pub.test(location.pathname) || !signedIn)
           ? ((chosen === 'dark' || chosen === 'system') ? chosen : 'light')
-          : (chosen || 'dark');
+          : (chosen || 'light');
         if (mode !== 'system') document.documentElement.setAttribute('data-theme', mode);
       } catch (e) {
-        document.documentElement.setAttribute('data-theme', 'dark');
+        // A signed-out/unknown visitor should land on the light canvas, not a
+        // flash of dark, matching the default above.
+        document.documentElement.setAttribute('data-theme', 'light');
       }
     </script>
   </head>

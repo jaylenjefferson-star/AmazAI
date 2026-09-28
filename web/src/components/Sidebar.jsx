@@ -4,7 +4,7 @@ const STATE = {
   running:  { color: 'var(--accent)', label: 'running' },
   waiting:  { color: 'var(--warn)',   label: 'needs you' },
   idle:     { color: 'var(--faint)',  label: 'idle' },
-  disabled: { color: '#3c434f',       label: 'disabled' },
+  disabled: { color: 'var(--disabled)', label: 'disabled' },
 };
 
 function elapsed(startedAt) {
