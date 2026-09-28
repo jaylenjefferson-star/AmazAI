@@ -145,7 +145,7 @@ export default function AccountSettings({ onNavigate, anchor }) {
 
       <section className="settings-group">
         <h2 className="section-title" id="acct-look">Appearance</h2>
-        <Row title="Theme" note="Dark by default. Light and match-system are here if you prefer them.">
+        <Row title="Theme" note="Light by default. Dark and match-system are here if you prefer them.">
           <div className="seg">
             {MODES.map((m) => (
               <button key={m} type="button" className={mode === m ? 'on' : ''}
