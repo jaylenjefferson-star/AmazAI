@@ -14,14 +14,17 @@ from enum import Enum
 
 class ErrorClass(str, Enum):
     TRANSIENT = "transient"          # backoff and retry, max 3
-    NEEDS_REPLAN = "needs_replan"    # hand back to the model, max 2
+    NEEDS_REPLAN = "needs_replan"    # hand back to the model, max 3
     NEEDS_HUMAN = "needs_human"      # pause, do not retry
     DIRTY_SESSION = "dirty_session"  # rotate the session and retry, max 2
     TERMINAL = "terminal"            # fail now, never retry
 
 
 MAX_TRANSIENT_RETRIES = 3
-MAX_REPLANS = 2
+# Bumped from 2 to 3: a re-plan that lands on a rotated/fresh session deserves
+# a real second chance to recover before the run gives up, rather than burning
+# its last attempt on the same conditions that produced the first failure.
+MAX_REPLANS = 3
 # A dangling toolUseId is fixed by rotating the session, not by re-planning or
 # backing off, and the orchestrator has already rotated before the retry runs.
 # So a small cap is enough: the first retry lands on a clean session, and a

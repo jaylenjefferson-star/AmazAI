@@ -1,6 +1,6 @@
 import pytest
 
-from amazai.errors import ErrorClass, classify
+from amazai.errors import MAX_REPLANS, ErrorClass, classify
 
 
 class TestTransient:
@@ -65,8 +65,11 @@ class TestReplan:
     def test_test_failure_is_replannable(self):
         assert classify("1 test failed").cls is ErrorClass.NEEDS_REPLAN
 
-    def test_gives_up_after_two_replans(self):
-        assert classify("validation error", attempt=2).cls is ErrorClass.TERMINAL
+    def test_still_replans_one_below_the_ceiling(self):
+        assert classify("validation error", attempt=MAX_REPLANS - 1).cls is ErrorClass.NEEDS_REPLAN
+
+    def test_gives_up_at_the_replan_ceiling(self):
+        assert classify("validation error", attempt=MAX_REPLANS).cls is ErrorClass.TERMINAL
 
 
 class TestUnknownErrors:
