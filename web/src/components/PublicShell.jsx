@@ -62,23 +62,38 @@ const PRODUCT_MENU = [
   },
 ];
 
+// The primary items, listed once so the desktop bar and the mobile sheet stay
+// in step. Product keeps its mega-menu on desktop; on mobile it flattens into
+// the same disclosure list as everything else, so a phone never has to render
+// a hover-only panel.
+const PRIMARY_LINKS = [
+  { to: '/use-cases', label: 'Solutions' },
+  { to: '/faq', label: 'Resources' },
+  { to: '/pricing', label: 'Pricing' },
+];
+
 export function TopNav() {
   const { loginWithRedirect } = useAuth0();
   // Only one mega-menu today, but modelling "which panel is open" as a key
   // rather than a boolean leaves room for Resources to grow into one without
   // another piece of state fighting it.
   const [open, setOpen] = useState(null);
+  // The mobile sheet is separate state: it is a different affordance (a full
+  // disclosure panel, not a popup menu) and closing one should not close the
+  // other.
+  const [mobileOpen, setMobileOpen] = useState(false);
   const navRef = useRef(null);
   const location = useLocation();
 
   // Close on navigation and on an outside click -- otherwise the panel
   // survives a route change and sits open over the new page.
-  useEffect(() => { setOpen(null); }, [location.pathname]);
+  useEffect(() => { setOpen(null); setMobileOpen(false); }, [location.pathname]);
   useEffect(() => {
     function onClick(e) { if (navRef.current && !navRef.current.contains(e.target)) setOpen(null); }
-    // Escape closes the menu and is the expected keyboard affordance for a
-    // popup; focus stays on the trigger because we never moved it.
-    function onKey(e) { if (e.key === 'Escape') setOpen(null); }
+    // Escape closes whichever surface is open and is the expected keyboard
+    // affordance for a popup; focus stays on the trigger because we never
+    // moved it.
+    function onKey(e) { if (e.key === 'Escape') { setOpen(null); setMobileOpen(false); } }
     document.addEventListener('mousedown', onClick);
     document.addEventListener('keydown', onKey);
     return () => {
@@ -103,12 +118,13 @@ export function TopNav() {
               className="mkt-nav-item"
               aria-expanded={open === 'product'}
               aria-haspopup="true"
+              aria-controls="mkt-product-menu"
               onClick={() => toggle('product')}
             >
               Product <span className="mkt-nav-caret" aria-hidden="true">▾</span>
             </button>
             {open === 'product' && (
-              <div className="mkt-mega" role="menu" aria-label="Product">
+              <div className="mkt-mega" id="mkt-product-menu" role="menu" aria-label="Product">
                 <div className="mkt-mega-panel">
                   {PRODUCT_MENU.map((group) => (
                     <div key={group.heading} className="mkt-mega-group">
@@ -122,9 +138,9 @@ export function TopNav() {
               </div>
             )}
           </div>
-          <Link className="mkt-nav-item" to="/use-cases">Solutions</Link>
-          <Link className="mkt-nav-item" to="/faq">Resources</Link>
-          <Link className="mkt-nav-item" to="/pricing">Pricing</Link>
+          {PRIMARY_LINKS.map((l) => (
+            <Link key={l.label} className="mkt-nav-item" to={l.to}>{l.label}</Link>
+          ))}
         </nav>
 
         <div className="mkt-nav-cta">
@@ -143,7 +159,59 @@ export function TopNav() {
             Start free
           </button>
         </div>
+
+        {/* The hamburger only exists below the breakpoint where the primary
+            row hides (see .mkt-nav-toggle in styles.css). It toggles a simple
+            disclosure sheet rather than a second mega-menu, which is what a
+            phone can actually operate. */}
+        <button
+          type="button"
+          className="mkt-nav-toggle"
+          aria-expanded={mobileOpen}
+          aria-controls="mkt-mobile-menu"
+          aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+          onClick={() => setMobileOpen((v) => !v)}
+        >
+          <span className="mkt-nav-toggle-bar" aria-hidden="true" />
+          <span className="mkt-nav-toggle-bar" aria-hidden="true" />
+          <span className="mkt-nav-toggle-bar" aria-hidden="true" />
+        </button>
       </div>
+
+      {mobileOpen && (
+        <nav id="mkt-mobile-menu" className="mkt-mobile-menu" aria-label="Mobile">
+          {PRODUCT_MENU.map((group) => (
+            <div key={group.heading} className="mkt-mobile-group">
+              <p className="mkt-mobile-heading">{group.heading}</p>
+              {group.items.map((it) => (
+                <Link key={it.label} to={it.to} className="mkt-mobile-link">{it.label}</Link>
+              ))}
+            </div>
+          ))}
+          <div className="mkt-mobile-group">
+            <p className="mkt-mobile-heading">More</p>
+            {PRIMARY_LINKS.map((l) => (
+              <Link key={l.label} to={l.to} className="mkt-mobile-link">{l.label}</Link>
+            ))}
+          </div>
+          <div className="mkt-mobile-cta">
+            <button
+              type="button"
+              className="mkt-nav-signin"
+              onClick={() => startLogin(loginWithRedirect, { returnTo: '/' })}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              className="mkt-nav-start"
+              onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: '/welcome' })}
+            >
+              Start free
+            </button>
+          </div>
+        </nav>
+      )}
     </header>
   );
 }
