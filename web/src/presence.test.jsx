@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  applyEvent, clearStream, resetPresence, setConnection,
+  applyEvent, clearStream, resetPresence, seed, setConnection,
   useConnection, usePresence, useSteps, useStreamingText,
 } from './presence';
 
@@ -137,6 +137,73 @@ describe('the reply as it arrives', () => {
     act(() => applyEvent({ type: 'delta', threadId: 'dm-eng', runId: 'run-1', text: 'x' }, ctx));
     act(() => resetPresence());
     expect(result.current).toBeUndefined();
+  });
+});
+
+describe('seeding from durable state on load', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetPresence();
+  });
+  afterEach(() => {
+    resetPresence();
+    vi.useRealTimers();
+  });
+
+  it('folds a GET /presence snapshot in through the same store the socket feeds', () => {
+    const { result } = renderHook(() => usePresence());
+
+    act(() => seed({ presence: [
+      { agentId: 'eng', state: 'thinking', action: 'Planning', runId: 'run-1' },
+      // The backend spells these two differently from the store: needs_approval
+      // is the store's `approval`, done is `complete`.
+      { agentId: 'ops', state: 'needs_approval', action: 'Waiting for your approval', runId: 'run-2' },
+      { agentId: 'res', state: 'done', action: 'Shipped', runId: 'run-3' },
+      // idle is absence: nothing is put for it.
+      { agentId: 'fin', state: 'idle', action: '' },
+    ] }));
+
+    expect(result.current.eng).toMatchObject({ state: 'thinking', action: 'Planning', runId: 'run-1' });
+    expect(result.current.ops).toMatchObject({ state: 'approval' });
+    expect(result.current.res).toMatchObject({ state: 'complete', action: 'Shipped' });
+    expect(result.current.fin).toBeUndefined();
+  });
+
+  it('lets a seeded done state fade on the same timer a live run.end does', () => {
+    const { result } = renderHook(() => usePresence());
+    act(() => seed({ presence: [{ agentId: 'res', state: 'done', action: 'Shipped' }] }));
+    expect(result.current.res).toMatchObject({ state: 'complete' });
+    act(() => vi.advanceTimersByTime(4_000));
+    expect(result.current.res).toBeUndefined();
+  });
+
+  it('tolerates an empty or missing snapshot', () => {
+    const { result } = renderHook(() => usePresence());
+    act(() => { seed(undefined); seed({}); seed({ presence: [] }); });
+    expect(result.current).toEqual({});
+  });
+
+  it('does not overwrite an agent a live event already touched', () => {
+    // The socket opens synchronously; the /presence snapshot resolves later, so
+    // a live run.state can land first. That live state is fresher than the
+    // snapshot racing it, so the seed must not clobber it.
+    const { result } = renderHook(() => usePresence());
+
+    // A live event gets there first.
+    act(() => applyEvent(
+      { type: 'run.state', state: 'EXECUTING', threadId: 'dm-eng', runId: 'run-live' }, ctx));
+    expect(result.current.eng).toMatchObject({ state: 'thinking', runId: 'run-live' });
+
+    // The older snapshot resolves and tries to seed a stale state for the same
+    // agent (and a fresh agent the socket has not touched).
+    act(() => seed({ presence: [
+      { agentId: 'eng', state: 'done', action: 'Shipped', runId: 'run-old' },
+      { agentId: 'ops', state: 'thinking', action: 'Planning', runId: 'run-2' },
+    ] }));
+
+    // eng keeps its live state; ops (untouched by any event) is filled in.
+    expect(result.current.eng).toMatchObject({ state: 'thinking', runId: 'run-live' });
+    expect(result.current.ops).toMatchObject({ state: 'thinking', action: 'Planning' });
   });
 });
 

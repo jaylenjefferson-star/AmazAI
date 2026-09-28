@@ -55,6 +55,42 @@ export function put(agentId, state, action = '', runId = '') {
   if (ttl) timers.set(agentId, setTimeout(() => put(agentId, 'idle'), ttl));
 }
 
+/**
+ * Seed the live store from a durable-state snapshot (GET /presence).
+ *
+ * The socket only tells you what changes *while you are listening*, so on
+ * reload this store is empty until the next event -- a Bot that has been
+ * working the whole time looks idle until it happens to do something. The
+ * backend derives the same answer from the RUN#/TASK# rows that already exist
+ * (`services/amazai/presence.py`), and this folds that snapshot in through the
+ * exact same `put()` the socket uses, so a seeded Companion is indistinguishable
+ * from a live-driven one. The socket then keeps it current.
+ *
+ * The backend descriptor names two states this store spells differently:
+ * `needs_approval` is this store's `approval`, and `done` is its `complete`
+ * (which fades on the same timer a live `run.end` does). `idle` is absence, so
+ * it is skipped -- `put()` would only remove an entry that a later event might
+ * have added.
+ *
+ * The seed does NOT clobber a live entry. `PresenceFeed` opens the socket
+ * synchronously and folds this snapshot in from a later-resolving `/presence`
+ * fetch, so a live `run.state`/`run.end` event can land first; the snapshot it
+ * races is a moment older, so overwriting with it would replace fresher state
+ * with staler (and re-arm the 4s `complete` fade the live `run.end` already
+ * started). So an agent the socket has already touched is skipped here -- the
+ * live event wins, and the snapshot only fills in the agents no event has
+ * reached yet. The socket's own `applyEvent` path is unchanged.
+ */
+const SEED_STATES = { needs_approval: 'approval', done: 'complete' };
+
+export function seed(data) {
+  for (const p of data?.presence || []) {
+    if (!p?.agentId || p.state === 'idle') continue;
+    if (p.agentId in snapshot) continue;  // a live event already set this one; do not overwrite it
+    put(p.agentId, SEED_STATES[p.state] || p.state, p.action || '', p.runId || '');
+  }
+}
+
 /** For tests and for switching accounts. */
 export function resetPresence() {
   timers.forEach(clearTimeout);

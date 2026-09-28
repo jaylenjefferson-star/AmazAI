@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 import boto3
 
-from amazai import approvals, handoffs, keys as K, metrics, runs, session_lease
+from amazai import approvals, collab, handoffs, keys as K, metrics, runs, session_lease
 from amazai.evidence import EvidenceWriter
 from amazai.push import Push
 from amazai.states import PAUSED, SWEEPABLE, RunState
@@ -29,7 +29,8 @@ from amazai.store import Store, discover_owner_ids
 
 STALE_MINUTES = 10
 
-_RESULT_KEYS = ("approvalsExpired", "runsResumed", "runsFailed", "runsExpired")
+_RESULT_KEYS = ("approvalsExpired", "runsResumed", "runsFailed", "runsExpired",
+                "deferredWakesDrained")
 
 
 def handler(event, context):  # noqa: ARG001
@@ -102,6 +103,19 @@ def _sweep_owner(store: Store, push: Push, now: datetime) -> dict:
                 _sweep_run(store, push, run, state, now, result)
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
+
+    # 3. Deferred agent-to-agent messages nobody woke. A `priority: false`
+    # message is a durable AgentMessage row with a `PendingWake` marker and no
+    # run behind it; `collab.drain_deferred_wakes` claims each marker, spawns
+    # the recipient's run within the same concurrency budget the priority path
+    # respects, and hands back the ones that produced a run so we fire the
+    # async invoke here -- the same seam `_resume` uses.
+    try:
+        for marker in collab.drain_deferred_wakes(store, now=now):
+            _resume_drained(store, marker["runId"])
+            result["deferredWakesDrained"] += 1
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
 
     return result
 
@@ -178,6 +192,21 @@ def _sweep_run(store: Store, push: Push, run: dict, state: RunState,
     # No unresolved side effect and still inside its deadline: safe to
     # resume on the same session, with the agent's files and git state intact.
     _resume(store, run, result)
+
+
+def _resume_drained(store: Store, run_id: str) -> None:
+    """Wake a freshly-created recipient run for a drained deferred message.
+
+    A plain wake, not a resume: this run was just created by
+    `collab.drain_deferred_wakes`, so it starts from its trigger exactly as the
+    priority path's `orchestrator._message_agent` wake does -- no `resume` flag.
+    """
+    fn = os.environ.get("ORCHESTRATOR_FN_ARN")
+    if fn:
+        boto3.client("lambda").invoke(
+            FunctionName=fn, InvocationType="Event",
+            Payload=json.dumps({"runId": run_id, "ownerId": store.owner_id}).encode(),
+        )
 
 
 def _resume(store: Store, run: dict, result: dict) -> None:

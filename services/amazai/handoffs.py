@@ -37,6 +37,31 @@ MAX_ACTIVE_CHILDREN_PER_TASK = 6
 #: from spending unbounded concurrent compute over time.
 MAX_ACTIVE_RUNS_PER_ROOM = 12
 
+#: The handoff/child-run TREE analogue of `collab.DEFAULT_MAX_HOP_DEPTH`.
+#: That guard bounds a *message reply chain* (A messages B messages C...);
+#: this one bounds the *delegation tree* (CEO hands off to Marketing hands
+#: off to Research...). They are different shapes -- a handoff spawns a fresh
+#: child run on its own thread with its own trace, so it never accrues the
+#: hop count `collab.send` counts -- and without a depth of its own a single
+#: operator message could nest delegation without bound, each level spending
+#: more compute than the last. Enforced at the one choke point both the
+#: auto-accept path and the manual `POST /handoffs` path go through
+#: (`accept`), and pre-checked in `can_auto_accept` so a too-deep handoff
+#: falls back to `proposed` for a human exactly like every other refusal.
+MAX_DELEGATION_DEPTH = 6
+
+
+def _depth_of(run: dict) -> int:
+    """How many handoffs deep a run already sits.
+
+    A run started directly by the operator or a routine carries no
+    `delegationDepth` -- it is the root of any tree it starts, depth 0. A run
+    spawned by `accept` (trigger.type == 'handoff') or by
+    `notify_coordinator_if_child` (trigger.type == 'child_completion') carries
+    the level it was created at forward in its trigger.
+    """
+    return int((run.get("trigger") or {}).get("delegationDepth", 0))
+
 
 class HandoffError(ValueError):
     """A handoff cannot be decided as asked -- no such recipient, or it was
@@ -67,7 +92,7 @@ def can_auto_accept(store: Store, handoff: dict, receiver: dict, coordinator_run
                     limits: collab.MessagingLimits | None = None) -> tuple[bool, str]:
     """Whether `handoff` may skip the human and wake `receiver` now.
 
-    Five gates, in order of how cheaply they refuse:
+    Six gates, in order of how cheaply they refuse:
 
     1. The requested action, if named, is never on the always-approve floor
        or the never-approvable list -- checked with the exact same
@@ -76,14 +101,19 @@ def can_auto_accept(store: Store, handoff: dict, receiver: dict, coordinator_run
     2. If the action names an app (`"slack.post"` -> `slack`), the receiver
        actually holds a grant for it. A freeform action ("review the draft")
        names no app and needs none.
-    3. The task this handoff belongs to is under its own fan-out ceiling --
+    3. The delegation tree this handoff would extend is under
+       `MAX_DELEGATION_DEPTH` -- so one operator message cannot spawn an
+       unbounded CEO->child->grandchild cascade. Checked before the
+       pending-children gate because it refuses on the coordinator run alone,
+       with no task read.
+    4. The task this handoff belongs to is under its own fan-out ceiling --
        `MAX_ACTIVE_CHILDREN_PER_TASK` outstanding children at once, so one
        operator message cannot spend unbounded concurrent compute.
-    4. The room this task lives in is under its own ceiling --
+    5. The room this task lives in is under its own ceiling --
        `MAX_ACTIVE_RUNS_PER_ROOM` runs in flight across every task the room
-       has, not just this one, so a coordinator cannot get around gate 3 by
+       has, not just this one, so a coordinator cannot get around gate 4 by
        simply starting a fresh task each time the last one settles.
-    5. The receiver is under its own concurrency and budget ceiling -- the
+    6. The receiver is under its own concurrency and budget ceiling -- the
        same `collab.may_wake_now` gate a priority `message_agent` wake
        already has to clear.
 
@@ -106,6 +136,11 @@ def can_auto_accept(store: Store, handoff: dict, receiver: dict, coordinator_run
             if connectors.grant_for(granted, app_slug) is None:
                 name = receiver.get("name", receiver["agentId"])
                 return False, f"{name} has no grant for {app_slug!r}"
+
+    depth = _depth_of(coordinator_run)
+    if depth >= MAX_DELEGATION_DEPTH:
+        return False, (f"delegation is already {depth} levels deep "
+                       f"(max {MAX_DELEGATION_DEPTH}); this handoff would nest further")
 
     task = store.try_get(K.task_pk(_task_id_for(coordinator_run)), "META")
     pending = int((task or {}).get("pendingChildren") or 0)
@@ -196,6 +231,17 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
     receiver = _receiver(store, handoff["toAgentId"])
     task_id = _task_id_for(coordinator_run)
 
+    # The single choke point both the auto path (`can_auto_accept` already
+    # refused, but a manual `POST /handoffs` did not run that) and the human
+    # path pass through. Raising here -- before the handoff row is claimed --
+    # keeps a too-deep manual accept from spawning a child, the same bound
+    # `can_auto_accept`'s gate 3 gives the auto path.
+    child_depth = _depth_of(coordinator_run) + 1
+    if child_depth > MAX_DELEGATION_DEPTH:
+        raise HandoffError(
+            f"delegation is already {child_depth - 1} levels deep "
+            f"(max {MAX_DELEGATION_DEPTH}); this handoff would nest further")
+
     # `K.run_pk(task_id)`, not `coordinator_run["pk"]`: a handoff proposed by
     # a continuation run still lives under the task's root run (see
     # `orchestrator._record_handoff`), and this has to agree with wherever it
@@ -250,13 +296,21 @@ def accept(store: Store, coordinator_run: dict, handoff: dict, *,
         goal=message["text"],
         trigger={"type": "handoff", "handoffId": decided["handoffId"],
                  "coordinatorRunId": coordinator_run["runId"], "taskId": task_id,
-                 "fromAgentId": decided["fromAgentId"], "traceId": message["traceId"]})
+                 "fromAgentId": decided["fromAgentId"], "traceId": message["traceId"],
+                 # This child sits one handoff deeper than its coordinator, so
+                 # if it fans out again `can_auto_accept`/`accept` count from
+                 # here, not from zero.
+                 "delegationDepth": child_depth})
 
     store.put({
         "pk": K.task_pk(task_id), "sk": K.task_child_sk(child["runId"]),
         "entity": "TaskChild", "taskId": task_id, "runId": child["runId"],
         "agentId": child["agentId"], "handoffId": decided["handoffId"],
         "coordinatorRunId": coordinator_run["runId"], "threadId": child_thread_id,
+        # Stored on the row too, not only on the child's own trigger, so the
+        # fan-in continuation (`notify_coordinator_if_child`) can carry the
+        # batch's depth forward without re-reading every child run.
+        "delegationDepth": child_depth,
         "status": "active",
     })
     # After the child row exists, never before: `notify_coordinator_if_child`
@@ -379,11 +433,25 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
            f"({done} succeeded). Here's what came back:\n{lines}\n\n"
            "Continue the task: hand off the next step, or post the result.")
 
+    # Carry the *coordinator's own* level onto the synthesis run, not the
+    # children's. The children sit one deeper than the coordinator
+    # (`batch_depth = coordinator_depth + 1`); the continuation is the same
+    # coordinator resuming on the same thread, so it must resume at the
+    # coordinator's level (`batch_depth - 1`). That keeps the bound a TREE
+    # depth: a fresh handoff from the continuation lands at the same level the
+    # original fan-out did, rather than one deeper every fan-out/join cycle --
+    # otherwise an iterating coordinator climbs a level per cycle and hits
+    # MAX_DELEGATION_DEPTH after a handful of iterations even though no chain
+    # is getting any deeper. `max(0, ...)` guards a batch whose children
+    # somehow carried no depth.
+    batch_depth = max((int(c.get("delegationDepth") or 0) for c in children), default=0)
+    coordinator_depth = max(0, batch_depth - 1)
     continuation = runs.create(
         store, agent_id=task["coordinatorAgentId"], thread_id=task["threadId"], goal=goal,
         trigger={"type": "child_completion", "taskId": task_id,
                  "childRunId": run["runId"], "childAgentId": run["agentId"],
-                 "outcome": outcome, "childCount": len(children), "doneCount": done})
+                 "outcome": outcome, "childCount": len(children), "doneCount": done,
+                 "delegationDepth": coordinator_depth})
 
     store.update(K.task_pk(task_id), "META", {
         "coordinatorRunId": continuation["runId"],
