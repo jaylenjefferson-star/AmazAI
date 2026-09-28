@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Companion from '../characters/Companion';
 import Logo from '../components/Logo';
 import { ARCHETYPES, ARCHETYPE_KEYS } from '../characters/archetypes';
@@ -12,6 +12,7 @@ import { rememberSetupDone } from '../hooks/useFirstRun';
 // sees, but every entry has to be one the validator allows -- a colour the API
 // refuses would fail the create at the very last step.
 const PALETTE = ['#2f6fe4', '#8b5cf6', '#12a594', '#e8833a', '#e93d82', '#3dc98a'];
+const LEGAL_VERSION = '2026.09';
 
 /**
  * First run: meet your first Bot.
@@ -45,6 +46,7 @@ export default function Onboarding() {
   const [color, setColor] = useState(PALETTE[0]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [accepted, setAccepted] = useState(false);
   // True only while automatically retrying a first-time account runtime
   // that is still being created -- see PROVISIONING_RETRY_MAX below.
   const [retrying, setRetrying] = useState(false);
@@ -114,7 +116,7 @@ export default function Onboarding() {
         <ul className="promise-list">
           <li><strong>Nothing irreversible happens silently.</strong> Approvals name the account, the target and whether it can be undone.</li>
           <li><strong>A tool nobody granted is absent</strong>, not refused. Bots cannot argue their way into access.</li>
-          <li><strong>Your credentials stay yours.</strong> Connector tokens live with the provider; AmazAI holds a reference, not a key.</li>
+          <li><strong>Your credentials stay yours.</strong> Connector credentials are handled by Composio; AmazAI stores the connection reference it needs to request authorized actions.</li>
         </ul>
       ),
       canNext: true,
@@ -123,8 +125,18 @@ export default function Onboarding() {
       title: `${botName} is ready`,
       body: 'It will say hello as soon as you open your workspace. Everything else can be changed from Settings.',
       state: 'complete',
-      content: null,
-      canNext: true,
+      content: (
+        <label className="field" style={{ alignItems: 'flex-start' }}>
+          <span>
+            <input type="checkbox" checked={accepted}
+                   onChange={(e) => setAccepted(e.target.checked)} />
+            {' '}I agree to the <Link to="/terms" target="_blank" rel="noreferrer">Terms of Use</Link>,
+            {' '}<Link to="/acceptable-use" target="_blank" rel="noreferrer">Acceptable Use Policy</Link>,
+            {' '}and <Link to="/privacy" target="_blank" rel="noreferrer">Privacy Policy</Link>.
+          </span>
+        </label>
+      ),
+      canNext: accepted,
     },
   ];
 
@@ -161,7 +173,11 @@ export default function Onboarding() {
           avatar: { shape: archetype, color },
         }, idempotencyKey);
         // eslint-disable-next-line no-await-in-loop
-        await api.saveSettings({ workspaceName: workspace.trim(), onboarded: true });
+        await api.saveSettings({
+          workspaceName: workspace.trim(),
+          onboarded: true,
+          legalAcceptance: { version: LEGAL_VERSION, accepted: true },
+        });
         rememberSetupDone();
         // Straight into the conversation: the greeting is waiting there, and an
         // inbox with one unread row would only be a longer way to the same place.

@@ -1,8 +1,8 @@
 ---
 title: Privacy Policy
 version: 2026.09
-effective: 2026-09-19
-last_updated: 2026-09-19
+effective: 2026-09-28
+last_updated: 2026-09-28
 contact: privacy@amazai.co
 ---
 
@@ -16,7 +16,9 @@ AmazFlow, LLC, a Georgia limited liability company, doing business as AmazAI ("A
 
 This Policy applies to personal information we collect directly from you when you visit our website, request information, communicate with us, create or use an account, or otherwise interact with the Service. It also describes our handling of the information that the Service processes at your direction.
 
-If an organization gives you access to AmazAI, that organization may control the account and the Workspace Content processed through it. In that case, your organization is generally responsible for deciding what information is placed in the Service and for responding to requests concerning that information. We will support the organization as appropriate under our agreement with it.
+For account administration, billing, security, our website, and our direct business relationship with you, AmazAI generally decides why and how information is processed. If an organization gives you access to AmazAI, the organization generally decides why and how Workspace Content is processed and AmazAI processes that content on its behalf. The exact legal role depends on the processing and applicable law.
+
+An organization’s authorized administrators may manage users and permissions; access, export, preserve, or delete Workspace Content; configure companions, routines, connectors, approvals, and retention; review activity; and suspend or terminate access. Your organization is responsible for giving its users and other affected individuals required notices and permissions. We will support the organization as required by law and the applicable agreement. Business customers may request our [Data Processing Addendum](/data-processing-addendum).
 
 The Service is not directed to children under 16. We do not knowingly collect personal information from children under 16. If you believe a child has provided us personal information, please contact us so we can take appropriate action.
 
@@ -26,7 +28,7 @@ We collect information in the following categories.
 
 ### Information you provide directly
 
-This may include your name, work email address, company, job title, account credentials, and the contents of messages or requests you send to us through the website, email, or support channels. If paid access becomes available, it may also include billing and transaction information needed to administer the account. We do not store full payment-card information unless expressly stated at the point of collection and handled through an approved payment provider.
+This may include your name, work email address, company, job title, account credentials, and the contents of messages or requests you send through the website, email, or support channels. If you select paid access, we receive billing identifiers, subscription status, invoices, and transaction information needed to administer the account. Stripe collects payment-card information directly; AmazAI does not receive or store the full card number.
 
 ### Account and service information
 
@@ -34,7 +36,11 @@ When you use the Service, we may collect information about your account, organiz
 
 ### Workspace Content
 
-The Service may handle agent instructions, routines, chat history between you and your agents, files your agents create, and information that agents read from or write to a connected third-party service. We call this **Workspace Content**. Workspace Content remains yours or the applicable organization’s, subject to the rights needed for us to operate the Service.
+The Service may handle companion instructions, routines, room and chat history, files and artifacts, approval records, tool arguments and results, and information that companions read from or write to a connected third-party service. We call this **Workspace Content**. Workspace Content remains yours or the applicable organization’s, subject to the limited rights needed for us to operate the Service.
+
+### Information from connected and third-party services
+
+When you connect a service, we may receive a connected-account identifier, connection status, permitted scopes, service metadata, and the content returned by an authorized tool call. We receive this information from the service you selected and from our connector provider, Composio. The information available depends on the permissions granted and the action requested.
 
 ### Information collected automatically
 
@@ -56,21 +62,23 @@ We may use aggregated or de-identified information to understand how the Service
 
 ### No model training
 
-We do **not** use your personal information or Workspace Content to train, fine-tune, or improve general-purpose AI models. We select AI model providers that are contractually restricted from using that content for model training. This does not prevent AmazAI from processing your instructions and Workspace Content to provide the agent output or action you requested.
+We do **not** use your personal information or Workspace Content to train or fine-tune a general-purpose AI model, and we do not authorize our production model service to do so. Relevant prompts, instructions, files, conversation context, and connector results may be processed by the configured model service to provide the output or action you requested. Limited operational or security retention may occur under the applicable configuration and agreement; this is not a promise of zero processing or zero retention. See our [AI Transparency & Responsible Use Notice](/ai-transparency) and [Subprocessor List](/subprocessors).
 
 ## 4. Connectors and third-party services
 
-You may authorize AmazAI to connect to third-party accounts or services, such as email, collaboration, source-control, or file-storage providers. We use the permissions and credentials you authorize only to carry out the instructions, routines, and actions configured for the Service.
+You may authorize AmazAI to connect to third-party accounts or services, such as email, collaboration, source-control, or file-storage providers. For supported integrations, Composio hosts the authorization flow, stores the underlying credential or OAuth token, and uses it to authenticate the requested action. AmazAI receives a connection identifier rather than placing the underlying provider credential in a model prompt. AmazAI sends tool arguments and receives tool results through Composio as needed to carry out the instructions, routines, and actions you configure.
+
+Tool arguments, results, files, and execution metadata may be processed or retained by AmazAI, Composio, the connected service, and an applicable model service. Retention depends on the feature, configuration, and provider agreement. A credential staying outside an AI prompt does not mean the associated business data is never processed or logged.
 
 You are responsible for ensuring that you have authority to connect an account and direct access to its information. You may disconnect a connector through the Service or by contacting us; disconnection stops future access through that connector, although it does not automatically erase information already placed in Workspace Content or retained in logs and backups under this Policy.
 
-Third-party services operate under their own terms and privacy policies. Their handling of information is not controlled by this Policy.
+Third-party services operate under their own terms and privacy policies. Their handling of information is not controlled by this Policy. Current operational providers are identified in the [Subprocessor List](/subprocessors).
 
 ## 5. When we disclose information
 
 We do not sell personal information. We disclose information only in the limited circumstances below:
 
-- **Service providers.** Vendors that provide hosting, data storage, security, communications, AI-model infrastructure, and similar operational services, under contractual obligations to protect the information and use it only for authorized purposes.
+- **Service providers.** Vendors identified in our [Subprocessor List](/subprocessors) that provide hosting, authentication, data storage, security, payment processing, connected-account execution, AI-model infrastructure, and similar operational services under applicable agreements.
 - **Your authorized recipients.** Third-party services and recipients that you direct us to access or contact through a connector, agent, routine, or other Service feature.
 - **Professional advisors and corporate transactions.** Attorneys, accountants, insurers, auditors, and a successor or prospective successor in a merger, acquisition, financing, or sale of assets, subject to appropriate confidentiality protections.
 - **Legal and safety requirements.** Authorities or other parties when we reasonably believe disclosure is required by law, valid legal process, or necessary to protect the rights, property, safety, or security of AmazAI, our users, or others.
@@ -82,6 +90,8 @@ We do not share personal information for cross-context behavioral advertising as
 Depending on where you live and the applicable law, you may have the right to request access to, correction of, deletion of, or a portable copy of your personal information. You may also have the right to object to or restrict certain processing, opt out of a sale or sharing of personal information, or appeal a decision about a privacy request. AmazAI does not sell or share personal information for cross-context behavioral advertising.
 
 To submit a request, email **privacy@amazai.co**. We may need to verify your identity and authority before acting. If we cannot fulfill a request, we will explain the reason as required by applicable law. We will not discriminate against you for exercising an applicable privacy right.
+
+At or before material collection points—such as account creation, checkout, and connector authorization—we may provide a shorter notice describing the categories collected and their purpose and link to this Policy. If we ever sell personal information or share it for cross-context behavioral advertising, we will provide the notices and opt-out methods required by applicable law before doing so.
 
 If your information was submitted to the Service by an organization that controls the relevant account or Workspace Content, please direct your request to that organization first. We will assist it in responding where required by law or our agreement.
 
@@ -98,15 +108,17 @@ We retain information for as long as reasonably necessary for the purposes descr
 | Security logs | Up to 12 months |
 | Backups | Purged on a rolling cycle within 35 days |
 
-Deletion from active systems may not immediately remove a record from a backup. Backup copies are isolated and age out according to the backup cycle. We may retain information longer where required by law, necessary to resolve a dispute, or necessary to protect the security and integrity of the Service.
+Deletion from active systems may not immediately remove a record from an isolated backup; backup copies age out according to the backup cycle and are not returned to ordinary use. We instruct applicable subprocessors to delete covered Workspace Content in accordance with our agreements and legal obligations. Deletion does not remove information a companion already wrote to a connected service or information that another recipient independently controls.
+
+We may retain information longer where required by law, subject to a legal hold, necessary to resolve a dispute, or necessary to protect the security and integrity of the Service. Where available, an organization administrator may export Workspace Content before account closure.
 
 ## 8. Security
 
-We use administrative, technical, and organizational safeguards designed to protect information. These safeguards include access controls, isolated agent workspaces, encryption in transit and at rest, encrypted storage of connector credentials, approval gates for configured actions, and activity records. No method of transmission or storage is completely secure, and we cannot guarantee absolute security. More information is available in our [Security & Responsible Disclosure](/security-disclosure) policy.
+We use administrative, technical, and organizational safeguards designed to protect information. These safeguards include access controls, isolated companion workspaces, encryption in transit and at rest for applicable service components, approval gates for configured actions, and activity records. For Composio-managed connections, Composio stores the underlying provider credential and AmazAI stores the identifiers and access needed to request authorized execution. No method of transmission or storage is completely secure, and we cannot guarantee absolute security. More information is available in our [Security & Responsible Disclosure](/security-disclosure) policy.
 
 ## 9. International processing
 
-AmazAI is based in the United States, and information we collect is generally processed in the United States. When information is transferred or processed in another country, it may be subject to that country’s laws. We take reasonable steps to protect information in a manner consistent with this Policy and applicable law.
+AmazAI is based in the United States, and information is generally processed in the United States and other locations where our providers operate. When information is transferred or processed in another country, it may be subject to that country’s laws. If applicable law requires a recognized transfer mechanism, the applicable customer agreement or addendum will identify that mechanism. We do not claim a specific data-residency location or transfer-framework participation unless stated in writing.
 
 ## 10. Changes to this Policy
 

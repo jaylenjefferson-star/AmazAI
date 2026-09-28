@@ -7,12 +7,11 @@ const DOCS = [
   { to: '/privacy', title: 'Privacy Policy', body: 'What we collect, why, and how it is stored and deleted.' },
   { to: '/cookie-policy', title: 'Cookie Policy', body: 'The cookies AmazAI sets and why.' },
   { to: '/acceptable-use', title: 'Acceptable Use Policy', body: 'What agents may not be used to do.' },
+  { to: '/ai-transparency', title: 'AI Transparency & Responsible Use', body: 'How models, agents, approvals, and human oversight work.' },
+  { to: '/billing-policy', title: 'Billing, Cancellation & Refunds', body: 'Subscriptions, credits, cancellation, and refund rules.' },
   { to: '/security-disclosure', title: 'Security & Responsible Disclosure', body: 'How we handle security reports, and how to send us one.' },
-];
-
-const COMING_SOON = [
-  { title: 'Subprocessors', body: 'A public list of the vendors AmazAI relies on to run the service.' },
-  { title: 'Data Processing Agreement (DPA)', body: 'For teams that need a signed DPA in place before onboarding.' },
+  { to: '/subprocessors', title: 'Subprocessor List', body: 'The providers AmazAI relies on to operate the Service.' },
+  { to: '/data-processing-addendum', title: 'Data Processing Addendum', body: 'Data-processing terms available for business customers.' },
 ];
 
 export default function Legal() {
@@ -38,15 +37,12 @@ export default function Legal() {
       </section>
 
       <section className="about-contact">
-        <h2>Coming soon</h2>
-        <div className="about-grid">
-          {COMING_SOON.map((d) => (
-            <div key={d.title} className="about-card muted">
-              <h2>{d.title}</h2>
-              <p>{d.body}</p>
-            </div>
-          ))}
-        </div>
+        <h2>Questions or contract requests</h2>
+        <p>
+          Contact <a href="mailto:legal@amazai.co">legal@amazai.co</a> for legal terms,
+          {' '}<a href="mailto:privacy@amazai.co">privacy@amazai.co</a> for privacy and data-processing requests,
+          or <a href="mailto:security@amazai.co">security@amazai.co</a> for security reports.
+        </p>
       </section>
     </PublicShell>
   );

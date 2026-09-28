@@ -50,6 +50,11 @@ DEFAULTS: dict = {
     #: the flag was a fact about the device, and setup is a fact about the
     #: account.
     "onboardedAt": None,
+    #: Version and server timestamp of the policy bundle affirmatively accepted
+    #: during setup. Kept with account settings because acceptance belongs to
+    #: the account, not the browser that happened to complete onboarding.
+    "legalAcceptedVersion": None,
+    "legalAcceptedAt": None,
     #: Conversations pinned to the top of the inbox, in the order chosen. An
     #: account fact rather than a browser one, for the same reason
     #: `onboardedAt` is: a pin made on the laptop should be on the phone.
@@ -83,6 +88,9 @@ def read(store) -> dict:
         "defaultTimezone": stored.get("defaultTimezone", DEFAULTS["defaultTimezone"]),
         "workspaceName": stored.get("workspaceName", DEFAULTS["workspaceName"]),
         "onboardedAt": stored.get("onboardedAt", DEFAULTS["onboardedAt"]),
+        "legalAcceptedVersion": stored.get(
+            "legalAcceptedVersion", DEFAULTS["legalAcceptedVersion"]),
+        "legalAcceptedAt": stored.get("legalAcceptedAt", DEFAULTS["legalAcceptedAt"]),
         "pinned": list(stored.get("pinned", DEFAULTS["pinned"])),
         "updatedAt": stored.get("updatedAt"),
     }
@@ -95,7 +103,8 @@ def write(store, body: dict) -> dict:
     silently reset a theme it never showed.
     """
     unknown = sorted(set(body) - {"notifications", "theme", "defaultTimezone",
-                                  "workspaceName", "onboarded", "pinned"})
+                                  "workspaceName", "onboarded", "pinned",
+                                  "legalAcceptance"})
     _require(not unknown, f"not a setting: {unknown}")
 
     current = read(store)
@@ -104,6 +113,8 @@ def write(store, body: dict) -> dict:
            "defaultTimezone": current["defaultTimezone"],
            "workspaceName": current["workspaceName"],
            "onboardedAt": current["onboardedAt"],
+           "legalAcceptedVersion": current["legalAcceptedVersion"],
+           "legalAcceptedAt": current["legalAcceptedAt"],
            "pinned": list(current["pinned"])}
 
     if "notifications" in body:
@@ -169,6 +180,18 @@ def write(store, body: dict) -> dict:
         _require(body["onboarded"] is True,
                  "onboarded is asserted by finishing setup and is not unset here")
         nxt["onboardedAt"] = current["onboardedAt"] or now_iso()
+
+    if "legalAcceptance" in body:
+        acceptance = body["legalAcceptance"]
+        _require(isinstance(acceptance, dict), "legalAcceptance must be an object")
+        _require(acceptance.get("accepted") is True,
+                 "legalAcceptance must affirm accepted: true")
+        version = acceptance.get("version")
+        _require(isinstance(version, str) and re.match(r"^\d{4}\.\d{2}$", version),
+                 "legalAcceptance version must use YYYY.MM")
+        if version != current["legalAcceptedVersion"]:
+            nxt["legalAcceptedVersion"] = version
+            nxt["legalAcceptedAt"] = now_iso()
 
     store.put({
         "pk": K.settings_pk(store.owner_id), "sk": "META",

@@ -1,8 +1,8 @@
 ---
 title: Acceptable Use Policy
 version: 2026.09
-effective: 2026-09-19
-last_updated: 2026-09-19
+effective: 2026-09-28
+last_updated: 2026-09-28
 contact: legal@amazai.co
 ---
 
@@ -29,16 +29,30 @@ You may not use the Service, or configure an agent, routine, connector, or workf
 - create, distribute, or facilitate malware; interfere with service availability; or scan, probe, test, or attack a system without the owner’s written authorization;
 - disable, circumvent, interfere with, or attempt to bypass AmazAI approval gates, sandboxing, verification controls, activity logs, access controls, or other safety and accountability features;
 - harass, threaten, exploit, discriminate against, or cause material harm to another person;
+- create, possess, solicit, or distribute child sexual abuse material, sexual content involving a minor, non-consensual intimate imagery, or content that facilitates sexual exploitation or human trafficking;
+- promote or facilitate violent extremist activity, credible threats of violence, or the acquisition or use of weapons to harm people or unlawfully damage property;
+- encourage, instruct, or facilitate suicide, self-harm, eating-disorder behavior, or other imminent physical harm;
+- conduct unlawful surveillance; identify, track, or profile a person using biometric or highly sensitive information without lawful authority and required notice or consent; or infer sensitive traits in a way that could materially harm a person;
+- create social scores, individual predictive-policing profiles based solely on profiling, or systems designed to manipulate a person through deception or exploitation of age, disability, or another vulnerability;
+- generate or distribute deceptive synthetic media, impersonation, or false evidence intended to defraud, intimidate, interfere with civic participation, or materially mislead the public;
+- target political persuasion or voter-influence activity using sensitive personal information, or interfere with voting, registration, ballot access, or election administration;
+- buy, sell, distribute, or facilitate illegal drugs, controlled substances, unlawfully obtained personal data, stolen goods, or other illegal or regulated goods or services without required authorization;
 - use the Service to create or operate a competing product, or commercially benchmark the Service for a competitor, without our prior written consent; or
 - violate the rights of others, including intellectual-property, privacy, publicity, confidentiality, or data-protection rights.
 
-## 3. The core rule: a person approves high-impact actions
+## 3. Consequential decisions about people
+
+You may not use the Service to make a final decision—or as the sole or determinative basis for a decision—about a person’s eligibility, selection, access, or terms in employment, housing, credit, lending, insurance, education admission, healthcare, legal services, public benefits, or another essential service.
+
+A use that materially supports such a decision requires a separately reviewed enterprise deployment and written agreement addressing legally sufficient human review, testing, notice, recordkeeping, explanation, appeal, accessibility, and other required safeguards. Human approval does not make an otherwise unlawful or prohibited use permissible.
+
+## 4. The core rule: a person approves high-impact actions
 
 AmazAI agents can act through the connectors you authorize; they do more than produce text. Approval gates, constrained permissions, sandboxes, verification steps, and activity records exist so that consequential actions are reviewed by a person rather than silently executed outside human control.
 
 Configuring a workflow to skip or evade a required approval for a high-impact action violates this Policy even if a technical configuration might otherwise permit the action. You are responsible for setting approval thresholds that reflect the nature, scale, reversibility, and potential impact of each workflow.
 
-## 4. Your responsibilities
+## 5. Your responsibilities
 
 You are responsible for every agent, routine, connector, data source, approval setting, and instruction you configure or authorize. In particular, you must ensure that:
 
@@ -48,14 +62,18 @@ You are responsible for every agent, routine, connector, data source, approval s
 - sensitive or regulated data is used only in an approved configuration; and
 - important outputs and actions are reviewed before you rely on them.
 
+If an agent communicates with a third party, you must ensure the recipient, content, timing, authority, and any legally required AI disclosure are appropriate. You must preserve required labels or machine-readable provenance information on AI-generated or manipulated content.
+
 AI output can be incomplete, inaccurate, or inappropriate for a particular situation. AmazAI does not replace your professional judgment, internal controls, or legal obligations.
 
-## 5. Enforcement
+## 6. Enforcement
 
 We may investigate suspected violations of this Policy. When reasonably necessary to prevent or stop a violation, protect the Service, or reduce risk to others, we may restrict or suspend a specific agent, routine, connector, workflow, user, or account. We will provide notice as soon as reasonably practicable unless notice would itself increase risk, such as during an active unauthorized-access incident.
 
 Enforcement rights under this Policy are in addition to any other remedies available to AmazAI under law or an applicable agreement.
 
-## 6. Reporting
+We may consider the nature, severity, duration, recurrence, intent, impact, and remediation of a violation. Depending on the risk, enforcement may include a warning, required configuration change, content restriction, connector or routine disablement, temporary suspension, or termination. We may preserve and disclose information when required by law or reasonably necessary to protect people, systems, or the integrity of an investigation.
+
+## 7. Reporting
 
 To report suspected misuse of the Service or a security concern, contact **security@amazai.co**. For a potential security vulnerability, please follow our [Security & Responsible Disclosure](/security-disclosure) guidelines.
