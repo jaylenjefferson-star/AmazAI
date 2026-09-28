@@ -4,15 +4,15 @@ import Logo from './Logo';
 import { startLogin, useAuth0 } from '../auth0';
 
 /**
- * Chrome shared by every logged-out page: Home, How it works, Pricing,
- * Product, Security, the Resources pages, and the legal documents.
+ * Chrome shared by every logged-out page: the marketing pages, the Resources
+ * pages, and the legal documents.
  *
- * The top bar deliberately stays to five items — Product, How it works,
- * Pricing, Security, Resources — because a marketing nav that lists every
- * page it owns stops being a nav and becomes a sitemap. Everything else
- * (Use Cases, For Teams, Enterprise, Legal & Trust, Contact) is one click
- * away through the Resources menu or the footer, which is where a sitemap
- * belongs.
+ * The top bar stays to four primary items — Product, Solutions, Resources,
+ * Pricing — because a marketing nav that lists every page it owns stops being
+ * a nav and becomes a sitemap. Product opens a structured mega-menu; the rest
+ * of the surface (Use Cases, For Teams, Enterprise, Legal & Trust, Contact)
+ * is one click away through those items or the footer, which is where a
+ * sitemap belongs.
  */
 export default function PublicShell({ children, wide }) {
   return (
@@ -24,63 +24,126 @@ export default function PublicShell({ children, wide }) {
   );
 }
 
-const RESOURCES = [
-  { to: '/faq', label: 'FAQ' },
-  { to: '/integrations', label: 'Integrations' },
-  { to: '/use-cases', label: 'Use Cases' },
-  { to: '/contact', label: 'Contact' },
+/**
+ * The Product mega-menu.
+ *
+ * Grouped WORK / CONNECT / DISCOVER, matching the redesign spec. Links point
+ * at on-page homepage anchors (the homepage sections land in FEAT-002/003) or
+ * an existing route where one fits, so no new routes are invented here. A
+ * visitor who follows an anchor before its section exists lands on the
+ * homepage, which is the right fallback while the page is built out.
+ */
+const HOME = '/welcome-to-amazai';
+const PRODUCT_MENU = [
+  {
+    heading: 'Work',
+    items: [
+      { to: `${HOME}#companions`, label: 'Companions' },
+      { to: `${HOME}#rooms`, label: 'Rooms' },
+      { to: `${HOME}#routines`, label: 'Routines' },
+      { to: `${HOME}#artifacts`, label: 'Artifacts' },
+    ],
+  },
+  {
+    heading: 'Connect',
+    items: [
+      { to: '/integrations', label: 'Connectors' },
+      { to: `${HOME}#browser-computer`, label: 'Browser & Computer' },
+      { to: `${HOME}#developer-tools`, label: 'Developer Tools' },
+    ],
+  },
+  {
+    heading: 'Discover',
+    items: [
+      { to: `${HOME}#unified-inbox`, label: 'Unified Inbox' },
+      { to: `${HOME}#search`, label: 'Search' },
+      { to: `${HOME}#templates`, label: 'Templates' },
+    ],
+  },
 ];
 
 export function TopNav() {
   const { loginWithRedirect } = useAuth0();
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  // Only one mega-menu today, but modelling "which panel is open" as a key
+  // rather than a boolean leaves room for Resources to grow into one without
+  // another piece of state fighting it.
+  const [open, setOpen] = useState(null);
+  const navRef = useRef(null);
   const location = useLocation();
 
-  // Close the Resources dropdown on navigation and on an outside click —
-  // otherwise it survives a route change and sits open over the new page.
-  useEffect(() => { setOpen(false); }, [location.pathname]);
+  // Close on navigation and on an outside click -- otherwise the panel
+  // survives a route change and sits open over the new page.
+  useEffect(() => { setOpen(null); }, [location.pathname]);
   useEffect(() => {
-    function onClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    function onClick(e) { if (navRef.current && !navRef.current.contains(e.target)) setOpen(null); }
+    // Escape closes the menu and is the expected keyboard affordance for a
+    // popup; focus stays on the trigger because we never moved it.
+    function onKey(e) { if (e.key === 'Escape') setOpen(null); }
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
   }, []);
 
+  const toggle = (key) => setOpen((cur) => (cur === key ? null : key));
+
   return (
-    <header className="public-nav">
-      <Link to="/welcome-to-amazai" className="public-nav-brand">
-        <Logo size={24} title="AmazAI" />
-      </Link>
-      <nav className="public-nav-links">
-        <Link to="/product">Product</Link>
-        <Link to="/how-it-works">How it works</Link>
-        <Link to="/pricing">Pricing</Link>
-        <Link to="/security">Security</Link>
-        <div className="public-nav-dropdown" ref={ref}>
+    <header className="mkt-nav">
+      <div className="mkt-nav-inner" ref={navRef}>
+        <Link to={HOME} className="mkt-nav-brand" aria-label="AmazAI home">
+          <Logo size={24} title="AmazAI" />
+        </Link>
+
+        <nav className="mkt-nav-primary" aria-label="Primary">
+          <div className="mkt-mega-wrap">
+            <button
+              type="button"
+              className="mkt-nav-item"
+              aria-expanded={open === 'product'}
+              aria-haspopup="true"
+              onClick={() => toggle('product')}
+            >
+              Product <span className="mkt-nav-caret" aria-hidden="true">▾</span>
+            </button>
+            {open === 'product' && (
+              <div className="mkt-mega" role="menu" aria-label="Product">
+                <div className="mkt-mega-panel">
+                  {PRODUCT_MENU.map((group) => (
+                    <div key={group.heading} className="mkt-mega-group">
+                      <h3>{group.heading}</h3>
+                      {group.items.map((it) => (
+                        <Link key={it.label} to={it.to} role="menuitem">{it.label}</Link>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <Link className="mkt-nav-item" to="/use-cases">Solutions</Link>
+          <Link className="mkt-nav-item" to="/faq">Resources</Link>
+          <Link className="mkt-nav-item" to="/pricing">Pricing</Link>
+        </nav>
+
+        <div className="mkt-nav-cta">
           <button
             type="button"
-            className="public-nav-dropdown-trigger"
-            aria-expanded={open}
-            onClick={() => setOpen((o) => !o)}
+            className="mkt-nav-signin"
+            onClick={() => startLogin(loginWithRedirect, { returnTo: '/' })}
           >
-            Resources <span aria-hidden="true">▾</span>
+            Sign in
           </button>
-          {open && (
-            <div className="public-nav-dropdown-menu">
-              {RESOURCES.map((r) => (
-                <Link key={r.to} to={r.to}>{r.label}</Link>
-              ))}
-            </div>
-          )}
+          <button
+            type="button"
+            className="mkt-nav-start"
+            onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: '/welcome' })}
+          >
+            Start free
+          </button>
         </div>
-      </nav>
-      <span style={{ flex: 1 }} />
-      <button className="ghost" onClick={() => startLogin(loginWithRedirect, { returnTo: '/' })}>
-        Sign in
-      </button>
-      <button className="primary" onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: '/welcome' })}>
-        Create your AmazAI
-      </button>
+      </div>
     </header>
   );
 }

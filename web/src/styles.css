@@ -2757,3 +2757,205 @@ a.row-card:hover { border-color: var(--btn-line); }
 .admin-field input { width: 100%; }
 .admin-error { font-size: 13px; color: var(--danger); margin-bottom: 10px; }
 .admin-confirm-actions { display: flex; gap: 8px; }
+
+/* ============================================================ marketing
+ *
+ * The premium light-mode marketing redesign. Everything here is ADDITIVE and
+ * scoped under `.mkt` (the marketing root) or lives behind `--mkt-*` names, so
+ * the signed-in app's tokens and its two dark blocks are untouched. The public
+ * site is forced light by theme.js `modeForPath`, so these values are light
+ * only -- there is no dark marketing variant to keep in step.
+ *
+ * The look: white canvas, near-black ink, hairline neutral borders, and the
+ * existing brand purple used as a selective accent (reusing --brand-3/-4 and
+ * --brand-sweep rather than inventing new hues). Real product UI, not gradient
+ * wash, is meant to carry the page; the tokens stay quiet on purpose.
+ */
+/* Tokens are defined on both the marketing root and the nav itself so the
+   sticky bar carries its own values even where it is rendered directly (e.g.
+   Landing) rather than inside a `.mkt` wrapper. */
+.mkt, .mkt-nav {
+  /* ---- surface: white is the primary canvas ---- */
+  --mkt-canvas:    #ffffff;
+  --mkt-surface:   #ffffff;
+  --mkt-raised:    #f7f7fa;   /* faint fill for quiet cards / strips */
+  --mkt-hairline:  #e8e9ee;   /* subtle neutral border */
+  --mkt-line:      #d9dbe2;   /* one step stronger, for emphasis edges */
+
+  /* ---- ink: nearly-black type, with a measured dim/faint ramp ---- */
+  --mkt-ink:       #0b0c0f;
+  --mkt-ink-2:     #3a3f4a;
+  --mkt-dim:       #5c6270;
+  --mkt-faint:     #868c99;
+
+  /* ---- accent: AmazAI purple, used selectively (reuses brand vars) ---- */
+  --mkt-accent:      var(--brand-3);      /* #8b2fe0 */
+  --mkt-accent-2:    var(--brand-4);      /* #c026d3 */
+  --mkt-accent-ink:  #ffffff;
+  --mkt-accent-wash: rgba(139, 47, 224, .07);
+  --mkt-accent-edge: rgba(139, 47, 224, .28);
+  --mkt-brand-sweep: var(--brand-sweep);
+
+  /* ---- elevation: soft, editorial, never heavy ---- */
+  --mkt-lift: 0 1px 2px rgba(16, 20, 40, .05);
+  --mkt-pop:  0 2px 6px rgba(16, 20, 40, .06), 0 24px 48px -22px rgba(16, 20, 40, .22);
+
+  /* ---- radii ---- */
+  --mkt-r:    12px;
+  --mkt-r-sm: 8px;
+
+  /* ---- fluid editorial type scale (clamp so the hero breathes on wide
+     screens without a media-query cascade). Body text is intentionally NOT
+     oversized -- readability, not spectacle. ---- */
+  --mkt-fs-hero:    clamp(2.6rem, 1.6rem + 4.4vw, 4.6rem);
+  --mkt-fs-h2:      clamp(1.9rem, 1.35rem + 2.4vw, 3rem);
+  --mkt-fs-h3:      clamp(1.25rem, 1.05rem + 0.8vw, 1.6rem);
+  --mkt-fs-lede:    clamp(1.05rem, 0.98rem + 0.4vw, 1.3rem);
+  --mkt-fs-body:    1.0625rem;   /* ~17px */
+  --mkt-fs-eyebrow: 0.8125rem;   /* ~13px */
+
+  --mkt-lh-tight:  1.06;
+  --mkt-lh-head:   1.14;
+  --mkt-lh-body:   1.6;
+  --mkt-track-head: -0.02em;
+
+  /* ---- spacing rhythm (generous vertical space between sections) ---- */
+  --mkt-space-section: clamp(4rem, 2.5rem + 6vw, 8rem);
+  --mkt-space-block:   clamp(1.5rem, 1rem + 2vw, 3rem);
+  --mkt-gutter:        clamp(1.25rem, 0.75rem + 2vw, 2.5rem);
+  --mkt-maxw:          1160px;
+  --mkt-measure:       60ch;     /* readable line length for prose */
+
+  background: var(--mkt-canvas);
+  color: var(--mkt-ink);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- reusable section / container primitives ---- */
+.mkt-container {
+  width: 100%;
+  max-width: var(--mkt-maxw);
+  margin-inline: auto;
+  padding-inline: var(--mkt-gutter);
+}
+.mkt-section { padding-block: var(--mkt-space-section); }
+
+.mkt-eyebrow {
+  margin: 0 0 0.75rem;
+  font-size: var(--mkt-fs-eyebrow);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mkt-accent);
+}
+.mkt-title {
+  margin: 0;
+  font-size: var(--mkt-fs-h2);
+  line-height: var(--mkt-lh-head);
+  letter-spacing: var(--mkt-track-head);
+  font-weight: 680;
+  color: var(--mkt-ink);
+}
+.mkt-lede {
+  margin: 1rem 0 0;
+  max-width: var(--mkt-measure);
+  font-size: var(--mkt-fs-lede);
+  line-height: var(--mkt-lh-body);
+  color: var(--mkt-dim);
+}
+
+/* ------------------------------------------------------- marketing nav
+ *
+ * A minimal sticky bar over the white canvas: brand left, a restrained set of
+ * primary items centred, auth CTAs right, and one structured mega-menu behind
+ * Product. The hairline border is the only chrome -- no shadow until it needs
+ * to separate from scrolled content.
+ */
+.mkt-nav {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255, 255, 255, .82);
+  /* Frosted only here, where content scrolls under the bar -- not a
+     site-wide glass treatment. */
+  backdrop-filter: saturate(1.4) blur(12px);
+  -webkit-backdrop-filter: saturate(1.4) blur(12px);
+  border-bottom: 1px solid var(--mkt-hairline);
+}
+.mkt-nav-inner {
+  display: flex; align-items: center; gap: 1.5rem;
+  width: 100%; max-width: var(--mkt-maxw); margin-inline: auto;
+  min-height: 60px; padding-inline: var(--mkt-gutter);
+}
+.mkt-nav-brand { display: inline-flex; text-decoration: none; flex: none; }
+
+/* Centre cluster. margin-inline:auto pushes it to the middle while the CTAs
+   stay pinned right; the brand holds the left. */
+.mkt-nav-primary {
+  display: flex; align-items: center; gap: 0.35rem;
+  margin-inline: auto;
+}
+.mkt-nav-item {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.5rem 0.7rem; border-radius: var(--mkt-r-sm);
+  background: none; border: none; cursor: pointer;
+  font: inherit; font-size: 0.9375rem; font-weight: 500;
+  color: var(--mkt-ink-2); text-decoration: none;
+}
+.mkt-nav-item:hover { color: var(--mkt-ink); background: var(--mkt-raised); }
+.mkt-nav-item[aria-expanded="true"] { color: var(--mkt-ink); }
+.mkt-nav-caret { transition: transform .18s var(--ease-out); font-size: .7em; }
+.mkt-nav-item[aria-expanded="true"] .mkt-nav-caret { transform: rotate(180deg); }
+
+.mkt-nav-cta { display: inline-flex; align-items: center; gap: 0.6rem; flex: none; }
+.mkt-nav-signin {
+  background: none; border: none; cursor: pointer; font: inherit;
+  font-size: 0.9375rem; font-weight: 500; color: var(--mkt-ink-2);
+  padding: 0.5rem 0.4rem;
+}
+.mkt-nav-signin:hover { color: var(--mkt-ink); }
+.mkt-nav-start {
+  cursor: pointer; font: inherit; font-size: 0.9375rem; font-weight: 600;
+  color: var(--mkt-accent-ink); background: var(--mkt-ink);
+  border: 1px solid var(--mkt-ink);
+  padding: 0.55rem 1.05rem; border-radius: 999px;
+  transition: background .16s var(--ease-out), transform .16s var(--ease-out);
+}
+.mkt-nav-start:hover { background: #24262e; }
+.mkt-nav-start:active { transform: translateY(1px); }
+
+/* ---- mega-menu ---- */
+.mkt-mega-wrap { position: static; }
+.mkt-mega {
+  position: absolute; left: 0; right: 0; top: 100%;
+  display: flex; justify-content: center;
+  padding: 0 var(--mkt-gutter) 1.5rem;
+  animation: mkt-mega-in .16s var(--ease-out);
+}
+@keyframes mkt-mega-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.mkt-mega-panel {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2rem;
+  width: 100%; max-width: 860px; padding: 1.75rem;
+  background: var(--mkt-surface);
+  border: 1px solid var(--mkt-hairline); border-radius: var(--mkt-r);
+  box-shadow: var(--mkt-pop);
+}
+.mkt-mega-group h3 {
+  margin: 0 0 0.6rem; font-size: 0.75rem; font-weight: 600;
+  letter-spacing: 0.09em; text-transform: uppercase; color: var(--mkt-faint);
+}
+.mkt-mega-group a {
+  display: block; padding: 0.4rem 0.5rem; margin-inline: -0.5rem;
+  border-radius: var(--mkt-r-sm);
+  font-size: 0.9375rem; color: var(--mkt-ink-2); text-decoration: none;
+}
+.mkt-mega-group a:hover { background: var(--mkt-accent-wash); color: var(--mkt-accent); }
+
+@media (max-width: 860px) {
+  /* Primary nav collapses on narrow screens: the brand and CTAs are what a
+     visitor needs on a phone; the full menu is a FEAT-004 mobile-polish
+     concern. Hiding it here prevents horizontal overflow. */
+  .mkt-nav-primary { display: none; }
+}

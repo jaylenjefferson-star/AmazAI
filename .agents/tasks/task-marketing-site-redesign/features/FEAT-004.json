@@ -1,0 +1,29 @@
+{
+  "id": "FEAT-004",
+  "type": "refactor",
+  "description": "Redesign steps 19-20: mobile polish and a performance/accessibility/SEO review pass across the whole new marketing homepage and the updated nav/footer/pricing. Depends on FEAT-001/002/003. Goal: the mobile site preserves the narrative (not a naive stack), no horizontal overflow, tabs/demos remain usable, and the page is accessible and SEO-sound. Keep changes minimal and reuse existing infrastructure (Seo.jsx, index.html meta).",
+  "status": "pending",
+  "steps": [
+    "STEP 19 (mobile polish): Audit every new marketing section at mobile widths (~360px, 390px, 768px). Ensure: concise hero, strong CTA visibility, product demonstrations become swipeable or compact (not tiny unreadable screenshots), tab controls remain usable (horizontal scroll or segmented, no clipping), readable product frames (scale/reflow rather than shrink to illegible), simplified navigation (the mega-menu collapses to an accessible mobile menu or the primary items collapse gracefully), and critically NO horizontal overflow anywhere (check body/section overflow-x). The mobile experience must preserve the storytelling order, not just stack desktop blocks. Add/adjust @media rules in styles.css; do not introduce new breakpoints inconsistent with the existing scale unless justified.",
+    "STEP 20a (accessibility): Verify heading hierarchy is sensible (one h1 per page, ordered h2/h3), interactive elements are real buttons/links with accessible names, the Product mega-menu and use-case tabs have correct ARIA (menu/tablist/tab/tabpanel, aria-expanded, focus management, Escape to close), color contrast of near-black ink on white and any purple accents meets WCAG AA for text, and all motion respects prefers-reduced-motion. Fix any gaps found.",
+    "STEP 20b (SEO): Confirm every marketing route still renders a <Seo> tag with a meaningful title + description + canonical path. Update the homepage (Landing) Seo title/description to the new positioning. Review web/index.html baseline meta/OG for accuracy (site name, default description) and update the default description if it is now stale for the marketing site. Ensure the theme.js PUBLIC regex + index.html before-paint regex + main.jsx PUBLIC_PATHS still cover all public routes if any changed (they should not have, but verify).",
+    "STEP 20c (performance): Confirm the production build has no large new bundle regressions from added dependencies (there should be none - CSS-only motion). Run npm run build and note the bundle sizes; ensure no accidental import of live app/api modules into marketing bundles that would bloat or break SSR-less rendering. Confirm images/SVG are inline/lightweight.",
+    "Run the full verification: npm run build (clean) and npm test (green, >=194 tests including updated Pricing.test.jsx). Optionally npm run dev and spot-check /welcome-to-amazai and /pricing render without console errors.",
+    "Write a short CHANGES.md (or append to MIGRATION_MAP.md) at the task dir listing files changed and why, for the orchestrator's handoff."
+  ],
+  "acceptance_criteria": [
+    "No horizontal overflow on the marketing homepage at 360px/390px/768px widths; product demos and tabs remain usable and readable on mobile.",
+    "Mobile preserves the narrative order rather than degrading to unreadable stacked desktop blocks.",
+    "Mega-menu and use-case tabs are keyboard-operable with correct ARIA and honor prefers-reduced-motion.",
+    "Every marketing route renders a Seo tag with title/description/canonical; homepage Seo reflects the new positioning; index.html default meta is accurate.",
+    "package.json has no new runtime animation dependency; production build has no unexpected large bundle regression.",
+    "npm run build is clean and npm test passes; a brief files-changed summary is written to the task dir."
+  ],
+  "verification": [
+    "cd /projects/sandbox/AmazAI/web && export NVM_DIR=/root/.nvm && . /root/.nvm/nvm.sh && npm run build",
+    "cd /projects/sandbox/AmazAI/web && export NVM_DIR=/root/.nvm && . /root/.nvm/nvm.sh && npm test",
+    "git diff --stat and inspect package.json for no new runtime deps."
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
