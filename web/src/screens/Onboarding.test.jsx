@@ -32,6 +32,10 @@ async function clickThroughToTheLastStep() {
   return screen.getByRole('button', { name: /Meet Chief/ });
 }
 
+function acceptPolicies() {
+  fireEvent.click(screen.getByRole('checkbox', { name: /I agree to the Terms of Use/i }));
+}
+
 describe('Onboarding', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -45,9 +49,15 @@ describe('Onboarding', () => {
     api.createAgent.mockResolvedValue({ agentId: 'chief' });
     api.saveSettings.mockResolvedValue({});
     const finishBtn = await clickThroughToTheLastStep();
+    expect(finishBtn.disabled).toBe(true);
+    acceptPolicies();
 
     await act(async () => { fireEvent.click(finishBtn); });
 
+    expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      onboarded: true,
+      legalAcceptance: { version: '2026.09', accepted: true },
+    }));
     expect(rememberSetupDone).toHaveBeenCalled();
     expect(mockNavigate).toHaveBeenCalledWith('/agents/chief', { replace: true });
   });
@@ -60,6 +70,7 @@ describe('Onboarding', () => {
       .mockResolvedValueOnce({ agentId: 'chief' });
     api.saveSettings.mockResolvedValue({});
     const finishBtn = await clickThroughToTheLastStep();
+    acceptPolicies();
 
     await act(async () => { fireEvent.click(finishBtn); });
     // The retry message, not a raw exception, is what a brand-new person sees.
@@ -75,6 +86,7 @@ describe('Onboarding', () => {
   it('a non-retriable error is shown immediately, with no retry delay', async () => {
     api.createAgent.mockRejectedValue(new Error('a Bot with the id \'chief\' already exists'));
     const finishBtn = await clickThroughToTheLastStep();
+    acceptPolicies();
 
     await act(async () => { fireEvent.click(finishBtn); });
 
@@ -88,6 +100,7 @@ describe('Onboarding', () => {
       'the account runtime could not be provisioned (RuntimeUnavailable: '
       + 'the account harness is still CREATING; retry this request)'));
     const finishBtn = await clickThroughToTheLastStep();
+    acceptPolicies();
 
     await act(async () => { fireEvent.click(finishBtn); });
     await act(async () => { await vi.advanceTimersByTimeAsync(6000 * 8); });

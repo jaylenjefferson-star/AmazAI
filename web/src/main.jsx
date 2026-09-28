@@ -10,6 +10,7 @@ import './characters/characters.css';
 
 import { AmazAIAuthProvider, configured, isOwner, useAuth0 } from './auth0';
 import { syncToPath } from './theme';
+import { isPublicPath } from './publicRoutes';
 import AuthGate from './components/AuthGate';
 import Shell from './app/Shell';
 import { keyedBy } from './app/keyedRoute';
@@ -23,6 +24,10 @@ import privacyRaw from './content/privacy-policy.md?raw';
 import securityRaw from './content/security-responsible-disclosure.md?raw';
 import cookieRaw from './content/cookie-policy.md?raw';
 import acceptableUseRaw from './content/acceptable-use-policy.md?raw';
+import billingPolicyRaw from './content/billing-policy.md?raw';
+import subprocessorsRaw from './content/subprocessors.md?raw';
+import aiTransparencyRaw from './content/ai-transparency.md?raw';
+import dataProcessingRaw from './content/data-processing-addendum.md?raw';
 import Onboarding from './screens/Onboarding';
 import { CHECKING, NEEDED, OFFER, useFirstRun } from './hooks/useFirstRun';
 import { DEMO } from './demo';
@@ -53,13 +58,6 @@ import Enterprise from './screens/marketing/Enterprise';
 import FAQ from './screens/marketing/FAQ';
 import Contact from './screens/marketing/Contact';
 import Legal from './screens/marketing/Legal';
-
-const PUBLIC_PATHS = [
-  '/welcome-to-amazai', '/about', '/terms', '/privacy', '/cookie-policy',
-  '/acceptable-use', '/security', '/security-disclosure', '/how-it-works',
-  '/product', '/pricing', '/integrations', '/use-cases', '/for-teams',
-  '/enterprise', '/faq', '/contact', '/legal',
-];
 
 /**
  * Routing.
@@ -177,6 +175,14 @@ function Router() {
       <Route path="/security-disclosure" element={<PolicyPage raw={securityRaw} path="/security-disclosure"
         description="How AmazAI handles security reports, and how to send us one." />} />
       <Route path="/security-responsible-disclosure" element={<Navigate to="/security-disclosure" replace />} />
+      <Route path="/billing-policy" element={<PolicyPage raw={billingPolicyRaw} path="/billing-policy"
+        description="How AmazAI subscriptions, cancellation, credits, and refunds work." />} />
+      <Route path="/subprocessors" element={<PolicyPage raw={subprocessorsRaw} path="/subprocessors"
+        description="The service providers AmazAI relies on to operate the Service." />} />
+      <Route path="/ai-transparency" element={<PolicyPage raw={aiTransparencyRaw} path="/ai-transparency"
+        description="How AmazAI uses AI models, approvals, connected tools, and human oversight." />} />
+      <Route path="/data-processing-addendum" element={<PolicyPage raw={dataProcessingRaw} path="/data-processing-addendum"
+        description="Data-processing terms available to AmazAI business customers." />} />
 
       {/* First run */}
       <Route path="/welcome" element={<Protected><SetupOnly><Onboarding /></SetupOnly></Protected>} />
@@ -239,9 +245,7 @@ function Entry() {
   if (!configured || DEMO) return <Router />;
   if (isLoading) return null;
 
-  const isPublicPath = PUBLIC_PATHS.includes(location.pathname);
-
-  if (!isAuthenticated && !isPublicPath) return <Landing />;
+  if (!isAuthenticated && !isPublicPath(location.pathname)) return <Landing />;
   return <Router />;
 }
 

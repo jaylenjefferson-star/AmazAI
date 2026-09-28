@@ -1,14 +1,14 @@
 ---
 title: Cookie Policy
 version: 2026.09
-effective: 2026-09-19
-last_updated: 2026-09-19
+effective: 2026-09-28
+last_updated: 2026-09-28
 contact: privacy@amazai.co
 ---
 
 # Cookie Policy
 
-**In short:** AmazAI uses only the browser storage needed to operate the website and signed-in application, principally to maintain a session and remember display preferences. We do not use advertising cookies, conversion pixels, or cross-site behavioral tracking.
+**In short:** AmazAI uses only the browser storage needed to operate the website and signed-in application, principally to maintain authentication and remember display preferences. We do not use advertising cookies, conversion pixels, or cross-site behavioral tracking.
 
 ## 1. Scope and definitions
 
@@ -18,14 +18,16 @@ Cookies are small text files stored by your browser. Similar technologies, inclu
 
 ## 2. What we use
 
-As of the effective date above, we use the following first-party technologies:
+As of the effective date above, the AmazAI application uses the following browser storage:
 
-| Name | Set by | Purpose | Where used | Duration |
+| Name or prefix | Set by | Purpose | Where used | Duration |
 | --- | --- | --- | --- | --- |
-| `amazai_session` | AmazAI | Maintains an authenticated session and protects access to the signed-in application | Signed-in application | Session or until sign-out/expiration |
-| `amazai_theme` | AmazAI | Remembers your light or dark display preference | Signed-in application | Until changed or cleared by you |
+| `@@auth0spajs@@…` | Auth0 SDK on AmazAI’s domain | Caches the authenticated session and rotating-token state used to keep the signed-in application available across a reload | Signed-in application | Until sign-out, token expiration, or browser data is cleared |
+| `amazai.theme` | AmazAI | Remembers a light, dark, or system display preference | Website and signed-in application | Until changed or cleared by you |
 
-These technologies are strictly necessary for the signed-in application to function as intended. The public website can generally be viewed without them.
+Auth0 may also use cookies on its own Universal Login domain to complete authentication, prevent fraud, and maintain the identity-provider session. Those technologies are controlled by Auth0 and our Auth0 tenant configuration and are described in Auth0’s own privacy and cookie materials.
+
+Authentication storage is necessary for the signed-in application to function as intended. Theme storage is functional rather than advertising-related. The public website can be viewed without signing in.
 
 ## 3. What we do not use
 
@@ -43,9 +45,9 @@ We do not sell personal information or share it for cross-context behavioral adv
 
 Most browsers allow you to view, block, delete, or clear cookies and local storage. You may use those controls at any time. Blocking or clearing strictly necessary storage may prevent the signed-in application from keeping you authenticated or remembering your preferences, but it will not generally prevent you from viewing the public website.
 
-Signing out clears the active session held by the application. If you use a shared device, you should sign out and close the browser when you finish.
+Signing out ends the active AmazAI application session. The identity provider may maintain its own session under its policies and configuration. If you use a shared device, sign out and close the browser when finished.
 
-Browser "Do Not Track" signals do not currently have a common technical standard. AmazAI does not respond to them separately because we do not engage in the advertising or cross-site behavioral tracking they are commonly intended to address.
+Browser "Do Not Track" signals do not currently have a common technical standard. AmazAI does not respond to them separately because we do not engage in the advertising or cross-site behavioral tracking they are commonly intended to address. We also do not sell or share personal information for cross-context behavioral advertising; if that practice changes, we will honor legally required opt-out signals, including Global Privacy Control where applicable.
 
 ## 5. Changes to this Policy
 

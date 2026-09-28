@@ -315,9 +315,29 @@ def test_files_are_newest_first(api_table, agent, monkeypatch):
 def test_settings_answer_with_defaults_before_anything_is_written(api_table):
     status, body = call("GET", "/settings")
     assert status == 200
+    assert body["legalAcceptedVersion"] is None
+    assert body["legalAcceptedAt"] is None
     assert body["notifications"] == {"completion": True, "inputNeeded": True,
                                      "failure": True}
     assert body["theme"] == "dark"   # the app's default; "system" is a choice, not a default
+
+
+def test_settings_record_versioned_legal_acceptance_once_per_version(api_table):
+    status, first = call("PUT", "/settings", {
+        "legalAcceptance": {"version": "2026.09", "accepted": True},
+    })
+    assert status == 200
+    assert first["legalAcceptedVersion"] == "2026.09"
+    assert first["legalAcceptedAt"]
+
+    _, same = call("PUT", "/settings", {
+        "legalAcceptance": {"version": "2026.09", "accepted": True},
+    })
+    assert same["legalAcceptedAt"] == first["legalAcceptedAt"]
+
+    assert call("PUT", "/settings", {
+        "legalAcceptance": {"version": "2026.09", "accepted": False},
+    })[0] == 400
 
 
 def test_a_partial_write_leaves_the_rest_alone(api_table):

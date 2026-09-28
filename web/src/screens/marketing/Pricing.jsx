@@ -5,7 +5,10 @@ import Seo from '../../components/Seo';
 import { api } from '../../api';
 import { startLogin, useAuth0 } from '../../auth0';
 
-// Four plans, not a fragmented ladder. Each answers the same three questions
+// These values mirror services/amazai/billing_plans.json, the checkout source
+// of truth. A marketing price that differs from the Stripe-backed plan is not
+// a harmless typo: it changes the offer a customer thinks they accepted.
+// Each card answers the same three questions
 // so a visitor can self-select: who it is for, how much work it includes, and
 // the one capability that changes at this level. Enterprise is a conversation
 // rather than a checkout (contact === true), so it renders a link, not a
@@ -18,16 +21,22 @@ const TIERS = [
     unlocks: 'One workspace with connected tools and approval-first actions',
   },
   {
-    key: 'pro', name: 'Pro', price: '$49', period: '/month', featured: true,
-    who: 'For power users who run their day through AmazAI.',
-    usage: '5,000 Amaz Credits each month',
-    unlocks: 'More companions, more routines, and priority runs',
+    key: 'personal_plus', name: 'Personal+', price: '$39', period: '/month', featured: true,
+    who: 'For people delegating work throughout the week.',
+    usage: '2,500 Amaz Credits each month',
+    unlocks: 'More capacity for companions, routines, and connected work',
   },
   {
-    key: 'business', name: 'Business', price: '$99', period: '/seat / month',
-    who: 'For teams working together in shared rooms.',
-    usage: 'Pooled team credits across every seat',
-    unlocks: 'Shared workspaces, admin controls, and audit history',
+    key: 'pro', name: 'Pro', price: '$79', period: '/month',
+    who: 'For power users who run their day through AmazAI.',
+    usage: '6,000 Amaz Credits each month',
+    unlocks: 'Priority runs, advanced skills, and more connected work',
+  },
+  {
+    key: 'power', name: 'Power', price: '$149', period: '/month',
+    who: 'For people running most of their work through AmazAI.',
+    usage: '12,000 Amaz Credits each month',
+    unlocks: 'Maximum self-serve capacity, advanced controls, and priority support',
   },
   {
     key: 'enterprise', name: 'Enterprise', price: 'Custom', period: '',
@@ -42,8 +51,8 @@ const FAQ = [
   { q: 'Is there a free way to start?', a: 'Yes. Start free with no credit card — create your first companion and try real tasks before you pick a paid plan.' },
   { q: 'What is an Amaz Credit?', a: 'One unit of metered agent work — a model call, a tool use, a scheduled routine tick. Read-only checks and approvals themselves never cost credits.' },
   { q: 'What happens if I run out?', a: 'Agents pause new work and tell you what they were about to do. Nothing queues up silently and nothing overspends without your say-so — top up with add-on credits or wait for your next cycle.' },
-  { q: 'Do unused credits roll over?', a: 'No — each plan renews with a fresh allotment every billing cycle, which keeps usage predictable for you and for us.' },
-  { q: 'What is the difference between Personal, Pro, and Business?', a: 'Personal and Pro are single-seat plans; Pro simply includes more capacity and priority. Business adds shared workspaces, pooled team credits, admin controls, and audit history across everyone on the team.' },
+  { q: 'Do unused credits roll over?', a: 'Your current purchased balance remains visible in Billing while the account is active. Promotional or trial credits can have separate limits shown when they are granted.' },
+  { q: 'How do the self-serve plans differ?', a: 'The plans use the same approval-first foundation. Higher tiers include more monthly credits and unlock additional capacity or priority. Enterprise arrangements can add organization-specific security, governance, retention, and support terms.' },
 ];
 
 export default function Pricing() {
@@ -82,7 +91,7 @@ export default function Pricing() {
     <PublicShell wide>
       <Seo
         title="Pricing"
-        description="Four simple plans — Personal, Pro, Business, and Enterprise — all built on the same approval-first guardrails. Start free, no credit card required."
+        description="Self-serve and enterprise plans built on the same approval-first guardrails. Start free, no credit card required."
         path="/pricing"
       />
       <section className="about-hero">
@@ -119,6 +128,13 @@ export default function Pricing() {
           </article>
         ))}
       </section>
+
+      <p className="hint-text" style={{ textAlign: 'center', margin: '1rem auto 3rem', maxWidth: 760 }}>
+        Paid plans renew monthly until canceled. By subscribing, you agree to the{' '}
+        <Link to="/terms">Terms of Use</Link> and{' '}
+        <Link to="/billing-policy">Billing, Cancellation &amp; Refund Policy</Link>.
+        See the <Link to="/privacy">Privacy Policy</Link> for how account and billing data are handled.
+      </p>
 
       <section className="about-contact">
         <h2>Credit FAQ</h2>

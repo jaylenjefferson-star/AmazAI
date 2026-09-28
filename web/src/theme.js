@@ -1,3 +1,9 @@
+import { isPublicPath } from './publicRoutes';
+
+// Preserve the existing theme-module export for callers while keeping the
+// route list itself in one shared module.
+export { isPublicPath } from './publicRoutes';
+
 /**
  * Theme selection: 'system' (the default), 'light' or 'dark'.
  *
@@ -46,10 +52,6 @@ export function effectiveMode(mode) {
 export function nextMode(mode) {
   return MODES[(MODES.indexOf(mode) + 1) % MODES.length];
 }
-
-/** The marketing and legal pages. Everything else is the signed-in app. */
-const PUBLIC = /^\/(welcome-to-amazai|about|how-it-works|product|pricing|integrations|use-cases|security|for-teams|enterprise|faq|contact|legal|terms|privacy|cookie-policy|acceptable-use|security-disclosure|security-responsible-disclosure)(\/|$)/;
-export const isPublicPath = (pathname) => PUBLIC.test(pathname || '/');
 
 /** A preference the person actually set, or null. Distinct from the default. */
 export function explicitMode() {

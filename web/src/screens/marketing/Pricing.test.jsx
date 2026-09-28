@@ -21,8 +21,8 @@ describe('Pricing', () => {
     mockIsAuthenticated = false;
   });
 
-  // The four plans render Personal / Pro / Business as "Get started" buttons in
-  // that order; Enterprise is a "Talk to sales" link, not a checkout button,
+  // The five plans render Personal / Personal+ / Pro / Power as "Get started"
+  // buttons in that order; Enterprise is a "Talk to sales" link, not checkout,
   // so it never appears in this list. ("Get started" is kept distinct from the
   // nav's "Start free" CTA so these queries only match the plan buttons.)
   it('a signed-out visitor gets Universal Login signup, not a checkout call', async () => {
@@ -37,9 +37,9 @@ describe('Pricing', () => {
     mockIsAuthenticated = true;
     api.billing.checkout.mockResolvedValue({ url: 'https://checkout.stripe.com/x' });
     renderIt();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Get started' })[2]); // Business
+    fireEvent.click(screen.getAllByRole('button', { name: 'Get started' })[3]); // Power
     await waitFor(() => expect(api.billing.checkout)
-      .toHaveBeenCalledWith({ planKey: 'business' }));
+      .toHaveBeenCalledWith({ planKey: 'power' }));
     expect(mockLoginWithRedirect).not.toHaveBeenCalled();
   });
 
