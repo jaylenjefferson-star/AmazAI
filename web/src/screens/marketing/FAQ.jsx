@@ -26,7 +26,7 @@ const FAQS = [
   },
   {
     q: 'How do connectors work?',
-    a: 'A connector like Slack gives an agent a scoped way to reach a real tool. The third-party credential never enters AmazAI - see the Integrations page for how that is isolated.',
+    a: 'AmazAI connects to 1000+ apps securely through Composio, which gives an agent a scoped way to reach a real tool. The third-party credential stays with Composio as an account reference and never enters AmazAI - see the Integrations page for how that is isolated.',
   },
   {
     q: 'Can I delete an agent, and what happens to its history?',

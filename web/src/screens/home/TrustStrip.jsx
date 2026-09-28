@@ -1,20 +1,22 @@
 /**
  * Trust / integration strip.
  *
- * Honesty rule from the spec: only real-or-marked-upcoming integrations.
- * Per docs/connectors.md and screens/marketing/Integrations.jsx, Slack is the
- * one connector available today; the rest are on the roadmap and are labelled
- * "Upcoming" so no partnership is implied. Wordmarks are plain text (no
- * fabricated logos), kept restrained — a quiet row, not a wall of pills.
+ * AmazAI reaches 1000+ apps through Composio (see docs/connectors.md): there
+ * is no allowlist, so any app Composio offers can be connected today. The
+ * credential lives with Composio as an account reference and never enters
+ * AmazAI; permission is still decided per agent, per action on AmazAI's side.
+ * The wordmarks below are plain-text EXAMPLES of popular connectors, not a
+ * claim of partnership and not a fabricated logo wall — a quiet row, not a
+ * wall of pills.
  */
 const TOOLS = [
-  { name: 'Slack', upcoming: false },
-  { name: 'GitHub', upcoming: true },
-  { name: 'Google Drive', upcoming: true },
-  { name: 'Gmail', upcoming: true },
-  { name: 'Google Calendar', upcoming: true },
-  { name: 'Notion', upcoming: true },
-  { name: 'Microsoft', upcoming: true },
+  { name: 'Slack' },
+  { name: 'GitHub' },
+  { name: 'Google Drive' },
+  { name: 'Gmail' },
+  { name: 'Google Calendar' },
+  { name: 'Notion' },
+  { name: 'Microsoft' },
 ];
 
 export default function TrustStrip() {
@@ -24,11 +26,14 @@ export default function TrustStrip() {
         <h2 className="mkt-trust-head">
           One workspace. Your models, tools, files, teammates, and AI companions.
         </h2>
+        <p className="mkt-trust-lede">
+          Connect 1000+ apps securely through Composio — your credentials stay
+          with Composio and never enter AmazAI.
+        </p>
         <ul className="mkt-trust-row">
           {TOOLS.map((t) => (
-            <li key={t.name} className={`mkt-trust-item${t.upcoming ? ' is-upcoming' : ''}`}>
+            <li key={t.name} className="mkt-trust-item">
               <span className="mkt-trust-name">{t.name}</span>
-              {t.upcoming && <span className="mkt-trust-tag">Upcoming</span>}
             </li>
           ))}
         </ul>
