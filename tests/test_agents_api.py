@@ -406,6 +406,32 @@ class TestConsoleReadModel:
         assert coord[0]["status"] == "proposed"
         assert coord[0]["taskId"] == run["runId"]
 
+    def test_coordination_response_carries_the_durable_room_view(self, api_table):
+        """The room's coordination state -- stage owner, member states, handoff
+        occurred -- is derived from durable rows and returned alongside the raw
+        feed, so the console shows the true team state on load, not an empty
+        cache. See presence.room_coordination."""
+        from amazai import keys as K2, runs
+        from amazai.states import RunState
+        from amazai.store import Store
+
+        store = Store("owner-a", table=api_table)
+        call("POST", "/threads", {"kind": "room", "title": "Live room", "agentIds": ["eng"]})
+        room_id = next(t["threadId"] for t in call("GET", "/threads")[1]["threads"]
+                      if t["title"] == "Live room")
+        run = runs.create(store, agent_id="eng", thread_id=room_id, goal="do the thing")
+        run = runs.advance(store, run, RunState.PLANNING)
+        run = runs.advance(store, run, RunState.EXECUTING)
+        store.put({"pk": run["pk"], "sk": K2.handoff_sk("hoff-1"), "entity": "Handoff",
+                  "handoffId": "hoff-1", "fromAgentId": "eng", "toAgentId": "ops",
+                  "goal": "confirm the fix", "status": "proposed"})
+
+        room = call("GET", f"/threads/{room_id}/coordination")[1]["room"]
+        assert room["stageOwnerAgentId"] == "eng"
+        assert room["working"] is True
+        assert room["handoffOccurred"] is True
+        assert [m["agentId"] for m in room["members"]] == ["eng"]
+
 
 class TestFirstBot:
     """Through the real handler: the parts of the first-Bot rule that only the

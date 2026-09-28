@@ -87,6 +87,12 @@ const live = {
   // socket then keeps it live. A plain read -- never a write path.
   presence: () => call('GET', '/presence'),
 
+  // What the org has been up to lately, derived from the same durable rows as
+  // /presence: recently finished tasks, coordinators still waiting on
+  // teammates, artifacts just produced. A plain read that can only describe
+  // committed state -- never a write path and never a warm model.
+  ambient: () => call('GET', '/ambient'),
+
   // Run now: the same fire a schedule uses. The key makes a double-click one run.
   runRoutine: (id, key) => call('POST', `/routines/${id}/run`, {},
     key ? { 'idempotency-key': key } : undefined),

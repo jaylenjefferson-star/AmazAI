@@ -5,6 +5,7 @@ import GroupMark from '../components/GroupMark';
 import Composer from '../components/Composer';
 import CoordinationFeed from '../components/CoordinationFeed';
 import Problem from '../components/Problem';
+import RoomCoordination, { coordinationSummary } from '../components/RoomCoordination';
 import RoomInfo from '../components/RoomInfo';
 import Sheet from '../components/Sheet';
 import { ChatSkeleton } from '../components/Skeleton';
@@ -39,6 +40,7 @@ export default function Room() {
   const [thread, setThread] = useState(null);
   const [items, setItems] = useState([]);
   const [coordination, setCoordination] = useState([]);
+  const [roomState, setRoomState] = useState(null);
   const [pendingApprovals, setPendingApprovals] = useState([]);
   const [running, setRunning] = useState({});            // runId -> agentId
   const [error, setError] = useState('');
@@ -62,7 +64,12 @@ export default function Room() {
 
   useEffect(() => { loadThread(); }, [loadThread]);
   useEffect(() => {
-    api.coordination(roomId).then((r) => setCoordination(r.coordination || [])).catch(() => {});
+    api.coordination(roomId).then((r) => {
+      setCoordination(r.coordination || []);
+      // The durable-state coordination view (stage owner, member states,
+      // handoff/artifact) rides along on the same read -- never a live model.
+      setRoomState(r.room || null);
+    }).catch(() => {});
   }, [roomId, items.length]);
   useEffect(() => () => Object.values(pollers.current).forEach(clearInterval), []);
 
@@ -150,11 +157,16 @@ export default function Room() {
   // Who is doing what, said in one line under the room's name.
   const active = members.filter((m) => ['thinking', 'working', 'waiting'].includes(presence[m.agentId]?.state));
   const askingYou = pendingApprovals.some((a) => a.status === 'pending');
+  // Prefer the durable-state summary (survives a reload; never a live model)
+  // and fall back to the live-socket read so a room mid-turn still reads right
+  // before the coordination fetch resolves.
+  const durableSummary = coordinationSummary(roomState, (id) => members.find((m) => m.agentId === id)?.name || id);
   const status = readOnly ? `${statusLabel} · read-only`
     : askingYou ? 'Waiting on you'
-    : active.length === 1 ? `${active[0].name} is working`
+    : durableSummary
+    || (active.length === 1 ? `${active[0].name} is working`
     : active.length > 1 ? `${active.length} agents working`
-    : Object.keys(running).length ? 'Working…' : '';
+    : Object.keys(running).length ? 'Working…' : '');
 
   const mark = (
     <GroupMark members={members} size={38}
@@ -181,6 +193,13 @@ export default function Room() {
       />
 
       {error && <Problem message={friendly(error, COPY.load)} onRetry={() => { setError(''); loadThread(); }} />}
+
+      {/* The durable-state coordination view: who owns the current stage, who
+          is working/waiting/needs-approval, and whether the team handed work
+          off or produced an artifact. Derived from run/task rows, so it is
+          honest across a reload -- unlike the deliberately unattributed live
+          delta stream below. */}
+      <RoomCoordination room={roomState} agents={agents} />
 
       {/* No live text in a room, deliberately. `delta` carries a runId but no
           agentId, and a room now starts every member at once, so several Bots

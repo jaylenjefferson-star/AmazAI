@@ -546,6 +546,54 @@ class HarnessNotReady(RuntimeError):
     pass
 
 
+#: Every mount lives under this root. BUILD_PLAN "gotcha 5" and the account
+#: runtime doc both state it as an invariant, so it is enforced here in code
+#: rather than trusted to callers -- a mount escaping /mnt is rejected before
+#: it can reach the control plane.
+MOUNT_ROOT = "/mnt"
+
+
+def _mount_path(config: dict) -> str | None:
+    """The mountPath a filesystem configuration declares, whatever storage
+    kind it uses. Each config carries exactly one storage block
+    (sessionStorage / efs / s3) and the mountPath lives inside it; this reads
+    it back without caring which kind so the merge can key on it."""
+    for block in config.values():
+        if isinstance(block, dict) and block.get("mountPath"):
+            return block["mountPath"]
+    return None
+
+
+def merge_filesystem_configurations(existing: list[dict],
+                                    mounts: list[dict]) -> list[dict]:
+    """Combine the harness's current mounts with new ones for an UpdateHarness.
+
+    UpdateHarness does not add to `filesystemConfigurations`; it REPLACES the
+    whole list (BUILD_PLAN gotcha 3). Sending only the new mounts would drop
+    every mount the harness already had, so the update must carry the existing
+    ones forward too -- this is the get-then-merge the method is built around.
+
+    A new mount at a path the harness already mounts wins (last writer for that
+    path), so re-mounting a path swaps its backing rather than duplicating it;
+    the control plane rejects two configs on one mountPath. Every mount is
+    validated against the /mnt invariant here, existing rows included, so a
+    malformed config can never be written back even if one somehow already
+    existed on the harness.
+    """
+    by_path: dict[str, dict] = {}
+    order: list[str] = []
+    for config in [*(existing or []), *(mounts or [])]:
+        path = _mount_path(config)
+        if not path:
+            raise ValueError(f"filesystem configuration has no mountPath: {config!r}")
+        if not (path == MOUNT_ROOT or path.startswith(MOUNT_ROOT + "/")):
+            raise ValueError(f"mount path must be under {MOUNT_ROOT}: {path!r}")
+        if path not in by_path:
+            order.append(path)
+        by_path[path] = config
+    return [by_path[p] for p in order]
+
+
 class AgentCore:
     def __init__(self, *, region: str | None = None, runtime=None, control=None) -> None:
         region = region or REGION
@@ -643,10 +691,59 @@ class AgentCore:
         # the two service shapes.
         return self._control.get_harness(harnessId=_harness_id(harness_arn))
 
+    def merged_filesystem(self, harness_arn: str, mounts: list[dict]) -> list[dict]:
+        """The `filesystemConfigurations` list an UpdateHarness would need to send.
+
+        UpdateHarness replaces `filesystemConfigurations` wholesale, so the
+        correct sequence is get-then-merge: read the current configurations
+        (GetHarness, which the stack grants), merge the new mounts into them
+        (deduped by mountPath, all under /mnt), and the combined list is what
+        an update would carry. Sending only `mounts` would silently drop every
+        mount already on the harness.
+
+        This is the whole pure, verifiable part of a filesystem change: the read
+        and the merge. It is deliberately separate from the write so the merge
+        can be exercised without granting the write, and so `update_filesystem`
+        can fail closed rather than emit a call the runtime is not permitted to
+        make. `merge_filesystem_configurations` unit-tests the merge and the
+        /mnt invariant with no live AWS.
+        """
+        current = self.get_harness(harness_arn)
+        existing = current.get("filesystemConfigurations") or []
+        return merge_filesystem_configurations(existing, mounts)
+
     def update_filesystem(self, harness_arn: str, mounts: list[dict]) -> dict:
-        """Filesystem mounts are not enabled in this deployment."""
-        raise NotImplementedError(
-            "AgentCore filesystem mounting has not been configured for this account."
+        """Attach filesystem mounts to a harness, preserving whatever it has.
+
+        The get-then-merge is real and runs here: `merged_filesystem` reads the
+        harness and merges the new mounts, validating every one against the /mnt
+        invariant, so a malformed or path-escaping mount is rejected before any
+        write is even attempted.
+
+        Callers should expect this to fail closed, but not instantly: an update
+        attempt deliberately performs the live GetHarness read plus the
+        merge/validation first, and only then raises. That ordering is on
+        purpose so the caller learns of a malformed mount (a ValueError from the
+        merge) and the validated merged config is actually computed, rather than
+        refusing before the harness is even read. So the expected shape is a
+        network round-trip followed by a raise, not an immediate fail.
+
+        The write itself is UpdateHarness, and this deployment deliberately does
+        not grant it: tools travel with each invocation, so the account harness
+        is never mutated in the request path, and the stack withholds
+        `UpdateHarness`/`UpdateAgentRuntime` as least privilege (see
+        tests/test_iam_contract.py and CLAUDE.md gotcha 3). Persisting mounts
+        therefore needs both an IAM grant and a live AgentCore round-trip to
+        verify (control plane accepting the merged shape, the harness
+        re-provisioning, a session seeing the mount) -- that is flagged for
+        real-AWS sign-off. Until then this fails closed with the merged config
+        computed and validated, rather than silently calling an ungranted API.
+        """
+        merged = self.merged_filesystem(harness_arn, mounts)
+        raise HarnessNotReady(
+            "filesystem mounting requires UpdateHarness, which this deployment "
+            "does not grant (tools travel per-invoke); "
+            f"validated {len(merged)} mount(s) but did not write them"
         )
 
 

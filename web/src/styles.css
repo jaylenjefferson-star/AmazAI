@@ -9,12 +9,15 @@
  * way to reuse a block across a media query and an attribute selector; they are
  * kept adjacent so they stay in step.
  *
- * The light tokens deliberately reuse the marketing layer's sensibilities:
- * --canvas/--panel align to --mkt-canvas (#ffffff), --hairline/--line to
- * --mkt-hairline/--mkt-line, --text to --mkt-ink (#0b0c0f), and --accent is
- * promoted to the brand purple (--brand-3) so the console and the site read as
- * one design system rather than two. The --mkt-* block below is the shared
- * reference; these names are the app's half of the same foundation.
+ * The light tokens and the marketing --mkt-* tokens are now ONE foundation, not
+ * two hand-kept copies. The shared light neutrals and the accent live once, on
+ * the --ds-* primitives below; the app's light --canvas/--hairline/--text/etc
+ * point at those primitives, and the .mkt/.mkt-nav layer maps its --mkt-* names
+ * to the very same primitives. There is no second set of hex values to drift
+ * out of step: change --ds-canvas once and both the console and the public site
+ * move together. Dark stays a first-class theme because the dark blocks reassign
+ * the app tokens directly (the primitives are the light foundation; the site is
+ * forced light, so it never needs a dark primitive).
  *
  * Colour carries meaning and nothing else: warn and danger are reserved for
  * approvals and irreversibility. Nothing decorative borrows them, or the one
@@ -25,18 +28,39 @@
 :root {
   color-scheme: light;
 
+  /* ---- shared design-system primitives (the single source of truth) ----
+     These are the light neutrals and the accent that the console and the
+     public marketing site both stand on. They are defined ONCE here; the app's
+     light tokens below and the .mkt/.mkt-nav --mkt-* layer both reference them,
+     so the two halves of the product can no longer silently drift. Custom
+     properties resolve lazily, so these may reference --brand-* defined further
+     down in this same block. Dark does not touch these: the dark theme
+     reassigns the app tokens directly, and the marketing site is forced light. */
+  --ds-canvas:      #ffffff;   /* the page is white, not off-white */
+  --ds-raised:      #f7f7fa;   /* faint fill for quiet cards / strips */
+  --ds-hairline:    #e8e9ee;   /* subtle neutral border */
+  --ds-line:        #d9dbe2;   /* one step stronger, for emphasis edges */
+  --ds-ink:         #0b0c0f;   /* near-black type */
+  --ds-dim:         #5c6270;   /* secondary ink */
+  --ds-faint:       #868c99;   /* tertiary ink */
+  --ds-accent:      var(--brand-3);            /* #8b2fe0, the AmazAI purple */
+  --ds-accent-ink:  #ffffff;
+  --ds-accent-wash: rgba(139, 47, 224, .07);
+  --ds-lift:        0 1px 2px rgba(16, 20, 40, .05);
+  --ds-pop:         0 2px 6px rgba(16, 20, 40, .06), 0 24px 48px -22px rgba(16, 20, 40, .22);
+
   /* ---- surface: white is the primary canvas, editorial and quiet ---- */
-  --canvas:    #ffffff;   /* == --mkt-canvas: the page is white, not off-white */
-  --panel:     #ffffff;
-  --raised:    #f7f7fa;   /* == --mkt-raised: faint fill for quiet strips */
+  --canvas:    var(--ds-canvas);
+  --panel:     var(--ds-canvas);
+  --raised:    var(--ds-raised);
   --raised-2:  #eef0f4;
-  --line:      #d9dbe2;   /* == --mkt-line: emphasis edge */
-  --hairline:  #e8e9ee;   /* == --mkt-hairline: subtle neutral border */
+  --line:      var(--ds-line);
+  --hairline:  var(--ds-hairline);
 
   /* ---- ink: near-black type on white, with a measured dim/faint ramp ---- */
-  --text:      #0b0c0f;   /* == --mkt-ink */
-  --dim:       #5c6270;   /* == --mkt-dim */
-  --faint:     #868c99;   /* == --mkt-faint */
+  --text:      var(--ds-ink);
+  --dim:       var(--ds-dim);
+  --faint:     var(--ds-faint);
   /* A switched-off agent: a muted neutral that still reads on white but is
      plainly quieter than --faint (idle), so "off" looks less alive than "idle".
      Was a hardcoded dark slate that vanished on the light canvas. */
@@ -45,8 +69,8 @@
   /* ---- signal ----
      The accent is the AmazAI purple, used selectively (reuses --brand-3), the
      same restraint as marketing. warn/danger/ok stay reserved for meaning. */
-  --accent:     var(--brand-3);   /* #8b2fe0 */
-  --accent-ink: #ffffff;
+  --accent:     var(--ds-accent);   /* #8b2fe0 */
+  --accent-ink: var(--ds-accent-ink);
   --warn-ink:   #ffffff;
   --accent-dim: #d9c2f4;
   --ok:         #16885f;
@@ -57,7 +81,7 @@
   --warn-edge:   rgba(169, 106, 6, .30);
   --danger-wash: rgba(200, 55, 44, .06);
   --danger-edge: rgba(200, 55, 44, .28);
-  --accent-wash: rgba(139, 47, 224, .07);   /* == --mkt-accent-wash */
+  --accent-wash: var(--ds-accent-wash);
 
   --hover:     rgba(11, 12, 15, .045);
 
@@ -68,15 +92,15 @@
   --bubble-user-ink: #ffffff;
   --scrim:     rgba(11, 12, 15, .28);
   --track:     rgba(11, 12, 15, .08);
-  --btn:       #ffffff;
+  --btn:       var(--ds-canvas);
   --btn-hover: #f5f5f8;
-  --btn-line:  #d9dbe2;   /* == --mkt-line */
+  --btn-line:  var(--ds-line);
 
-  /* Light elevation is a soft editorial shadow (matching --mkt-lift/--mkt-pop);
-     dark elevation is a top highlight. Both live behind the same two names so
-     components never branch on theme. */
-  --lift: 0 1px 2px rgba(16, 20, 40, .05);
-  --pop:  0 2px 6px rgba(16, 20, 40, .06), 0 24px 48px -22px rgba(16, 20, 40, .22);
+  /* Light elevation is a soft editorial shadow (the same primitive the site
+     uses); dark elevation is a top highlight. Both live behind the same two
+     names so components never branch on theme. */
+  --lift: var(--ds-lift);
+  --pop:  var(--ds-pop);
 
   /* ---- form ---- */
   --r-sm: 7px;
@@ -443,11 +467,14 @@ input:focus, textarea:focus {
 }
 .threadbar .meta { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 7px; }
 
+/* Small state pills share the marketing chip language: a hairline neutral
+   border, a full-round radius, quiet ink, and the same 12px meta type as the
+   inbox chips so the whole console speaks one chip dialect. */
 .state-pill {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11.5px; padding: 2px 9px 2px 7px;
-  border-radius: 999px; border: 1px solid var(--line);
-  color: var(--dim);
+  font: var(--t-meta); padding: 3px 10px;
+  border-radius: 999px; border: 1px solid var(--hairline);
+  color: var(--dim); background: var(--panel);
 }
 .state-pill.running { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-wash); }
 
@@ -789,6 +816,10 @@ a.card:hover { border-color: var(--btn-line); background: var(--hover); }
   display: flex; flex-direction: column; align-items: center; gap: 9px;
 }
 .empty .title { color: var(--text); font-weight: 560; }
+/* An empty state that leads with a <strong> headline (Rooms, Sections) reads
+   as name-then-explanation only if the headline takes the ink and the weight;
+   without this it inherited --dim and sat at the same value as the sentence. */
+.empty strong { color: var(--text); font-weight: 600; font-size: 15px; letter-spacing: -.008em; }
 .empty code {
   font-family: var(--mono); font-size: 11.5px;
   background: var(--raised); border: 1px solid var(--hairline);
@@ -1255,8 +1286,8 @@ a.card:hover { border-color: var(--btn-line); background: var(--hover); }
   display: flex; align-items: flex-start; gap: 14px;
   margin-bottom: 22px;
 }
-.page-head h1 { margin: 0 0 4px; font-size: 21px; letter-spacing: -.02em; }
-.page-head p { margin: 0; color: var(--dim); font-size: 13.5px; }
+.page-head h1 { margin: 0 0 5px; font-size: 22px; font-weight: 640; letter-spacing: -.02em; line-height: 1.2; }
+.page-head p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.5; max-width: 60ch; }
 .page-head > :last-child:not(:first-child) { margin-left: auto; flex: 0 0 auto; }
 
 .section-title {
@@ -1288,21 +1319,30 @@ a.card:hover { border-color: var(--btn-line); background: var(--hover); }
 }
 .text-input::placeholder { color: var(--faint); }
 .row-card {
-  display: flex; align-items: center; gap: 13px;
-  padding: 13px 14px;
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: var(--r); box-shadow: var(--lift);
+  border-radius: var(--r);
+  transition: border-color .13s ease, background .13s ease;
 }
 .row-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.row-body strong { font-size: 14px; font-weight: 600; }
+.row-body strong { font-size: 15px; font-weight: 600; letter-spacing: -.006em; }
 .row-body span {
-  font-size: 12.5px; color: var(--dim);
+  font-size: 13px; color: var(--dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* The last line of a room card: the most recent thing said, one step quieter
+   than the member line above it so the card reads name -> members -> preview.
+   Was referenced in markup (Rooms) but never styled, so it inherited the
+   member line's weight and the two ran together. */
+.row-preview { color: var(--faint); font-size: 12.5px; }
 
+/* A status chip whose border takes its meaning colour from currentColor via
+   the .cc-tone-* modifiers (ok / warn / danger). Same radius, padding and meta
+   type as the other console chips; only the semantic tint is its own. */
 .state-chip {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11.5px; padding: 4px 10px;
+  font: var(--t-meta); padding: 3px 10px;
   border-radius: 999px; border: 1px solid currentColor;
   flex: 0 0 auto; white-space: nowrap;
 }
@@ -1316,6 +1356,46 @@ a.card:hover { border-color: var(--btn-line); background: var(--hover); }
   display: grid; place-items: center; flex: 0 0 38px;
   background: var(--raised); color: var(--dim); font-size: 16px;
 }
+
+/* An artifact reads as a deliverable, not a filename: its name carries a type
+   tag and, past the first revision, a version. The marketing-consistent chip
+   language (hairline border, meta type, pill radius) so it sits with the rest
+   of the console's tags rather than inventing a new shape. */
+.artifact-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.artifact-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-type, .artifact-ver {
+  flex: 0 0 auto; font: var(--t-meta); padding: 2px 8px;
+  border-radius: 999px; border: 1px solid var(--hairline); color: var(--dim);
+}
+.artifact-ver { color: var(--accent); border-color: var(--accent-dim); }
+.artifact-desc { color: var(--faint); font-size: 12.5px; }
+
+/* The durable-state coordination view at the top of a room: who owns the
+   stage, what each member is doing, and the room-level handoff/artifact facts.
+   Derived from run/task rows, never a live stream -- so it is quiet, restrained
+   marketing language, not a busy live ticker. */
+.room-coord {
+  margin: 8px 12px 0; padding: 12px 14px;
+  border: 1px solid var(--hairline); border-radius: var(--r);
+  background: var(--raised); display: flex; flex-direction: column; gap: 10px;
+}
+.room-coord-members { display: flex; flex-direction: column; gap: 8px; }
+.room-coord-member { display: flex; align-items: center; gap: 10px; }
+.room-coord-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.room-coord-body strong { font-size: 14px; font-weight: 600; letter-spacing: -.006em; }
+.room-coord-line { font: var(--t-meta); color: var(--dim); }
+.room-coord-member[data-state="approval"] .room-coord-line { color: var(--warn); }
+.room-coord-member[data-state="blocked"] .room-coord-line { color: var(--danger); }
+.room-coord-tag {
+  flex: 0 0 auto; font: var(--t-meta); padding: 2px 9px;
+  border-radius: 999px; border: 1px solid var(--accent-dim); color: var(--accent);
+}
+.room-coord-flags { display: flex; flex-wrap: wrap; gap: 8px; }
+.room-coord-flag {
+  font: var(--t-meta); padding: 3px 10px;
+  border-radius: 999px; border: 1px solid var(--hairline); color: var(--dim);
+}
+.room-coord-flag--deliver { color: var(--ok); border-color: var(--ok); }
 
 /* ------------------------------------------------------------ home cards */
 
@@ -1864,7 +1944,7 @@ button.lg { min-height: 46px; padding: 0 24px; font-size: 14.5px; }
 .task-who span { font-size: 12px; color: var(--dim); }
 .task .timeline { flex: 1; min-height: 0; }
 a.row-card { text-decoration: none; color: inherit; }
-a.row-card:hover { border-color: var(--btn-line); }
+a.row-card:hover { border-color: var(--accent-dim); background: var(--accent-wash); }
 
 @media (min-width: 900px) { .task-back { display: none; } }
 
@@ -1922,11 +2002,12 @@ a.row-card:hover { border-color: var(--btn-line); }
 
 .picker-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .pick-chip {
-  display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
-  padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line);
+  display: inline-flex; align-items: center; gap: 6px; font: var(--t-label);
+  padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hairline);
+  background: var(--panel); color: var(--dim);
   cursor: pointer; user-select: none;
 }
-.pick-chip.on { border-color: var(--accent); background: var(--hover); }
+.pick-chip.on { border-color: var(--accent); background: var(--accent-wash); color: var(--text); }
 .pick-chip input { margin: 0; }
 
 /* ------------------------------------------------------------------ *
@@ -2044,8 +2125,9 @@ a.row-card:hover { border-color: var(--btn-line); }
    ellipsized -- the name gives way first. */
 .inbox-chip {
   flex: none; align-self: center;
-  padding: 1px 7px; border-radius: 6px;
-  background: var(--raised-2); color: var(--dim);
+  padding: 2px 8px; border-radius: 7px;
+  background: var(--panel); border: 1px solid var(--hairline);
+  color: var(--dim);
   font: var(--t-meta); letter-spacing: .01em; white-space: nowrap;
 }
 /* Tabular figures so 2:15 and 1:07 occupy the same width and the right edge
@@ -2808,30 +2890,34 @@ a.row-card:hover { border-color: var(--btn-line); }
    sticky bar carries its own values even where it is rendered directly (e.g.
    Landing) rather than inside a `.mkt` wrapper. */
 .mkt, .mkt-nav {
+  /* The marketing --mkt-* names now map onto the shared --ds-* primitives
+     defined on :root (styles.css top), so the site and the console draw from
+     one source of truth and cannot drift. Only names that are marketing-only
+     (--mkt-ink-2, --mkt-accent-2, --mkt-accent-edge) keep their own literals. */
   /* ---- surface: white is the primary canvas ---- */
-  --mkt-canvas:    #ffffff;
-  --mkt-surface:   #ffffff;
-  --mkt-raised:    #f7f7fa;   /* faint fill for quiet cards / strips */
-  --mkt-hairline:  #e8e9ee;   /* subtle neutral border */
-  --mkt-line:      #d9dbe2;   /* one step stronger, for emphasis edges */
+  --mkt-canvas:    var(--ds-canvas);
+  --mkt-surface:   var(--ds-canvas);
+  --mkt-raised:    var(--ds-raised);   /* faint fill for quiet cards / strips */
+  --mkt-hairline:  var(--ds-hairline); /* subtle neutral border */
+  --mkt-line:      var(--ds-line);     /* one step stronger, for emphasis edges */
 
   /* ---- ink: nearly-black type, with a measured dim/faint ramp ---- */
-  --mkt-ink:       #0b0c0f;
+  --mkt-ink:       var(--ds-ink);
   --mkt-ink-2:     #3a3f4a;
-  --mkt-dim:       #5c6270;
-  --mkt-faint:     #868c99;
+  --mkt-dim:       var(--ds-dim);
+  --mkt-faint:     var(--ds-faint);
 
   /* ---- accent: AmazAI purple, used selectively (reuses brand vars) ---- */
-  --mkt-accent:      var(--brand-3);      /* #8b2fe0 */
+  --mkt-accent:      var(--ds-accent);    /* #8b2fe0 */
   --mkt-accent-2:    var(--brand-4);      /* #c026d3 */
-  --mkt-accent-ink:  #ffffff;
-  --mkt-accent-wash: rgba(139, 47, 224, .07);
+  --mkt-accent-ink:  var(--ds-accent-ink);
+  --mkt-accent-wash: var(--ds-accent-wash);
   --mkt-accent-edge: rgba(139, 47, 224, .28);
   --mkt-brand-sweep: var(--brand-sweep);
 
   /* ---- elevation: soft, editorial, never heavy ---- */
-  --mkt-lift: 0 1px 2px rgba(16, 20, 40, .05);
-  --mkt-pop:  0 2px 6px rgba(16, 20, 40, .06), 0 24px 48px -22px rgba(16, 20, 40, .22);
+  --mkt-lift: var(--ds-lift);
+  --mkt-pop:  var(--ds-pop);
 
   /* ---- radii ---- */
   --mkt-r:    12px;

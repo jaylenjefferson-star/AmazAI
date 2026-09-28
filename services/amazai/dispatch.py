@@ -26,6 +26,24 @@ def mentioned(agent_ids: list[str], text: str) -> list[str]:
     return out
 
 
+#: Any `@handle` token at all -- used only to tell "this message named a Bot the
+#: room does not hold" (a handoff to route) apart from "this message named no
+#: one" (the whole-room kickoff). Deliberately not the everyone-tag set: `@all`
+#: and friends are handled first and separately. Whole-token, same discipline as
+#: `mentioned`, so `email@host` or a bare `@` is not mistaken for an address.
+_ANY_MENTION = re.compile(r"(?<![\w-])@[A-Za-z0-9][\w-]*")
+
+
+def any_mention(text: str) -> bool:
+    """Does this message address at least one `@handle`?
+
+    The everyone-tags (`@all`/`@everyone`/...) are addresses too, so this is
+    true for them as well; callers that need to exclude those check
+    `addresses_everyone_by_tag` first, which `targets_for` does.
+    """
+    return bool(_ANY_MENTION.search(text or ""))
+
+
 #: The unambiguous *token* form: `@all`, `@everyone`, `@team`, `@channel`, `@room`.
 #: Split from the phrase forms below because a token is as explicit as `@chief`
 #: is -- so, unlike a phrase, it outranks a named mention in the same message
@@ -82,10 +100,22 @@ def targets_for(thread: dict, text: str) -> list[str]:
         if addresses_everyone_by_tag(text):
             return ids
         named = mentioned(ids, text)
-        # A named mention wins over a loose "hi team" phrase (below), but never
-        # over the explicit `@`-tag above: naming someone alongside `@everyone`
-        # is still everyone, plus a note for one of them.
-        return named or ids
+        if named:
+            # A named mention of a room member wins over a loose "hi team"
+            # phrase (below), but never over the explicit `@`-tag above: naming
+            # someone alongside `@everyone` is still everyone, plus a note for
+            # one of them.
+            return named
+        # A message that mentions *someone*, but nobody who is in this room, is
+        # a handoff request -- "@specialist can you look at this" names a Bot
+        # the room does not hold, so it is work to route, not a reason to wake
+        # every member. Waking one Bot (the lead) to consider the handoff is
+        # cheaper and truer to intent than a room-wide wake that no @-mention
+        # asked for. A message that mentions no one at all is the unchanged
+        # collaborative default: the whole room kicks off.
+        if any_mention(text) and ids:
+            return ids[:1]
+        return ids
     return ids[:1]
 
 

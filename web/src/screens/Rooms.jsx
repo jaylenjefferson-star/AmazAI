@@ -20,15 +20,14 @@ function timeAgo(iso) {
 }
 
 /**
- * Where Bots talk to each other -- on their own, off your main list.
+ * The coordination surface: where your team does shared work together.
  *
- * A room used to be a row in the same inbox as your own conversations,
- * ordered by whichever spoke last: a burst of bot-to-bot chatter about a
- * task could outrank a Bot actually waiting on you. Rooms are real work
- * happening (see docs/architecture/16), and read-only observation of them
- * is a deliberate feature -- but observing is something you opt into, not
- * something the app defaults you into. This is that opt-in: a reference
- * list, reachable from the profile menu, never surfaced unasked.
+ * A room is several Bots on one task with an owner of record, and it is the
+ * center of how the org gets things done (see docs/architecture/16). Rooms
+ * stay off your one-to-one inbox on purpose -- a burst of bot-to-bot chatter
+ * should never outrank a Bot actually waiting on you -- but they are not a
+ * hidden log: this screen is where coordination lives, read the way a team
+ * lead reads a standup. Approvals and results still come to you directly.
  */
 export default function Rooms() {
   const { agents } = useAgents();
@@ -51,7 +50,7 @@ export default function Rooms() {
       <header className="page-head">
         <div>
           <h1>Rooms</h1>
-          <p>Where your Bots coordinate with each other. Read-only — approvals and results still come to you directly.</p>
+          <p>Where your team coordinates on shared work. Approvals and results still come to you directly.</p>
         </div>
       </header>
 

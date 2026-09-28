@@ -49,10 +49,113 @@ class TestContinuationFailsClosed:
         assert turns[0]["content"][0]["toolUse"]["toolUseId"] == "tu-1"
         assert turns[1]["content"][0]["toolResult"]["status"] == "success"
 
+    def test_tool_result_answers_every_recorded_id_decision_in_its_own_slot(self, monkeypatch):
+        """The id-completeness contract: the service holds every toolUseId it
+        handed out for a turn and rejects the continuation if one comes back
+        unanswered. A turn that asked for three things and paused on one must
+        replay all three, the decision in the slot the model asked for it."""
+        monkeypatch.setenv("AMAZAI_CONTINUATION", "tool_result")
+        paused = {"calls": [
+            {"toolUseId": "tu-a", "name": "read_artifact", "input": {"id": "art-1"},
+             "error": False, "text": "the draft"},
+            {"toolUseId": "tu-b", "name": "request_approval", "input": {"action": "email.send"},
+             "approval": True},
+            {"toolUseId": "tu-c", "name": "message_agent", "input": {"to": "ops"},
+             "error": False, "text": "not run: paused"},
+        ]}
+        turns = continuation.resume_messages(
+            {"resume": True, "resumeNote": "approved",
+             "resumeApproval": {"status": "approved", "toolUseId": "tu-b",
+                                "toolName": "request_approval",
+                                "toolInput": {"action": "email.send"}}}, paused)
+
+        assistant, user = turns[-2], turns[-1]
+        answered = [b["toolResult"]["toolUseId"] for b in user["content"]]
+        assert answered == ["tu-a", "tu-b", "tu-c"], "every recorded id, in order"
+        # The decision sits in its own slot (tu-b), carrying the operator's note
+        # and a success status because it was approved.
+        decision = next(b["toolResult"] for b in user["content"]
+                        if b["toolResult"]["toolUseId"] == "tu-b")
+        assert decision["status"] == "success"
+        assert decision["content"][0]["text"] == "approved"
+        called = [b["toolUse"]["toolUseId"] for b in assistant["content"] if "toolUse" in b]
+        assert called == ["tu-a", "tu-b", "tu-c"]
+
+    def test_tool_result_puts_carried_earlier_rounds_first(self, monkeypatch):
+        """A turn that paused on its third round resumes as the *whole* turn:
+        the earlier rounds come first, in order, then the round that paused."""
+        monkeypatch.setenv("AMAZAI_CONTINUATION", "tool_result")
+        earlier = [
+            {"role": "assistant", "content": [{"toolUse": {
+                "toolUseId": "r1", "name": "read_artifact", "input": {}}}]},
+            {"role": "user", "content": [{"toolResult": {
+                "toolUseId": "r1", "status": "success", "content": [{"text": "round one"}]}}]},
+        ]
+        paused = {"carried": earlier, "calls": [
+            {"toolUseId": "tu-b", "name": "request_approval", "input": {}, "approval": True}]}
+        turns = continuation.resume_messages(
+            {"resume": True, "resumeNote": "ok",
+             "resumeApproval": {"status": "approved", "toolUseId": "tu-b",
+                                "toolName": "request_approval"}}, paused)
+        assert turns[0] is earlier[0] and turns[1] is earlier[1]
+        assert turns[-1]["content"][0]["toolResult"]["toolUseId"] == "tu-b"
+
+    def test_tool_result_falls_back_to_the_decisions_own_pair_if_no_ids_are_usable(self, monkeypatch):
+        """Never silently lose the decision: if every recorded id was blank (so
+        unanswerable) the approval's own pair is still emitted -- a valid turn,
+        better than no answer at all."""
+        monkeypatch.setenv("AMAZAI_CONTINUATION", "tool_result")
+        paused = {"calls": [{"toolUseId": "", "name": "read_artifact",
+                             "input": {}, "error": False, "text": "no id"}]}
+        turns = continuation.resume_messages(
+            {"resume": True, "resumeNote": "approved",
+             "resumeApproval": {"status": "approved", "toolUseId": "tu-b",
+                                "toolName": "request_approval"}}, paused)
+        answered = [b["toolResult"]["toolUseId"] for b in turns[-1]["content"]]
+        assert answered == ["tu-b"]
+
     def test_a_typo_is_an_error_not_a_silent_default(self, monkeypatch):
         monkeypatch.setenv("AMAZAI_CONTINUATION", "toolresult")
         with pytest.raises(ContinuationUnavailable):
             continuation.mode()
+
+    def test_the_empty_string_is_the_default_not_a_typo(self, monkeypatch):
+        # A var set-but-empty (a CDK context that resolved to nothing) is the
+        # default, not a hard failure: the safety fallback must survive a blank.
+        monkeypatch.setenv("AMAZAI_CONTINUATION", "")
+        assert continuation.mode() is Mode.RESUME_NOTE
+
+    def test_tool_result_is_never_reached_without_the_explicit_flag(self, monkeypatch):
+        # The whole point of the seam: absent the explicit flag, a paused turn
+        # that *could* be replayed as tool_result is still delivered as a note,
+        # so no deploy ever runs the unverified shape by accident.
+        monkeypatch.delenv("AMAZAI_CONTINUATION", raising=False)
+        paused = {"calls": [{"toolUseId": "tu-1", "name": "request_approval",
+                             "input": {}, "approval": True}]}
+        turns = continuation.resume_messages(
+            {"resume": True, "resumeNote": "approved",
+             "resumeApproval": {"status": "approved", "toolUseId": "tu-1",
+                                "toolName": "request_approval"}}, paused)
+        assert turns == [{"role": "user", "content": [{"text": "approved"}]}]
+        assert not any("toolUse" in b or "toolResult" in b
+                       for t in turns for b in t["content"])
+
+    def test_tool_round_messages_shape_follows_the_mode(self, monkeypatch):
+        """The inline-tool round handed back mid-turn takes the same two shapes
+        the resume does: a prose note by default, a real toolResult turn only
+        when tool_result is configured."""
+        calls = [{"toolUseId": "tu-1", "name": "read_artifact", "input": {"id": "a"},
+                  "error": False, "result": {"ok": True}}]
+
+        monkeypatch.delenv("AMAZAI_CONTINUATION", raising=False)
+        note = continuation.tool_round_messages("looking", calls)
+        assert not any("toolUse" in b or "toolResult" in b
+                       for t in note for b in t["content"])
+
+        monkeypatch.setenv("AMAZAI_CONTINUATION", "tool_result")
+        native = continuation.tool_round_messages("looking", calls)
+        assert native[0]["content"][-1]["toolUse"]["toolUseId"] == "tu-1"
+        assert native[1]["content"][0]["toolResult"]["toolUseId"] == "tu-1"
 
     def test_nothing_outside_the_boundary_builds_a_resume_turn(self):
         """If another module read `resumeNote`, D4 would have two answers."""

@@ -49,6 +49,38 @@ describe('presence events', () => {
     expect(result.current.eng.state).toBe('thinking');
   });
 
+  it('names the live activity by what the tool actually does', () => {
+    const { result } = renderHook(() => usePresence());
+
+    // A browser/connector call reads as using a tool, not the bare name.
+    act(() => applyEvent({ type: 'tool', threadId: 'dm-eng', runId: 'run-1', name: 'browser' }, ctx));
+    expect(result.current.eng).toMatchObject({ state: 'working', action: 'Using a tool' });
+    act(() => applyEvent({ type: 'tool', threadId: 'dm-eng', runId: 'run-1', name: 'connector_call' }, ctx));
+    expect(result.current.eng.action).toBe('Using a tool');
+
+    // Producing a deliverable reads as creating an artifact.
+    act(() => applyEvent({ type: 'tool', threadId: 'dm-eng', runId: 'run-1', name: 'create_artifact' }, ctx));
+    expect(result.current.eng).toMatchObject({ state: 'working', action: 'Creating an artifact' });
+
+    // Reaching a teammate reads as sending a message.
+    act(() => applyEvent({ type: 'tool', threadId: 'dm-eng', runId: 'run-1', name: 'message_agent' }, ctx));
+    expect(result.current.eng.action).toBe('Sending a message');
+    act(() => applyEvent({ type: 'tool', threadId: 'dm-eng', runId: 'run-1', name: 'handoff' }, ctx));
+    expect(result.current.eng.action).toBe('Sending a message');
+  });
+
+  it('falls back to the event summary, then the labelled name, for an unclassified tool', () => {
+    const { result } = renderHook(() => usePresence());
+
+    // A tool with its own sentence keeps it.
+    act(() => applyEvent({ type: 'tool', threadId: 'dm-eng', runId: 'run-1', name: 'agent.find', summary: 'Looked up teammates' }, ctx));
+    expect(result.current.eng.action).toBe('Looked up teammates');
+
+    // With no summary, the labelled name -- never the raw identifier.
+    act(() => applyEvent({ type: 'tool', threadId: 'dm-eng', runId: 'run-1', name: 'agent.find' }, ctx));
+    expect(result.current.eng.action).toBe('Looked up teammates');
+  });
+
   it('records the live tool trail and closes it on an approval pause', () => {
     const { result } = renderHook(() => useSteps('dm-eng'));
 
@@ -77,10 +109,10 @@ describe('the reply as it arrives', () => {
     expect(result.current).toMatchObject({ runId: 'run-1', text: 'Looking into it' });
   });
 
-  it('still reports the agent as writing', () => {
+  it('still reports the agent as typing', () => {
     const { result } = renderHook(() => usePresence());
     act(() => applyEvent({ type: 'delta', threadId: 'dm-eng', runId: 'run-1', text: 'hi' }, ctx));
-    expect(result.current.eng).toMatchObject({ state: 'thinking', action: 'Writing a reply' });
+    expect(result.current.eng).toMatchObject({ state: 'thinking', action: 'Typing' });
   });
 
   it('starts over when a new run begins rather than appending to the last reply', () => {
