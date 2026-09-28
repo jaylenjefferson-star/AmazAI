@@ -110,6 +110,81 @@ class BudgetCheck:
         return self.verdict is Verdict.STOP
 
 
+@dataclass(frozen=True)
+class TaskBudget:
+    """A per-task envelope carved out of a coordinator's own run budget.
+
+    A fan-out is one logical piece of work spread across a coordinator and the
+    children it spawns. Left to the flat `Budget.per_run_usd` alone, each child
+    would get the coordinator's whole per-run ceiling, so a task with five
+    children could spend six times what a single run may -- the account credit
+    ceiling in `billing.py` still bounds the total, but nothing between here and
+    that hard cap kept one fan-out proportional to one run's worth of spend.
+
+    This composes that missing middle: the coordinator's `per_run_usd` is the
+    envelope for the whole task, and `for_child` splits it across the spawned
+    children so their shares sum to (at most) the envelope. It is a ceiling, not
+    a reservation -- a child that finishes cheaply does not hand its slack to a
+    sibling -- and it never grants more than the agent's own `Budget` already
+    allows, so it can only tighten enforcement, never loosen it.
+
+    Scaffolding, not live enforcement. This is a pure composition helper: it
+    computes a proportional per-task envelope, and nothing more. It is
+    intentionally NOT wired into the live run loop. This runtime deliberately
+    removed per-agent and per-run budget gating in favour of a single
+    account-level credit ceiling (`billing.has_credit`; see the notes around the
+    credit check in services/handlers/orchestrator.py and in collab.py), so
+    reintroducing a per-run gate on the spawn path would be a regression against
+    that design decision. What this class provides is the number a FUTURE
+    account-level or opt-in per-task check could consume; the "only narrows,
+    never grants" property above describes the math, not a guarantee that any
+    live run is being bounded by it today. A reader must not mistake it for
+    active enforcement -- spend is bounded at runtime by the account credit
+    ceiling, not by this envelope.
+    """
+    envelope_usd: float
+    child_count: int
+    coordinator_reserve: float = 0.2  # coordinator keeps a slice for its own synthesis turn
+
+    @property
+    def coordinator_usd(self) -> float:
+        """The coordinator's own share -- what it may spend on planning and the
+        final synthesis run, held back before children are allotted."""
+        if self.child_count <= 0:
+            return round(self.envelope_usd, 6)
+        return round(self.envelope_usd * self.coordinator_reserve, 6)
+
+    def for_child(self, *, agent_budget: Budget | None = None) -> float:
+        """One child's dollar ceiling: an equal share of what remains after the
+        coordinator's reserve, split across the spawned children. Never exceeds
+        the child agent's own per-run ceiling, so a cheap-agent child is still
+        capped by its own `Budget` and the composition only ever narrows."""
+        if self.child_count <= 0:
+            return 0.0
+        share = round((self.envelope_usd - self.coordinator_usd) / self.child_count, 6)
+        if agent_budget is not None:
+            return round(min(share, agent_budget.per_run_usd), 6)
+        return share
+
+
+def compose_task_budget(coordinator_budget: Budget, *, child_count: int) -> TaskBudget:
+    """Build the per-task envelope from the coordinator's agent `Budget`.
+
+    The envelope is the coordinator's own `per_run_usd`: one fan-out is treated
+    as one run's worth of spend regardless of how many children it splits into.
+    This is the only place the split ratio is decided, so there is one number to
+    reason about rather than per-child limits scattered across the spawn path.
+
+    Like `TaskBudget`, this is pure composition and scaffolding: it returns an
+    envelope for a future account-level or opt-in per-task check to consume. It
+    is intentionally not called on the live spawn path, where spend is bounded
+    by the account credit ceiling (`billing.has_credit`), not by per-run
+    budgets. Calling it does not enforce anything on its own.
+    """
+    return TaskBudget(envelope_usd=coordinator_budget.per_run_usd,
+                      child_count=max(0, int(child_count)))
+
+
 def budget_for_agent(agent: dict) -> Budget:
     """The one place an agent row's raw `budget` dict becomes a `Budget`.
 

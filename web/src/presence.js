@@ -2,6 +2,33 @@ import { useSyncExternalStore } from 'react';
 
 import { stepLabel } from './lib/tools';
 
+// The canonical activity vocabulary for a live tool call, chosen by what the
+// tool *is* rather than left as a bare identifier. A person watching should
+// read what the Bot is doing right now -- creating a file, sending a message,
+// using an app -- not the code name of the call. Names come from
+// `orchestrator._handle_tool` (the same set `lib/tools.js` labels); anything
+// not classified here falls back to the tool's own summary or labelled name,
+// so an unknown tool is still described, never mislabelled.
+const TOOL_MESSAGE = new Set(['message_agent', 'handoff']);
+const TOOL_ARTIFACT = new Set(['create_artifact']);
+// Built-in substrate and connectors: the Bot is reaching outside itself to do
+// something -- a browser, a shell, an app -- which reads as "using a tool".
+const TOOL_USING = new Set([
+  'browser', 'shell', 'code_interpreter', 'file_operations',
+  'connector_call', 'connector_search', 'request_connector', 'read_artifact',
+]);
+
+/** The canonical action line for a live `tool` event, by what the tool does.
+ *  A specific verb where the name says one, and the current behaviour (the
+ *  event's own summary, else the labelled name) when it does not. */
+function toolAction(ev) {
+  const name = ev.name || '';
+  if (TOOL_MESSAGE.has(name)) return 'Sending a message';
+  if (TOOL_ARTIFACT.has(name)) return 'Creating an artifact';
+  if (TOOL_USING.has(name)) return 'Using a tool';
+  return ev.summary || stepLabel(name) || '';
+}
+
 /**
  * Who is doing what, right now.
  *
@@ -170,7 +197,7 @@ export function useSteps(threadId) {
 // The reply as it is being written, per thread. Live only, for the same reason
 // the steps are: the finished words are on the stored message, and this is that
 // same text before it lands. `delta` text used to be thrown away here -- the
-// event was reduced to "Writing a reply" and the words discarded -- so the
+// event was reduced to a bare status and the words discarded -- so the
 // console showed an animated dot over a 1.5s poll instead of the reply.
 let streamSnapshot = {};    // threadId -> { runId, text, at }
 const streamListeners = new Set();
@@ -290,15 +317,16 @@ export function applyEvent(ev, ctx) {
       // would be worse than not showing them. A room therefore accumulates
       // nothing here -- see the note in Room.jsx.
       if (agents.length === 1) appendDelta(ev);
-      agents.forEach((a) => put(a, 'thinking', 'Writing a reply', ev.runId));
+      agents.forEach((a) => put(a, 'thinking', 'Typing', ev.runId));
       break;
     case 'tool':
       recordStep(ev);
-      // The summary is already a sentence. Falling back to the bare tool name
-      // put an identifier (`agent.find`) where a person reads what a Bot is
-      // doing right now, so the fallback is the labelled name.
-      agents.forEach((a) => put(a, 'working',
-                                ev.summary || stepLabel(ev.name) || '', ev.runId));
+      // A specific activity where the tool name gives one -- creating an
+      // artifact, sending a message, using a tool -- and the event's own
+      // summary (already a sentence) otherwise. Falling back to the bare tool
+      // name put an identifier (`agent.find`) where a person reads what a Bot
+      // is doing, so the last resort is the labelled name, never the raw one.
+      agents.forEach((a) => put(a, 'working', toolAction(ev), ev.runId));
       break;
     case 'approval.requested': {
       // A pause closes the trail: the turn that stopped here is saved with its

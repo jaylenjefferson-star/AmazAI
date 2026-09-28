@@ -13,17 +13,25 @@ import { ARCHETYPES } from './archetypes';
  * per-frame React. A list of twenty of these costs the same as one.
  */
 
+// The `verb` is the plain, present-tense phrase an operator reads on hover and
+// in the desk "Now" pane. It is the coarse fallback for a state; a live run
+// supplies a finer action line (typing, using a tool, creating an artifact,
+// sending a message) through `presence.js`, and where one exists it is shown
+// in place of the verb. These phrasings are the canonical activity vocabulary,
+// kept word-for-word in step with `presence.js` RUN_STATES and
+// `services/amazai/presence.py` so the avatar, the hover line and the durable
+// GET /presence read never describe the same agent three different ways.
 export const STATES = {
   idle:     { label: 'Idle',            tone: 'neutral', verb: 'resting' },
-  thinking: { label: 'Thinking',        tone: 'accent',  verb: 'working something out' },
-  working:  { label: 'Working',         tone: 'accent',  verb: 'running a task' },
+  thinking: { label: 'Thinking',        tone: 'accent',  verb: 'thinking it through' },
+  working:  { label: 'Working',         tone: 'accent',  verb: 'working on it' },
   // Paused on something outside itself -- a connector, another Bot -- rather
   // than on you. Quieter than `approval` on purpose: nothing is being asked of
   // the operator, so nothing about it should look like a request.
-  waiting:  { label: 'Waiting',         tone: 'neutral', verb: 'waiting on something else' },
+  waiting:  { label: 'Waiting',         tone: 'neutral', verb: 'waiting on a teammate' },
   approval: { label: 'Needs you',       tone: 'warn',    verb: 'waiting for your approval' },
-  complete: { label: 'Done',            tone: 'ok',      verb: 'finished' },
-  blocked:  { label: 'Blocked',         tone: 'danger',  verb: 'stuck and stopped' },
+  complete: { label: 'Done',            tone: 'ok',      verb: 'done' },
+  blocked:  { label: 'Blocked',         tone: 'danger',  verb: 'blocked' },
   offline:  { label: 'Off',             tone: 'muted',   verb: 'switched off' },
 };
 

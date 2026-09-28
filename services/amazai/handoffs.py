@@ -345,12 +345,47 @@ _CHILD_OUTCOME = {
 }
 
 
+def _agent_name(store: Store, agent_id: str) -> str:
+    return (store.try_get(K.agent_pk(store.owner_id, agent_id), "META") or {}).get(
+        "name", agent_id)
+
+
+def child_completion(store: Store, child_row: dict) -> dict:
+    """One child's completion as the structured record the coordinator resumes
+    from -- not prose it has to parse back.
+
+    The contract is these fields, always present: `status` (one of
+    `_CHILD_OUTCOME`'s values), a short `summary`, the `artifactIds` it left,
+    and `error` (empty unless the child settled `failed`). `_digest_line` is a
+    derived *display* view of the same fields; the coordinator's synthesis input
+    is built from this dict so a reworded digest sentence can never change what
+    the coordinator is actually told happened.
+
+    Read straight off the durable `TaskChild` row, which `notify_coordinator_if_child`
+    wrote when the child settled, so this stays a pure projection of committed
+    state rather than a second source of truth.
+    """
+    return {
+        "runId": child_row["runId"],
+        "agentId": child_row["agentId"],
+        "agentName": _agent_name(store, child_row["agentId"]),
+        "status": child_row.get("status", "active"),
+        "summary": (child_row.get("summary") or "").strip(),
+        "artifactIds": list(child_row.get("artifactIds") or []),
+        "error": (child_row.get("error") or "").strip(),
+    }
+
+
 def _digest_line(store: Store, child_row: dict) -> str:
-    name = (store.try_get(K.agent_pk(store.owner_id, child_row["agentId"]), "META") or {}).get(
-        "name", child_row["agentId"])
-    status = child_row.get("status", "active")
-    summary = (child_row.get("summary") or "").strip()
+    """A human-readable rendering of `child_completion`, for the coordinator's
+    prose brief. Derived from the structured fields, never the other way round."""
+    record = child_completion(store, child_row)
+    name = record["agentName"]
+    status = record["status"]
+    summary = record["summary"]
     line = f"- {name}: {status}" + (f" -- {summary[:300]}" if summary else "")
+    if record["error"]:
+        line += f"\n  error: {record['error'][:300]}"
     # Names and ids, never content -- the coordinator retrieves one with
     # read_artifact only if it actually needs what is inside it.
     produced = artifacts.list_for_run(store, child_row["runId"], limit=10)
@@ -361,7 +396,7 @@ def _digest_line(store: Store, child_row: dict) -> str:
 
 
 def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
-                                summary: str) -> dict | None:
+                                summary: str, error: str = "") -> dict | None:
     """A run that just settled reports to its coordinator, if it was spawned
     from an accepted handoff -- but only *wakes* it once every child from the
     same fan-out has reported in.
@@ -395,15 +430,20 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
         return None
 
     outcome = _CHILD_OUTCOME.get(state_value, "failed")
-    # The structured half of what a coordinator sees: `_digest_line` already
-    # folds this into the wake-up text, but keeping it on the row too means a
-    # task's own compact result set is queryable directly (`GET /tasks/{id}`),
-    # not only recoverable by re-reading a synthesis run's prose.
+    # The structured completion contract, written whole and mandatory -- not a
+    # best-effort scattering of whatever fields happened to be handy. `status`,
+    # `summary`, `artifactIds` and `error` are always present on the row, so the
+    # coordinator resumes from these fields (see `child_completion`) rather than
+    # parsing them back out of a synthesis run's prose, and a task's compact
+    # result set stays queryable directly (`GET /tasks/{id}`). `error` is only
+    # non-empty on a failed outcome: a done/cancelled child carries the empty
+    # string so the field's presence never has to be guarded for.
     artifact_ids = [a["artifactId"] for a in artifacts.list_for_run(store, run["runId"], limit=20)]
+    error_text = (error or "").strip()[:2000] if outcome == "failed" else ""
     try:
         store.update(K.task_pk(task_id), K.task_child_sk(run["runId"]), {
             "status": outcome, "endedAt": now_iso(), "summary": (summary or "")[:2000],
-            "artifactIds": artifact_ids,
+            "artifactIds": artifact_ids, "error": error_text,
         }, expect={"status": "active"})
     except Conflict:
         return None
@@ -427,11 +467,30 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
     # eventually-consistent read immediately after could still return a
     # stale snapshot that predates one of those writes reaching this replica.
     children = store.query(K.task_pk(task_id), sk_prefix="CHILD#", limit=50, consistent=True)
-    done = sum(1 for c in children if c.get("status") == "done")
+    # The structured batch the coordinator actually resumes from. `goal` below is
+    # a human-readable rendering of exactly this list; the resume contract is the
+    # list, so a coordinator can act on a partial batch by counting statuses
+    # rather than by trusting a sentence to have named the failures.
+    completions = [child_completion(store, c) for c in children]
+    total = len(completions)
+    done = sum(1 for c in completions if c["status"] == "done")
+    failed = sum(1 for c in completions if c["status"] == "failed")
+    # Proportional partial-success policy: the coordinator is told how many of N
+    # succeeded and may proceed on the partial result, exactly as the sweeper's
+    # own failure/timeout propagation already surfaces a child that never
+    # reported. No new scheduling concept -- just the count made explicit so
+    # "N of M finished, here is what came back" is a decision the coordinator can
+    # take rather than an all-or-nothing wait.
+    partial = 0 < done < total
     lines = "\n".join(_digest_line(store, c) for c in children)
-    goal = (f"All {len(children)} of the tasks you handed off have finished "
-           f"({done} succeeded). Here's what came back:\n{lines}\n\n"
-           "Continue the task: hand off the next step, or post the result.")
+    outcome_line = (f"All {total} of the tasks you handed off have finished "
+                    f"({done} succeeded")
+    outcome_line += f", {failed} failed)." if failed else ")."
+    guidance = ("Some finished and some did not. Decide what to do with the partial "
+                "result: continue on what succeeded, retry what failed, or post what "
+                "you have." if partial else
+                "Continue the task: hand off the next step, or post the result.")
+    goal = (f"{outcome_line} Here's what came back:\n{lines}\n\n{guidance}")
 
     # Carry the *coordinator's own* level onto the synthesis run, not the
     # children's. The children sit one deeper than the coordinator
@@ -450,7 +509,12 @@ def notify_coordinator_if_child(store: Store, run: dict, state_value: str,
         store, agent_id=task["coordinatorAgentId"], thread_id=task["threadId"], goal=goal,
         trigger={"type": "child_completion", "taskId": task_id,
                  "childRunId": run["runId"], "childAgentId": run["agentId"],
-                 "outcome": outcome, "childCount": len(children), "doneCount": done,
+                 "outcome": outcome, "childCount": total, "doneCount": done,
+                 "failedCount": failed, "partial": partial,
+                 # The structured batch, carried onto the trigger so the resume
+                 # is driven by data and not only by the prose `goal`. Bounded
+                 # by the fan-out ceiling, so this stays a handful of rows.
+                 "children": completions,
                  "delegationDepth": coordinator_depth})
 
     store.update(K.task_pk(task_id), "META", {

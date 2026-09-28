@@ -22,7 +22,7 @@ from amazai import (agentcore, agents as A, approvals, artifacts as AR, billing,
                     composio, connectors as C, handoffs, identity, keys as K, memory, models,
                     onboarding, routines as R, runs, schedules, secrets, settings as S,
                     skills, standard_runtime, stripe_client, threads)
-from amazai import dispatch, directory as D, govern, org, presence, provisioning
+from amazai import ambient, dispatch, directory as D, govern, org, presence, provisioning
 from amazai.policy import Capability
 from amazai.states import PAUSED, RunState, TERMINAL
 from amazai.store import Conflict, NotFound, Store, new_id, now_iso, ordered_suffix
@@ -61,8 +61,18 @@ def _artifact_card(client, row: dict) -> dict:
     return {
         "artifactId": row["artifactId"],
         "runId": row.get("runId"),
+        "taskId": row.get("taskId"),
         "agentId": row.get("createdByAgentId"),
         "name": row.get("name", ""),
+        # Type/description/version/lineage let the console present a deliverable
+        # as a first-class thing -- "here is what the team produced", which
+        # version it is, and that an earlier one exists -- rather than a bare
+        # filename. All are already on the durable row (`artifacts.py`); this
+        # only surfaces them, no new read or write.
+        "artifactType": row.get("artifactType", "other"),
+        "description": row.get("description") or "",
+        "version": int(row.get("version", 1)),
+        "parentArtifactId": row.get("parentArtifactId"),
         "sizeBytes": row.get("sizeBytes", 0),
         "updatedAt": row.get("updatedAt") or row.get("createdAt"),
         "downloadUrl": _download_url(client, row),
@@ -713,7 +723,13 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
               } for r, h in handoff_rows),
         ]
         items.sort(key=lambda i: i.get("at") or "")
-        return _resp(200, {"coordination": items})
+        # The durable-state coordination view alongside the raw feed: who owns
+        # the current stage, working/waiting/needs-approval, and whether a
+        # handoff or an artifact has happened here -- all read back from the
+        # RUN#/HOFF#/artifact rows, never a live model, so a reload shows the
+        # true team state and not an empty cache. See presence.room_coordination.
+        return _resp(200, {"coordination": items,
+                           "room": presence.room_coordination(store, p[0])})
 
     # --- tasks (durable, multi-run coordination) ----------------------
     # Every task a fan-out has ever created, newest first -- the gsi1 listing
@@ -736,6 +752,15 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     # live. A plain read -- no writes, no model calls -- so it is safe to poll.
     if path == "/presence" and method == "GET":
         return _resp(200, {"presence": presence.derive(store)})
+
+    # --- ambient (durable-state derivation) ----------------------------
+    # What the org has been up to lately: recently closed tasks, coordinators
+    # still waiting on teammates, artifacts just produced. Like /presence this
+    # is a pure read over rows the control plane already persists (no writes,
+    # no model calls, no warm process for an idle Companion), so it is safe to
+    # poll and can only describe committed state, never start work or spend.
+    if path == "/ambient" and method == "GET":
+        return _resp(200, {"ambient": ambient.derive(store)})
 
     # Read-only. The parent/coordinator's own visible "still working"
     # state while fan-out children are outstanding: `pendingChildren` is the

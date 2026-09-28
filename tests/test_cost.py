@@ -1,7 +1,10 @@
 import pytest
 
 from amazai import keys as K
-from amazai.cost import Budget, RunCost, Verdict, check, spent_this_month
+from amazai.cost import (
+    Budget, RunCost, TaskBudget, Verdict, check, compose_task_budget,
+    spent_this_month,
+)
 
 
 def _budget(**kw):
@@ -190,3 +193,68 @@ class TestTwoOwnersWithTheSameAgentId:
 
         assert spent_this_month(store_a, "chief") == 5.0
         assert spent_this_month(store_b, "chief") == 0.25
+
+
+class TestTaskBudgetComposition:
+    """A fan-out is one logical piece of work. `TaskBudget` splits one
+    coordinator's own per-run envelope across the coordinator and its children
+    so the whole task stays proportional to one run's worth of spend, instead
+    of every child getting the full per-run ceiling."""
+
+    def test_envelope_is_the_coordinator_per_run_ceiling(self):
+        tb = compose_task_budget(_budget(per_run_usd=3.0), child_count=3)
+        assert tb.envelope_usd == 3.0
+        assert tb.child_count == 3
+
+    def test_child_count_is_never_negative(self):
+        tb = compose_task_budget(_budget(), child_count=-4)
+        assert tb.child_count == 0
+
+    def test_children_shares_sum_within_the_envelope(self):
+        # The coordinator keeps a reserve for its own synthesis turn; the rest
+        # is split across children. Coordinator share plus every child share
+        # must never exceed the whole envelope.
+        tb = TaskBudget(envelope_usd=2.0, child_count=4)
+        total = tb.coordinator_usd + tb.for_child() * tb.child_count
+        assert total <= tb.envelope_usd + 1e-9
+
+    def test_coordinator_keeps_a_reserve_when_it_fans_out(self):
+        tb = TaskBudget(envelope_usd=2.0, child_count=2)
+        assert tb.coordinator_usd == pytest.approx(2.0 * tb.coordinator_reserve)
+        assert 0 < tb.coordinator_usd < tb.envelope_usd
+
+    def test_no_children_leaves_the_whole_envelope_to_the_coordinator(self):
+        tb = TaskBudget(envelope_usd=2.0, child_count=0)
+        assert tb.coordinator_usd == 2.0
+        assert tb.for_child() == 0.0
+
+    def test_more_children_means_a_smaller_share_each(self):
+        few = TaskBudget(envelope_usd=6.0, child_count=2)
+        many = TaskBudget(envelope_usd=6.0, child_count=6)
+        assert many.for_child() < few.for_child()
+
+    def test_a_child_never_exceeds_its_own_agent_ceiling(self):
+        # A cheap-agent child is still capped by its own Budget: composition
+        # can only ever narrow, never grant more than the agent already had.
+        tb = TaskBudget(envelope_usd=100.0, child_count=1)
+        cheap = _budget(per_run_usd=0.5)
+        assert tb.for_child(agent_budget=cheap) == 0.5
+
+    def test_composition_only_narrows_never_loosens(self):
+        # The child share out of a big envelope stays bounded by the child's
+        # own per-run ceiling, so it can never spend more than the flat model
+        # already allowed -- the account credit ceiling in billing.py stays the
+        # single hard cap above all of this.
+        tb = compose_task_budget(_budget(per_run_usd=50.0), child_count=2)
+        agent = _budget(per_run_usd=2.0)
+        assert tb.for_child(agent_budget=agent) <= agent.per_run_usd
+
+    def test_check_still_stops_a_child_that_blows_its_composed_share(self):
+        # Composition produces a ceiling; enforcement is still `check`, re-run
+        # between tool rounds exactly as before. Nothing about the composition
+        # bypasses the existing budget enforcement.
+        tb = TaskBudget(envelope_usd=2.0, child_count=2)
+        share = tb.for_child()
+        r = check(_budget(per_run_usd=share), spent_this_run=share,
+                  spent_this_month=0.0)
+        assert r.should_stop

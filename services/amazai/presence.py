@@ -20,7 +20,7 @@ The seam that folds a snapshot into the live store on load is
 
 from __future__ import annotations
 
-from amazai import agents as A
+from amazai import agents as A, artifacts as AR, keys as K
 from amazai.states import TERMINAL
 from amazai.store import Store
 
@@ -174,3 +174,126 @@ def derive(store: Store) -> list[dict]:
     runs = store.query_index("gsi1", "gsi1pk", "RUNS", limit=1000)
     tasks = store.query_index("gsi1", "gsi1pk", "TASKS", limit=200)
     return assemble(agents, runs, tasks)
+
+
+#: The room-coordination view spells its member states with the SAME buckets
+#: `assemble` uses (idle/thinking/working/waiting/needs_approval), so the room
+#: card and the per-Companion presence dot never disagree about one Bot. Only
+#: the room-level flags below (handoff/artifact/stage owner) are new here.
+def assemble_room(agents: list[dict], runs: list[dict], *,
+                  handoff_seen: bool, artifact_seen: bool) -> dict:
+    """The durable coordination state of ONE room, from rows already queried.
+
+    Split from `room_coordination` for the same reason `assemble` is split from
+    `derive`: it is a pure function of the rows the caller already holds, so the
+    whole derivation is testable without a store and provably read-only. It
+    answers the four things a person watching a room wants to know that a raw
+    unattributed delta stream cannot say -- who owns the current stage, what
+    each member is doing (working/waiting/needs-approval), whether a handoff has
+    happened, and whether the team has produced a deliverable -- and every one
+    of them is read back from the run/task/handoff/artifact rows the control
+    plane already persists, never from a live model.
+
+    `agents` and `runs` are already narrowed to this room's members and this
+    thread's runs by the caller; `handoff_seen`/`artifact_seen` are the two
+    room-level booleans that come from HOFF# rows and per-run artifact reads,
+    passed in so this stays a pure fold.
+    """
+    # Most-recent non-terminal run per member, one pass -- same rule `assemble`
+    # uses so a member reads identically here and on its own Companion.
+    latest_run: dict[str, dict] = {}
+    for run in runs:
+        if run.get("state") in _TERMINAL_VALUES:
+            continue
+        agent_id = run.get("agentId")
+        if not agent_id:
+            continue
+        current = latest_run.get(agent_id)
+        if current is None or _run_sort_key(run) > _run_sort_key(current):
+            latest_run[agent_id] = run
+
+    members: list[dict] = []
+    for agent in agents:
+        agent_id = agent.get("agentId")
+        if not agent_id:
+            continue
+        run = latest_run.get(agent_id)
+        if run is not None:
+            state, action = state_for_run(run["state"])
+        else:
+            state, action = "idle", ""
+        members.append({
+            "agentId": agent_id,
+            "name": agent.get("name") or agent_id,
+            "state": state,
+            "action": action,
+            "runId": run.get("runId") if run else None,
+            "since": (run.get("startedAt") or run.get("gsi1sk")) if run else None,
+        })
+
+    # Stage owner: whoever is actively in a turn on the newest run, so the room
+    # header can say "X is on it" rather than leaving the current step ownerless.
+    # A member merely waiting or awaiting approval is not "owning the stage"; it
+    # is parked. If nobody is actively working, there is no owner to name.
+    owner = None
+    owner_since = ""
+    for member in members:
+        if member["state"] not in {"thinking", "working"}:
+            continue
+        since = member["since"] or ""
+        if owner is None or since > owner_since:
+            owner, owner_since = member, since
+
+    any_working = any(m["state"] in {"thinking", "working"} for m in members)
+    any_waiting = any(m["state"] == "waiting" for m in members)
+    needs_approval = any(m["state"] == "needs_approval" for m in members)
+
+    return {
+        "members": members,
+        "stageOwnerAgentId": owner["agentId"] if owner else None,
+        "working": any_working,
+        "waiting": any_waiting,
+        "needsApproval": needs_approval,
+        "handoffOccurred": handoff_seen,
+        "artifactProduced": artifact_seen,
+    }
+
+
+def room_coordination(store: Store, thread_id: str) -> dict:
+    """The read behind a room's coordination view.
+
+    Reuses the same listings the coordination endpoint and `derive` already
+    read -- the gsi1 `RUNS`/`AGENTS` listings, the per-run HOFF# rows, and the
+    gsi2 per-run artifact index -- so it adds no GSI (moto is strict about the
+    table's declared indexes) and no model call. Purely a read; the fold lives
+    in `assemble_room` so nothing on this path can write.
+
+    A room whose thread row is missing returns an empty view rather than
+    raising: the caller (the console) treats absence of coordination as "no
+    team activity yet", the same way it treats an empty presence snapshot.
+    """
+    thread = store.try_get(K.thread_pk(store.owner_id, thread_id), "META")
+    if thread is None:
+        return {"members": [], "stageOwnerAgentId": None, "working": False,
+                "waiting": False, "needsApproval": False,
+                "handoffOccurred": False, "artifactProduced": False}
+
+    member_ids = [a for a in (thread.get("agentIds") or []) if a]
+    by_id = {a["agentId"]: a for a in store.query_index("gsi1", "gsi1pk", "AGENTS", limit=200)
+             if a.get("agentId")}
+    members = [by_id.get(mid, {"agentId": mid, "name": mid}) for mid in member_ids]
+
+    thread_runs = [r for r in store.query_index("gsi1", "gsi1pk", "RUNS", limit=1000)
+                   if r.get("threadId") == thread_id]
+
+    # A handoff or an artifact on ANY run this thread has driven is a room-level
+    # fact: it says the team coordinated or produced something here, without
+    # attributing a live delta to a single Bot (which a room deliberately never
+    # does). Both are read straight off durable rows.
+    handoff_seen = any(
+        store.query(r["pk"], sk_prefix="HOFF#", limit=1) for r in thread_runs)
+    artifact_seen = any(
+        AR.list_for_run(store, r["runId"], limit=1) for r in thread_runs if r.get("runId"))
+
+    return assemble_room(members, thread_runs,
+                         handoff_seen=handoff_seen, artifact_seen=artifact_seen)

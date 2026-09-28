@@ -64,6 +64,46 @@ export function previewOf(thread) {
 // activity, and get their own colour instead.
 const LIVE = new Set(['thinking', 'working', 'waiting']);
 
+/**
+ * The four things this inbox exists to surface, apart from ordinary activity.
+ *
+ * The inbox is "what needs me" -- so a row is meaningful when it is waiting on
+ * a decision, waiting on an answer, has just finished work, or has hard-failed.
+ * Everything else (a Bot merely thinking or using a tool) is activity, not an
+ * item that needs the operator, and stays quiet. This classifies an
+ * already-derived row -- it reads presence state and the action line the
+ * backend already produced, it does not add a route, a fetch, or a data flow.
+ *
+ * `approval` and `needs-human-answer` are the same presence bucket over the
+ * socket (`AWAITING_APPROVAL` vs `AWAITING_INPUT`/`AWAITING_LOGIN` both light
+ * `approval`), so they are told apart by the action line the backend already
+ * wrote: "Waiting for your answer"/"sign in" is an answer, anything else in
+ * that bucket is an approval. Returns null for a row that is not an item.
+ */
+export function attentionOf(row) {
+  if (row.state === 'approval') {
+    const action = (row.action || '').toLowerCase();
+    if (action.includes('answer') || action.includes('sign in')) return 'answer';
+    return 'approval';
+  }
+  if (row.state === 'blocked') return 'failed';
+  if (row.state === 'complete') return 'done';
+  return null;
+}
+
+//: Attention kind -> how urgently it should sort to the top. A decision or an
+//: answer the operator owes ranks above a hard failure to notice, which ranks
+//: above finished work to acknowledge; ordinary activity has no rank and sorts
+//: by recency alone.
+const ATTENTION_RANK = { approval: 0, answer: 0, failed: 1, done: 2 };
+
+//: The short, meaningful label an attention row carries in place of a live
+//: activity line -- aligned with the canonical vocabulary.
+const ATTENTION_LABEL = {
+  approval: 'Waiting on you', answer: 'Needs your answer',
+  failed: "Didn't finish", done: 'Finished',
+};
+
 /** One agent (or a room's members), drawn identically in a row and in the pinned
  *  strip. The hover title is the third presence layer -- a line of text for "how
  *  much do I need to know" -- and the accessible name lives on the companion. */
@@ -90,6 +130,9 @@ function Mark({ row, size }) {
  * Bot that has said nothing yet, what it is for.
  */
 function subline(row) {
+  // A meaningful item says what it needs in the canonical short phrase, not a
+  // raw activity line -- "Needs your answer" reads as an item, "Typing" does not.
+  if (row.attention) return { text: ATTENTION_LABEL[row.attention], live: true, item: true };
   if (row.action && (LIVE.has(row.state) || row.state === 'approval' || row.state === 'blocked')) {
     return { text: row.action, live: true };
   }
@@ -163,7 +206,7 @@ export default function Inbox({ variant }) {
       // A pending approval is the server's word and outranks anything the
       // socket last said: an animation must never hide a decision.
       const live = needsYou ? null : presence[agent.agentId];
-      return {
+      const row = {
         key: `agent:${agent.agentId}`,
         kind: 'companion',
         to: `/agents/${agent.agentId}`,
@@ -181,6 +224,11 @@ export default function Inbox({ variant }) {
         unread: Boolean(thread?.unread),
         agent,
       };
+      // The meaningful-item kind, if any: a decision or answer owed, a hard
+      // failure, or finished work. Ordinary activity leaves this null so it
+      // never dresses up as something that needs the operator.
+      row.attention = attentionOf(row);
+      return row;
     });
 
     // A room's own approval need is never lost by leaving it out here: a Bot
@@ -192,7 +240,15 @@ export default function Inbox({ variant }) {
       ? all.filter((r) => `${r.title} ${r.chip} ${r.subtitle}`.toLowerCase().includes(needle))
       : all;
 
-    return filtered.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    // Meaningful items first -- a decision or answer owed, then a hard failure
+    // to notice, then finished work -- and recency within the same rank. A row
+    // that needs nothing keeps its place in the recency-ordered list, so the
+    // inbox reads "what needs me, then everything else" rather than burying an
+    // approval under a burst of ordinary chatter.
+    const rank = (r) => (r.attention != null ? ATTENTION_RANK[r.attention] : 99);
+    return filtered.sort((a, b) => (
+      rank(a) - rank(b) || String(b.at).localeCompare(String(a.at))
+    ));
   }, [agents, threads, waiting, query, presence]);
 
   const listRef = useRef(null);
@@ -202,7 +258,8 @@ export default function Inbox({ variant }) {
   // the operator saying where something lives.
   const pinnedRows = pins.map((id) => rows.find((r) => r.threadId === id)).filter(Boolean);
 
-  const needsYouCount = rows.filter((r) => r.state === 'approval').length;
+  // A decision or an answer owed both count as "needs you" for the account dot.
+  const needsYouCount = rows.filter((r) => r.attention === 'approval' || r.attention === 'answer').length;
   const unreadCount = rows.filter((r) => r.unread).length;
 
   // Re-read rather than splice: the server decides the final id and status,
@@ -256,12 +313,12 @@ export default function Inbox({ variant }) {
               <Link className="rs-pin" to={row.to} data-open={row.to === location.pathname ? 'true' : undefined}>
                 <span className="rs-pin-mark">
                   <Mark row={row} size={56} />
-                  {row.state === 'approval'
+                  {(row.attention === 'approval' || row.attention === 'answer')
                     ? <i className="rs-pin-dot rs-pin-dot--warn" aria-hidden="true" />
                     : row.unread && <i className="rs-pin-dot" aria-hidden="true" />}
                 </span>
                 <span className="rs-pin-name">{row.title}</span>
-                {row.state === 'approval' && <span className="sr-only">Needs you</span>}
+                {(row.attention === 'approval' || row.attention === 'answer') && <span className="sr-only">Needs you</span>}
                 {row.unread && <span className="sr-only">Unread</span>}
               </Link>
             </li>
@@ -290,10 +347,10 @@ export default function Inbox({ variant }) {
       <ul className="rs-list" ref={listRef}>
         {rows.map((row) => {
           const line = subline(row);
-          const ask = row.state === 'approval';
           return (
             <li key={row.key} data-key={row.key}>
               <Link className="rs-row" to={row.to} data-kind={row.kind} data-state={row.state}
+                    data-attention={row.attention || undefined}
                     data-unread={row.unread ? 'true' : undefined}
                     data-open={row.to === location.pathname ? 'true' : undefined}>
                 <Mark row={row} size={48} />
@@ -305,8 +362,8 @@ export default function Inbox({ variant }) {
                     <time className="rs-time">{timeLabel(row.at)}</time>
                   </span>
                   <span className="rs-line">
-                    <span className={`rs-preview${line.live ? ' is-live' : ''}${ask ? ' is-ask' : ''}`}>
-                      {ask ? 'Waiting on you' : line.text}
+                    <span className={`rs-preview${line.live ? ' is-live' : ''}${line.item ? ' is-ask' : ''}`}>
+                      {line.text}
                     </span>
                     {/* The state is still said in words for a screen reader: motion
                         alone is the least reliable carrier of it. */}

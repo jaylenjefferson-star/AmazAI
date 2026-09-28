@@ -262,6 +262,29 @@ function fileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+//: A durable artifact type -> the word a person reads. The raw type is a code
+//: name (`spreadsheet`, `other`); this is what "here is the deliverable"
+//: should say. An unknown type falls back to a neutral "File" rather than
+//: showing the identifier.
+const ARTIFACT_TYPE_LABEL = {
+  document: 'Document', report: 'Report', dataset: 'Dataset',
+  spreadsheet: 'Spreadsheet', code: 'Code', image: 'Image', other: 'File',
+};
+
+/** The one meta line under an artifact's name: who made it, when, how big, and
+ *  -- when it is past its first revision -- which version. `version` and the
+ *  type both come straight off the durable row (`_artifact_card`); this only
+ *  renders them. Exported so the presentation is unit-testable without a DOM. */
+export function artifactMeta(artifact, authorName) {
+  const parts = [authorName || artifact.agentId, timeAgo(artifact.updatedAt), fileSize(artifact.sizeBytes)];
+  if ((artifact.version || 1) > 1) parts.push(`v${artifact.version}`);
+  return parts.filter(Boolean).join(' · ');
+}
+
+export function artifactTypeLabel(artifact) {
+  return ARTIFACT_TYPE_LABEL[artifact?.artifactType] || ARTIFACT_TYPE_LABEL.other;
+}
+
 export function Artifacts() {
   const { agents } = useAgents();
   const byId = useMemo(() => Object.fromEntries(agents.map((a) => [a.agentId, a])), [agents]);
@@ -290,15 +313,19 @@ export function Artifacts() {
         {artifacts.map((f) => {
           const a = byId[f.agentId];
           return (
-            <a key={f.artifactId} className="row-card" href={f.downloadUrl} target="_blank" rel="noreferrer">
+            <a key={f.artifactId} className="row-card artifact-card" href={f.downloadUrl}
+               target="_blank" rel="noreferrer">
               <span className="artifact-glyph" aria-hidden="true">
                 <Icon name="file" size={17} />
               </span>
               <div className="row-body">
-                <strong>{f.name}</strong>
-                <span>
-                  {a?.name || f.agentId} · {timeAgo(f.updatedAt)} · {fileSize(f.sizeBytes)}
+                <span className="artifact-title">
+                  <strong>{f.name}</strong>
+                  <span className="artifact-type">{artifactTypeLabel(f)}</span>
+                  {(f.version || 1) > 1 && <span className="artifact-ver">v{f.version}</span>}
                 </span>
+                {f.description && <span className="artifact-desc">{f.description}</span>}
+                <span>{artifactMeta(f, a?.name)}</span>
               </div>
               <Icon name="arrowright" size={17} />
             </a>

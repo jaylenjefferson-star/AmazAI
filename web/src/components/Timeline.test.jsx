@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Timeline, { Body } from './Timeline';
+import { STATES } from '../characters/Companion';
 
 describe('Timeline message body', () => {
   it('renders a Bot’s double-star emphasis as bold text', () => {
@@ -116,11 +117,14 @@ describe('Timeline live reply', () => {
     expect(container.querySelector('.typing-dots')).toBeNull();
   });
 
-  it('shows the dots while a turn has produced no words yet', () => {
+  it('shows the dots, with the canonical verb, while a turn has produced no words yet', () => {
     const { container } = render(
-      <Timeline {...props} items={[]} streaming={null} typing={{ name: 'Engle', verb: 'thinking' }} />);
+      <Timeline {...props} items={[]} streaming={null} typing={{ name: 'Engle', verb: STATES.thinking.verb }} />);
     expect(container.querySelector('.typing-dots')).toBeTruthy();
     expect(container.querySelector('.cursor')).toBeNull();
+    // The line reads the canonical activity vocabulary, not an invented phrase.
+    expect(container.textContent).toContain('Engle thinking it through');
+    expect(STATES.thinking.verb).toBe('thinking it through');
   });
 
   it('keeps the empty state away while a reply is arriving', () => {

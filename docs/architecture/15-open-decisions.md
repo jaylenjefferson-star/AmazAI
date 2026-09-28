@@ -72,6 +72,21 @@ which is now deployed as `AMAZAI_CONTINUATION=tool_result` on the orchestrator.
 The choice remains isolated in `services/amazai/continuation.py`, and no other
 code builds a resume turn (a test enforces that).
 
+**Re-verification note (sandbox/CI).** The path selection and the id-completeness
+contract are unit-verified without AWS in `tests/test_d4_boundary.py`: `mode()`
+defaults to `RESUME_NOTE`, `TOOL_RESULT` is refused/fails-closed unless
+`AMAZAI_CONTINUATION=tool_result` is explicitly set, and when it is set
+`resume_messages` emits a complete, id-matched turn (every recorded `toolUseId`
+answered, the decision in its own slot, carried earlier rounds first). What those
+tests cannot do is prove the *service* still accepts the native shape on a given
+account or model, because no live AWS/Bedrock session runs in this sandbox. Final
+sign-off for enabling `AMAZAI_CONTINUATION=tool_result` on any new
+account/harness/model therefore still requires a real run of
+`python3 scripts/spike_d4.py --harness-arn <ARN> --model-id <ID> --execute`
+against that account. This is a known external-verification limit, not a code
+gap: absent the explicit flag the orchestrator keeps using the `RESUME_NOTE`
+fallback, so nothing runs the unverified shape by accident.
+
 **The live test.** It opens two fresh sessions on
 a harness you name, makes the model call `request_approval`, then continues one
 with a `toolResult` and the other with a plain user turn, and reports which the

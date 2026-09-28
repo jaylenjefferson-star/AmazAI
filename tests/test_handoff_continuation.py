@@ -311,6 +311,148 @@ class TestNotifyCoordinatorIfChild:
         assert "0 succeeded" in continuation["goal"]
 
 
+class TestStructuredCompletionContract:
+    """The child->parent completion is a structured record the coordinator
+    resumes from, not prose it has to parse back. See `handoffs.child_completion`
+    and `notify_coordinator_if_child`."""
+
+    def test_a_settled_child_row_always_carries_the_mandatory_fields(
+            self, agents, coordinator_run, proposed_handoff):
+        accepted = handoffs.accept(agents, coordinator_run, proposed_handoff,
+                                   decided_by="system:auto-accept")
+        handoffs.notify_coordinator_if_child(
+            agents, accepted["child"], RunState.COMPLETED.value, "all done")
+
+        row = agents.get(K.task_pk(coordinator_run["runId"]),
+                         K.task_child_sk(accepted["child"]["runId"]))
+        # Mandatory, not best-effort: every field is present even on a clean
+        # completion, so no consumer has to guard for a missing key.
+        for field in ("status", "summary", "artifactIds", "error"):
+            assert field in row, field
+        assert row["status"] == "done"
+        assert row["summary"] == "all done"
+        assert row["artifactIds"] == []
+        assert row["error"] == ""  # empty, not absent, on a non-failed child
+
+    def test_a_failed_child_records_the_raw_error_distinct_from_the_summary(
+            self, agents, coordinator_run, proposed_handoff):
+        accepted = handoffs.accept(agents, coordinator_run, proposed_handoff,
+                                   decided_by="system:auto-accept")
+        handoffs.notify_coordinator_if_child(
+            agents, accepted["child"], RunState.FAILED.value,
+            "I could not finish the migration", error="EventStreamError: connection reset")
+
+        row = agents.get(K.task_pk(coordinator_run["runId"]),
+                         K.task_child_sk(accepted["child"]["runId"]))
+        assert row["status"] == "failed"
+        assert row["summary"] == "I could not finish the migration"
+        assert row["error"] == "EventStreamError: connection reset"
+
+    def test_child_completion_projects_the_structured_record(
+            self, agents, coordinator_run, proposed_handoff):
+        accepted = handoffs.accept(agents, coordinator_run, proposed_handoff,
+                                   decided_by="system:auto-accept")
+        handoffs.notify_coordinator_if_child(
+            agents, accepted["child"], RunState.FAILED.value, "ran out of disk",
+            error="OSError: No space left on device")
+
+        row = agents.get(K.task_pk(coordinator_run["runId"]),
+                         K.task_child_sk(accepted["child"]["runId"]))
+        record = handoffs.child_completion(agents, row)
+        assert record["status"] == "failed"
+        assert record["summary"] == "ran out of disk"
+        assert record["error"] == "OSError: No space left on device"
+        assert record["artifactIds"] == []
+        assert record["agentName"] == "Cloud Operations"
+
+    def test_the_coordinator_resumes_from_structured_fields_not_only_prose(
+            self, agents, coordinator_run):
+        """The wake-up trigger carries the structured batch, so the coordinator
+        acts on typed fields (status/summary/artifactIds/error) rather than
+        parsing them back out of the goal sentence."""
+        agents.put({"pk": K.agent_pk(agents.owner_id, "clo"), "sk": "META",
+                    "entity": "Agent", **THIRD})
+        h1 = orch._record_handoff(agents, coordinator_run, {"to": "ops", "goal": "task one"})
+        h2 = orch._record_handoff(agents, coordinator_run, {"to": "clo", "goal": "task two"})
+        a1 = handoffs.accept(agents, coordinator_run, h1, decided_by="system:auto-accept")
+        a2 = handoffs.accept(agents, coordinator_run, h2, decided_by="system:auto-accept")
+
+        handoffs.notify_coordinator_if_child(
+            agents, a1["child"], RunState.FAILED.value, "step 3 failed",
+            error="RuntimeError: boom")
+        woken = handoffs.notify_coordinator_if_child(
+            agents, a2["child"], RunState.COMPLETED.value, "task two done")
+
+        assert woken is not None
+        completions = woken["trigger"]["children"]
+        assert len(completions) == 2
+        by_status = {c["status"] for c in completions}
+        assert by_status == {"done", "failed"}
+        failed = next(c for c in completions if c["status"] == "failed")
+        assert failed["error"] == "RuntimeError: boom"
+        assert failed["summary"] == "step 3 failed"
+        done = next(c for c in completions if c["status"] == "done")
+        assert done["error"] == ""
+
+    def test_the_trigger_represents_partial_success_proportionally(
+            self, agents, coordinator_run):
+        agents.put({"pk": K.agent_pk(agents.owner_id, "clo"), "sk": "META",
+                    "entity": "Agent", **THIRD})
+        h1 = orch._record_handoff(agents, coordinator_run, {"to": "ops", "goal": "task one"})
+        h2 = orch._record_handoff(agents, coordinator_run, {"to": "clo", "goal": "task two"})
+        a1 = handoffs.accept(agents, coordinator_run, h1, decided_by="system:auto-accept")
+        a2 = handoffs.accept(agents, coordinator_run, h2, decided_by="system:auto-accept")
+
+        handoffs.notify_coordinator_if_child(
+            agents, a1["child"], RunState.FAILED.value, "nope", error="boom")
+        woken = handoffs.notify_coordinator_if_child(
+            agents, a2["child"], RunState.COMPLETED.value, "done")
+
+        trig = woken["trigger"]
+        assert trig["childCount"] == 2
+        assert trig["doneCount"] == 1
+        assert trig["failedCount"] == 1
+        assert trig["partial"] is True
+        # The prose brief is a derived view of the same counts.
+        assert "1 succeeded" in woken["goal"]
+        assert "1 failed" in woken["goal"]
+
+    def test_a_fully_successful_batch_is_not_flagged_partial(
+            self, agents, coordinator_run):
+        agents.put({"pk": K.agent_pk(agents.owner_id, "clo"), "sk": "META",
+                    "entity": "Agent", **THIRD})
+        h1 = orch._record_handoff(agents, coordinator_run, {"to": "ops", "goal": "task one"})
+        h2 = orch._record_handoff(agents, coordinator_run, {"to": "clo", "goal": "task two"})
+        a1 = handoffs.accept(agents, coordinator_run, h1, decided_by="system:auto-accept")
+        a2 = handoffs.accept(agents, coordinator_run, h2, decided_by="system:auto-accept")
+
+        handoffs.notify_coordinator_if_child(
+            agents, a1["child"], RunState.COMPLETED.value, "one")
+        woken = handoffs.notify_coordinator_if_child(
+            agents, a2["child"], RunState.COMPLETED.value, "two")
+
+        assert woken["trigger"]["partial"] is False
+        assert woken["trigger"]["failedCount"] == 0
+
+    def test_the_structured_write_preserves_at_most_once_and_wake_once(
+            self, agents, coordinator_run, proposed_handoff):
+        """The mandatory structured write is still the *same* one conditional
+        transition -- adding fields to it must not weaken the at-most-once
+        report or the wake-once-per-batch guarantee."""
+        accepted = handoffs.accept(agents, coordinator_run, proposed_handoff,
+                                   decided_by="system:auto-accept")
+        first = handoffs.notify_coordinator_if_child(
+            agents, accepted["child"], RunState.COMPLETED.value, "done", error="")
+        second = handoffs.notify_coordinator_if_child(
+            agents, accepted["child"], RunState.COMPLETED.value, "done again", error="")
+        assert first is not None
+        assert second is None, "a duplicate settle must not re-report or wake twice"
+        # The first report's structured fields are what stuck, not the loser's.
+        row = agents.get(K.task_pk(coordinator_run["runId"]),
+                         K.task_child_sk(accepted["child"]["runId"]))
+        assert row["summary"] == "done"
+
+
 class TestHandoffToolAutoAccepts:
     """Through the real dispatch a model's `handoff` tool call goes through --
     `orchestrator._handle_tool` -- not a reimplementation of it."""

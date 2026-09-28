@@ -47,11 +47,18 @@ export default function ProfileSheet({ onClose }) {
         </div>
       </div>
 
+      {/* Coordination first: Rooms is where the team does its work together,
+          so it leads its own group rather than sitting mid-list next to
+          billing. Org chart rides alongside it because the two answer the same
+          question -- who is working with whom. Same routes, deliberate order. */}
+      <div className="sx-group">
+        <SheetRow icon="hash" title="Rooms" hint="Where your team coordinates on shared work" onClick={() => go('/rooms')} />
+        <SheetRow icon="users" title="Org chart" hint="Who reports to whom" onClick={() => go('/org')} />
+      </div>
+
       <div className="sx-group">
         <SheetRow icon="user" title="Account" hint="Who you are signed in as" onClick={() => setView('acct-account')} />
         <SheetRow icon="building" title="Organization" hint="Your workspace" onClick={() => setView('acct-org')} />
-        <SheetRow icon="users" title="Org chart" hint="Who reports to whom" onClick={() => go('/org')} />
-        <SheetRow icon="hash" title="Rooms" hint="Where your Bots coordinate, read-only" onClick={() => go('/rooms')} />
         <SheetRow icon="plug" title="Integrations" hint="Apps your agents can use" onClick={() => setView('tools')} />
         <SheetRow icon="sliders" title="Preferences" hint="Notifications and defaults" onClick={() => setView('acct-prefs')} />
         <SheetRow icon="card" title="Billing" hint="Balance, plan, and spend" onClick={() => go('/billing')} />

@@ -34,7 +34,7 @@ from amazai import (agentcore, agents as A, approvals, artifacts, billing, colla
                     routines, runs, schedules, session_lease, skills, standard_runtime,
                     threads)
 from amazai.cost import RunCost
-from amazai.errors import ErrorClass, classify
+from amazai.errors import ErrorClass, classify, humanize
 from amazai.evidence import EvidenceWriter
 from amazai.policy import Capability
 from amazai.push import Push
@@ -233,16 +233,22 @@ def _fail(store: Store, run: dict, message: str) -> None:
                                         RunState.PARTIAL}:
             return
         ev = EvidenceWriter(fresh["runId"])
+        # Raw text into evidence and onto the run row for diagnosis; only a
+        # plain sentence is sealed as the summary and pushed to the console, so
+        # a Lambda-level exception never surfaces as a stack or a
+        # "TypeName: message" head on a Blocked card.
         ev.error(fresh.get("cursor", {}).get("lastEventSeq", 0), "terminal", message)
+        summary = humanize(message)
         manifest = ev.seal(
-            run=fresh, outcome=RunState.FAILED.value, summary=message,
+            run=fresh, outcome=RunState.FAILED.value, summary=summary,
             cost={"totalUsd": fresh.get("costUsd", 0.0)},
             approvals=approvals.for_run(store, fresh["pk"]),
         )
         fresh = runs.advance(store, fresh, RunState.FAILED, evidenceKey=ev.key,
-                             summary=message, sealSha256=manifest.get("sealSha256"))
+                             summary=summary, lastError=message[:500],
+                             sealSha256=manifest.get("sealSha256"))
         Push(store).run_end(fresh["runId"], fresh["threadId"],
-                            RunState.FAILED.value, message, fresh.get("costUsd", 0.0))
+                            RunState.FAILED.value, summary, fresh.get("costUsd", 0.0))
         metrics.emit_run_settled(fresh, RunState.FAILED.value)
         _wake_coordinator_if_child(store, fresh, RunState.FAILED.value, message)
     except Exception:  # noqa: BLE001
@@ -1046,8 +1052,13 @@ def _drive_holding(store: Store, run: dict, event: dict,
             _reinvoke(run["runId"], store.owner_id, delay_note=cls.reason)
             return {"ok": True, "state": RunState.RETRYING.value, "retry": cls.reason}
 
-        _finish(store, run, RunState.FAILED, stream_error, push, ev=ev, cost=spend, text=text,
-               error_class=cls.cls.value)
+        # The raw text is already in `ev.error` above; keep it on the run row
+        # too so a failure is diagnosable from the run itself, then surface only
+        # a plain sentence. The operator must never read the raw
+        # EventStreamError/toolUseId string off a Blocked card.
+        run = store.update(run["pk"], "META", {"lastError": stream_error[:500]})
+        _finish(store, run, RunState.FAILED, humanize(stream_error), push,
+               ev=ev, cost=spend, text=text, error_class=cls.cls.value)
         return {"ok": False, "state": RunState.FAILED.value}
 
     # A stop that arrived after the last stream event still has to stop the run:
@@ -2636,8 +2647,12 @@ def _wake_coordinator_if_child(store: Store, run: dict, state_value: str, summar
     actually decides whether a wake happens, not this wrapper.
     """
     try:
+        # The raw failure text, when there is one, so the child's structured
+        # completion carries a dedicated `error` field the coordinator can read
+        # directly -- distinct from the humanized `summary` shown to the
+        # operator. Empty for a run that settled cleanly.
         continuation_run = handoffs.notify_coordinator_if_child(
-            store, run, state_value, summary)
+            store, run, state_value, summary, error=run.get("lastError") or "")
         if continuation_run:
             _invoke_orchestrator_async(continuation_run["runId"], store.owner_id)
     except Exception:  # noqa: BLE001
