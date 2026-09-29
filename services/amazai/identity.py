@@ -124,6 +124,30 @@ def _signing_key(token: str):
     raise AuthError("token signed by an unknown key")
 
 
+#: Namespaced claims an Auth0 post-login Action must copy onto the access
+#: token. Auth0 drops non-namespaced OIDC claims such as `email_verified`
+#: from an access token whose audience is a custom API. The namespace is the
+#: API audience, which this tenant already uses.
+EMAIL_CLAIM = "https://api.amazai.co/email"
+EMAIL_VERIFIED_CLAIM = "https://api.amazai.co/email_verified"
+
+#: Successful /userinfo responses are reused for this long, keyed by the
+#: access token. A refreshed token is a different key, so a person who just
+#: verified can be admitted on the next token without waiting out the cache.
+USERINFO_TTL_SECONDS = 300
+
+
+class EmailNotVerified(PermissionError):
+    """The token is authentic, but the email is not verified.
+
+    Surfaces as HTTP 403 ``EMAIL_NOT_VERIFIED``. It is not an ``AuthError``:
+    the signature was fine, and a 401 would send the console through login
+    again instead of the verification screen.
+    """
+
+    code = "EMAIL_NOT_VERIFIED"
+
+
 @dataclass(frozen=True)
 class Principal:
     """A verified caller.
@@ -131,10 +155,14 @@ class Principal:
     `user_id` is the Auth0 `sub`. It is the only identifier any downstream
     code should key on: an email can be changed and re-registered, a `sub`
     cannot.
+
+    `email_verified` is True or False when the token (or /userinfo) said so,
+    and None when the access token carried neither the namespaced claim nor
+    the standard claim. None is not a yes.
     """
     user_id: str
     email: str | None = None
-    email_verified: bool = False
+    email_verified: bool | None = None
     scopes: tuple[str, ...] = ()
     raw: dict | None = None
 
@@ -174,13 +202,47 @@ def verify(token: str) -> Principal:
     if not sub:
         raise AuthError("token has no subject")
 
+    email, verified = email_status_from_claims(claims)
     return Principal(
         user_id=sub,
-        email=claims.get("email"),
-        email_verified=bool(claims.get("email_verified")),
+        email=email,
+        email_verified=verified,
         scopes=tuple((claims.get("scope") or "").split()),
         raw=claims,
     )
+
+
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return bool(value)
+
+
+def _as_email(value) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def email_status_from_claims(claims: dict) -> tuple[str | None, bool | None]:
+    """Email and verification from an access token.
+
+    The namespaced claim wins when the Action added it. The standard
+    ``email_verified`` claim is accepted too, for tests and for any tenant
+    setting that does copy it. Absent both, verification is unknown (None):
+    an Auth0 access token for ``https://api.amazai.co`` does not carry
+    ``email`` or ``email_verified`` unless an Action puts them there.
+    """
+    if not isinstance(claims, dict):
+        return None, None
+    if EMAIL_VERIFIED_CLAIM in claims:
+        email = _as_email(claims.get(EMAIL_CLAIM)) or _as_email(claims.get("email"))
+        return email, _as_bool(claims.get(EMAIL_VERIFIED_CLAIM))
+    if "email_verified" in claims:
+        return _as_email(claims.get("email")), _as_bool(claims.get("email_verified"))
+    return _as_email(claims.get("email")), None
 
 
 def bearer(event: dict) -> str:
@@ -194,6 +256,99 @@ def bearer(event: dict) -> str:
 def principal_from_event(event: dict) -> Principal:
     """The one way a handler learns who is calling."""
     return verify(bearer(event))
+
+
+# --- email verification, before a tenant row exists ------------------------
+
+_userinfo_cache: dict[str, tuple[float, dict]] = {}
+
+
+def clear_userinfo_cache() -> None:
+    _userinfo_cache.clear()
+
+
+def _fetch_userinfo(token: str) -> dict:
+    """GET /userinfo. Tests replace this; production uses the tenant host."""
+    url = f"https://{domain()}/userinfo"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        payload = json.loads(resp.read().decode())
+    if not isinstance(payload, dict):
+        raise AuthError("userinfo was not an object")
+    return payload
+
+
+def fetch_userinfo(token: str) -> dict | None:
+    """The profile for this access token, or None when the lookup failed.
+
+    Cached by token so a hot request path does not call Auth0 on every API
+    call. Failures are not cached: a blip must not pin a new signup to
+    "unverified" for the TTL. Auth0 often rejects a custom-API access token
+    at /userinfo (the audience is ``https://api.amazai.co``, not the
+    userinfo endpoint). That failure is None, and the caller refuses to
+    create a tenant until a namespaced claim or a successful lookup says
+    the email is verified.
+    """
+    import hashlib
+
+    if not token or not domain():
+        return None
+    key = hashlib.sha256(token.encode()).hexdigest()
+    hit = _userinfo_cache.get(key)
+    if hit and time.time() - hit[0] < USERINFO_TTL_SECONDS:
+        return hit[1]
+    try:
+        payload = _fetch_userinfo(token)
+    except Exception:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return None
+    _userinfo_cache[key] = (time.time(), payload)
+    return payload
+
+
+def resolve_email(principal: Principal, token: str = "") -> Principal:
+    """Fill email_verified from /userinfo when the token did not say.
+
+    A True or False already on the principal is the token's answer and is
+    not second-guessed. None means the claim was absent.
+    """
+    if principal.email_verified is not None:
+        return principal
+    info = fetch_userinfo(token)
+    if not info:
+        return principal
+    email = _as_email(info.get("email")) or principal.email
+    if "email_verified" not in info:
+        return principal
+    return Principal(
+        user_id=principal.user_id,
+        email=email,
+        email_verified=_as_bool(info.get("email_verified")),
+        scopes=principal.scopes,
+        raw=principal.raw,
+    )
+
+
+def ensure_verified_email(store: Store, principal: Principal, token: str = "") -> Principal:
+    """Admit this caller, or refuse to create their first user row.
+
+    A subject who already has a ``USER#`` row keeps working even when the
+    token does not prove a verified email. That row was created before this
+    gate existed; locking those accounts out would strand the current
+    tenants, including the owner, until an Auth0 Action is installed.
+    Everyone else must present ``email_verified`` true (namespaced claim,
+    standard claim, or /userinfo) before ``ensure_user`` may insert a row.
+    """
+    existing = store.try_get(K.user_pk(principal.user_id), "META")
+    if existing:
+        return principal
+    resolved = resolve_email(principal, token)
+    if resolved.email_verified is True:
+        return resolved
+    raise EmailNotVerified(
+        "Verify your email before AmazAI can create your workspace."
+    )
 
 
 # --- the internal user record -----------------------------------------------

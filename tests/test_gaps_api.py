@@ -58,7 +58,8 @@ def api_table(table, monkeypatch):
     def principal_from_event(evt):
         claims = (((evt.get("requestContext") or {}).get("authorizer") or {})
                   .get("jwt") or {}).get("claims") or {}
-        return identity.Principal(user_id=claims.get("sub", "owner-a"))
+        return identity.Principal(
+            user_id=claims.get("sub", "owner-a"), email_verified=True)
     monkeypatch.setattr(api.identity, "principal_from_event", principal_from_event)
     return table
 

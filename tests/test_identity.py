@@ -34,7 +34,7 @@ def signing(monkeypatch):
     return key
 
 
-def token(signing, **over):
+def token(signing, extra=None, **over):
     claims = {
         "sub": "auth0|owner-1",
         "iss": f"https://{DOMAIN}/",
@@ -46,6 +46,8 @@ def token(signing, **over):
         "scope": "openid profile email",
     }
     claims.update(over)
+    if extra:
+        claims.update(extra)
     for k in [k for k, v in claims.items() if v is None]:
         del claims[k]
     return jwt.encode(claims, signing, algorithm="RS256",
@@ -105,6 +107,65 @@ class TestVerification:
         monkeypatch.delenv("AUTH0_AUDIENCE", raising=False)
         with pytest.raises(I.AuthError):
             I.verify("anything")
+
+
+class TestEmailVerification:
+    def test_a_namespaced_claim_is_the_access_token_answer(self, signing):
+        raw = token(signing, email_verified=None, extra={
+            I.EMAIL_CLAIM: "owner@example.com",
+            I.EMAIL_VERIFIED_CLAIM: True,
+        })
+        principal = I.verify(raw)
+        assert principal.email == "owner@example.com"
+        assert principal.email_verified is True
+
+    def test_a_namespaced_false_is_not_overruled_by_userinfo(self, signing, monkeypatch):
+        monkeypatch.setattr(I, "_fetch_userinfo", lambda token: {"email_verified": True})
+        raw = token(signing, email_verified=None, extra={I.EMAIL_VERIFIED_CLAIM: False})
+        principal = I.verify(raw)
+        assert principal.email_verified is False
+        assert I.resolve_email(principal, raw) is principal
+
+    def test_a_missing_claim_is_unknown_and_userinfo_fills_it_once(self, signing, monkeypatch):
+        I.clear_userinfo_cache()
+        calls = {"n": 0}
+
+        def fetch(raw):
+            calls["n"] += 1
+            return {"email": "owner@example.com", "email_verified": True}
+
+        monkeypatch.setattr(I, "_fetch_userinfo", fetch)
+        raw = token(signing, email=None, email_verified=None)
+        principal = I.verify(raw)
+        assert principal.email_verified is None
+        assert I.resolve_email(principal, raw).email_verified is True
+        assert I.resolve_email(principal, raw).email_verified is True
+        assert calls["n"] == 1
+
+    def test_userinfo_false_refuses_a_new_row(self, store, signing, monkeypatch):
+        raw = token(signing, email_verified=None)
+        principal = I.verify(raw)
+        monkeypatch.setattr(
+            I, "_fetch_userinfo",
+            lambda raw: {"email": "owner@example.com", "email_verified": False},
+        )
+        I.clear_userinfo_cache()
+        with pytest.raises(I.EmailNotVerified):
+            I.ensure_verified_email(store, principal, raw)
+        assert store.try_get(K.user_pk(principal.user_id), "META") is None
+
+    def test_a_userinfo_failure_also_refuses_a_new_row(self, store, signing, monkeypatch):
+        raw = token(signing, email_verified=None)
+        principal = I.verify(raw)
+
+        def boom(raw):
+            raise OSError("auth0 down")
+
+        monkeypatch.setattr(I, "_fetch_userinfo", boom)
+        I.clear_userinfo_cache()
+        with pytest.raises(I.EmailNotVerified):
+            I.ensure_verified_email(store, principal, raw)
+        assert store.try_get(K.user_pk(principal.user_id), "META") is None
 
 
 class TestTheSubjectComesFromTheToken:

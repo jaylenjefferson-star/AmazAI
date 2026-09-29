@@ -55,7 +55,7 @@ def admin_table(table, monkeypatch):
     def principal_from_event(evt):
         headers = {k.lower(): v for k, v in (evt.get("headers") or {}).items()}
         sub = headers.get("x-test-sub") or OWNER
-        return identity.Principal(user_id=sub)
+        return identity.Principal(user_id=sub, email_verified=True)
 
     monkeypatch.setattr(api.identity, "principal_from_event", principal_from_event)
     return table

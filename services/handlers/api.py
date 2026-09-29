@@ -248,6 +248,9 @@ def handler(event, context):
     try:
         principal = _authorize(event, path)
         store = Store(principal.user_id)
+        # Before ensure_user inserts a tenant row. An existing USER# row is
+        # grandfathered; a new subject must have a verified email.
+        principal = identity.ensure_verified_email(store, principal, identity.bearer(event))
         _, is_new_signup = identity.ensure_user(store, principal)
         if is_new_signup:
             _warm_account_harness(context, store.owner_id)
@@ -259,6 +262,12 @@ def handler(event, context):
         return _route(store, method, path, body, event)
     except identity.AuthError:
         return _resp(401, {"error": "unauthorized"})
+    except identity.EmailNotVerified as exc:
+        return _resp(403, {
+            "error": identity.EmailNotVerified.code,
+            "code": identity.EmailNotVerified.code,
+            "detail": str(exc),
+        })
     except A.ValidationError as exc:
         return _resp(400, {"error": "invalid_request", "detail": str(exc)})
     except skills.ValidationError as exc:

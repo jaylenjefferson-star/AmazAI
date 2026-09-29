@@ -14,7 +14,19 @@
 > audience, and expiry on the Auth0 **access** token. Signup (`screen_hint=signup`)
 > and MFA are Auth0 dashboard settings; this repo does not enforce a second
 > factor. `OWNER_SUBJECTS` / `OWNER_EMAILS` unset means `assert_owner` allows
-> any verified subject.
+> any authenticated subject. That allowlist stays open: AmazAI is a public
+> paid product. A *new* workspace still requires a verified email
+> ([AUTH0_EMAIL_ACTION.md](../AUTH0_EMAIL_ACTION.md)). A subject who already
+> has a `USER#` row is grandfathered.
+
+A live read of the Auth0 tenant's Allowed Callback URLs and Allowed Logout
+URLs includes `https://amazai.co`, `http://localhost:5173`, and
+`http://localhost:4173`. It does not include `https://www.amazai.co` (hosting
+301s that host to the apex before the SPA runs) or
+`https://main.d2qtxrhp46u9pz.amplifyapp.com`. Login and logout on the Amplify
+host fail until that origin is added in the dashboard. That is a dashboard
+to-do, not a code change. The rest of the auth backlog is
+[AUTH_BACKLOG.md](../AUTH_BACKLOG.md).
 
 Covers brief §1 (identity substrate) and **Deliverable 4** (concrete boundaries).
 

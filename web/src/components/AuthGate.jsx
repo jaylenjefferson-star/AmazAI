@@ -1,5 +1,6 @@
 import Companion from '../characters/Companion';
 import Logo from './Logo';
+import EmailGate from './EmailGate';
 import { configured, isOwner, startLogin, startLogout, useAuth0 } from '../auth0';
 import { DEMO } from '../demo';
 
@@ -73,7 +74,7 @@ export default function AuthGate({ children }) {
     );
   }
 
-  return children;
+  return <EmailGate>{children}</EmailGate>;
 }
 
 function Screen({ state, title, body, hint, action, quiet }) {

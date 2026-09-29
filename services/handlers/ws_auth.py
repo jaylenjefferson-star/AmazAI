@@ -14,6 +14,7 @@ else.
 from __future__ import annotations
 
 from amazai import identity
+from amazai.store import Store
 
 
 def handler(event, context):  # noqa: ARG001
@@ -21,7 +22,13 @@ def handler(event, context):  # noqa: ARG001
     try:
         principal = identity.verify(token)
         identity.assert_owner(principal)
-    except identity.AuthError:
+        # Same rule as the HTTP handler: no USER# row is created here, and a
+        # new subject with an unverified email is refused. API Gateway turns
+        # this into a rejected handshake, not a JSON body; the HTTP route is
+        # what returns 403 EMAIL_NOT_VERIFIED to the console.
+        store = Store(principal.user_id)
+        identity.ensure_verified_email(store, principal, token)
+    except (identity.AuthError, identity.EmailNotVerified):
         # Raising Unauthorized makes API Gateway reject the handshake without
         # exposing why a supplied token was not accepted.
         raise Exception("Unauthorized") from None

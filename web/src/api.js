@@ -17,7 +17,10 @@ async function call(method, path, body, extraHeaders) {
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
   if (!res.ok) {
-    throw new Error(data?.detail || data?.error || `${res.status} ${res.statusText}`);
+    const err = new Error(data?.detail || data?.error || `${res.status} ${res.statusText}`);
+    err.status = res.status;
+    err.code = data?.code || '';
+    throw err;
   }
   return data;
 }
