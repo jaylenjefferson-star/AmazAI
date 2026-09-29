@@ -14,7 +14,7 @@ One DynamoDB table, `amazai`. On-demand billing, `pk`/`sk`, PITR on,
   by connector, approvals by expiry. The earlier plan had one GSI; the state
   machine and approval expiry sweep need the second.
 
-Every row carries `ownerId` (your Cognito `sub`) and `entity`. Every read and
+Every row carries `ownerId` (your Auth0 `sub`) and `entity`. Every read and
 write filters on `ownerId` — the JWT proves who you are, this proves the row is
 yours.
 
@@ -61,7 +61,7 @@ The brief's ten requirements, mapped to storage:
 ```jsonc
 {
   "pk": "AGENT#01JBQ...", "sk": "META",
-  "entity": "Agent", "ownerId": "<cognito-sub>",
+  "entity": "Agent", "ownerId": "<auth0-sub>",
   "gsi1pk": "AGENTS", "gsi1sk": "Engineering",
 
   "name": "Engineering",
@@ -131,7 +131,7 @@ makes the Memory tab's "used in 23 runs" honest.
   "allowedTools": ["repo.read", "pr.create", "pr.comment"],
   "approvalOverrides": { "pr.create": "preapproved_own_repos" },
   "grantedAt": "2026-08-02T...",
-  "grantedBy": "<cognito-sub>",
+  "grantedBy": "<auth0-sub>",
   "needsReview": false,                 // true if connector re-auth widened scopes
   "lastUsedAt": "2026-09-19T14:04:00Z",
   "callsThisMonth": 31
@@ -244,7 +244,7 @@ DynamoDB holds *pointers and decisions*. S3 holds *content*. The vault holds
 
 ## The multi-user seam
 
-Today `ownerId` is always your Cognito `sub` and is checked on every access.
+Today `ownerId` is always your Auth0 `sub` and is checked on every access.
 The team model adds:
 
 1. An `ORG#<orgId>` entity with `MEMBER#<sub>` rows carrying a role.

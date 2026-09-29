@@ -136,7 +136,7 @@ Screenshots of each are in the session transcript.
 
 ## Known limitations
 
-**Nothing is deployed.** No AgentCore call, no DynamoDB write, no Cognito
+**Nothing is deployed.** No AgentCore call, no DynamoDB write, no console
 sign-in has run against a live account. `aws configure` is the blocker, and it
 is yours to do — I am not handling your keys.
 

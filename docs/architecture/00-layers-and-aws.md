@@ -13,7 +13,7 @@
 
 A layer may call downward and emit events upward. It may not reach across.
 Concretely: the agent runtime (L3) never reads DynamoDB (L2) and never holds a
-Cognito token (L0). It receives a scoped job and returns results. Every
+Auth0 access token (L0). It receives a scoped job and returns results. Every
 permission question is answered in L1/L2 by deterministic code before L3 is
 invoked.
 
@@ -26,11 +26,11 @@ aspirational.
                                     ┌──────────────┐
                                     │     YOU      │
                                     └──────┬───────┘
-                                           │ TOTP + password
+                                           │ Auth0 login
 ┌──────────────────────────────────────────┼───────────────────────────────────┐
 │ L0  IDENTITY                             ▼                                   │
-│   Cognito user pool (self-signup OFF, MFA required, one user)                 │
-│   └─ ID token (JWT) ──────────────────────────────┐                           │
+│   Auth0 tenant (Universal Login + PKCE; issuer and audience in config/auth0)  │
+│   └─ access token (JWT) ──────────────────────────┐                           │
 │   AgentCore Identity token vault ─ OAuth tokens for Gmail/Slack/GitHub/Drive  │
 │   IAM  ─ one harness execution role PER AGENT     │  ─ per-connector AWS roles│
 │   Device registry (M5+) ─ per-device X.509 cert   │                           │
@@ -42,7 +42,7 @@ aspirational.
 │   Console SPA (React/Vite)  ──►  CloudFront + S3 (OAC, 403/404 → index.html)  │
 │        │                                    Tauri desktop shell wraps this    │
 │        │                                    unchanged at M4                   │
-│        ├── HTTPS ──► API Gateway HTTP API ──► λ api      (Cognito JWT authz)  │
+│        ├── HTTPS ──► API Gateway HTTP API ──► λ api      (Auth0 JWT authz)    │
 │        │                                      CRUD + policy decisions         │
 │        │                                                                      │
 │        └── WSS ────► API Gateway WebSocket ──► λ ws                           │
@@ -114,15 +114,15 @@ aspirational.
 
 | Component | Purpose |
 |---|---|
-| Cognito user pool | The one login. Self-signup off, TOTP MFA required, exactly one user. |
+| Auth0 tenant | The one login. Issuer and API audience are `config/auth0.json`. Signup and MFA are Auth0 dashboard policy, not a user pool in this stack. |
 | AgentCore Identity token vault | OAuth access/refresh tokens for connectors. **Never leaves the vault** — injected at egress by Gateway. |
 | IAM: harness execution roles | One per agent seat, trusted by `bedrock-agentcore.amazonaws.com`. |
 | IAM: connector AWS roles | Separate read-only and change roles, assumed via STS, session-tagged with the run ID. |
 | Device registry | M5+. One X.509 cert per registered Mac, revocable instantly. |
 
 **Crosses upward:** a verified JWT identity, nothing else.
-**Never crosses downward:** the Cognito token. The agent runtime has no idea a
-Cognito user pool exists.
+**Never crosses downward:** the Auth0 access token. The agent runtime has no
+Auth0 credential and does not know which tenant issued the login.
 
 ### L1 — Control plane
 

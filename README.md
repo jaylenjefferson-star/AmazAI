@@ -28,6 +28,19 @@ Evidence, approvals, audit history, notifications
 The promise is not "the agent acted." It is **"the agent acted safely and can
 prove what it did."**
 
+## Identity
+
+Auth0 is the only application identity provider. The tenant is
+`dev-msijboy7a85k3chd.us.auth0.com` and the API audience is
+`https://api.amazai.co`. Those two public values live in
+[`config/auth0.json`](config/auth0.json). The CDK HTTP JWT authorizer, the
+Lambda `AUTH0_DOMAIN` / `AUTH0_AUDIENCE` environment, and
+`services/amazai/identity.py` all use them (the Lambdas via the stack). The
+console reads the same pair from `VITE_AUTH0_DOMAIN` and `VITE_AUTH0_AUDIENCE`,
+plus the public SPA client id `VITE_AUTH0_CLIENT_ID`. See
+[`web/.env.example`](web/.env.example). There is no Cognito user pool in this
+stack.
+
 ## Status
 
 Everything below is built and verified in CI-less form — `pytest` and

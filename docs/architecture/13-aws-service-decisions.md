@@ -9,10 +9,10 @@
 | **Bedrock AgentCore Harness / Runtime** | The agent's computer | The primitive the whole product rests on. Not something to rebuild. |
 | **AgentCore Identity** | Token vault, OAuth flows | Keeps tokens out of the runtime entirely. Free when used via Runtime or Gateway. |
 | **AgentCore Gateway** | Connector tools, egress credential injection | $0.005 per 1,000 invocations. Negligible. |
-| **Cognito** | The one login | Free at this scale. MFA built in. |
+| **Auth0** (external) | The one login. SPA JS, PKCE, access tokens. Issuer and audience: `config/auth0.json`. | Not an AWS service. Signup and MFA are tenant settings, not a user pool in this stack. |
 | **DynamoDB** | Single table, all control-plane state | On-demand, near-zero idle, PITR. Access patterns are all owner-scoped. |
 | **Lambda** (Python 3.12, arm64) | `api`, `ws`, `orchestrator`, `routine`, `sweeper` | Pay-per-use. Idle is genuinely $0. |
-| **API Gateway HTTP API** | REST + JWT authorizer | Cheaper than REST API; the Cognito authorizer is built in. |
+| **API Gateway HTTP API** | REST + JWT authorizer | Cheaper than REST API; the JWT authorizer checks the Auth0 issuer and audience. |
 | **API Gateway WebSocket** | Streaming + notifications | Lambda response streaming is Node-only; the verified AgentCore surface is boto3. |
 | **EventBridge Scheduler** | Routine triggers | Timezone-aware, handles DST, one schedule per routine. |
 | **EventBridge (bus + rules)** | Sweeper tick, connector events | — |

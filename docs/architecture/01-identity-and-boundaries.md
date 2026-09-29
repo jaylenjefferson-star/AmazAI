@@ -7,6 +7,15 @@
 > roles remain valid only for an explicit compute exception, and a union role
 > over private prefixes remains forbidden.
 
+> **Identity provider (2026-09-29).** Auth0 is the only application login.
+> Issuer and API audience are [`config/auth0.json`](../../config/auth0.json)
+> (`dev-msijboy7a85k3chd.us.auth0.com`, audience `https://api.amazai.co`).
+> There is no Cognito user pool. `identity.verify` checks signature, issuer,
+> audience, and expiry on the Auth0 **access** token. Signup (`screen_hint=signup`)
+> and MFA are Auth0 dashboard settings; this repo does not enforce a second
+> factor. `OWNER_SUBJECTS` / `OWNER_EMAILS` unset means `assert_owner` allows
+> any verified subject.
+
 Covers brief §1 (identity substrate) and **Deliverable 4** (concrete boundaries).
 
 ## Part 1 — Six kinds of identity, deliberately kept apart
@@ -16,7 +25,7 @@ the mistake that makes an agent platform unsafe as it grows.
 
 ```
   ┌─────────────────────────────────────────────────────────────┐
-  │ 1. AmazAI ACCOUNT  (Cognito sub)                            │
+  │ 1. AmazAI ACCOUNT  (Auth0 sub)                              │
   │    The owner. Owns everything below. Never impersonated.    │
   └───┬──────────┬──────────┬──────────┬──────────┬─────────────┘
       │          │          │          │          │
@@ -31,10 +40,10 @@ the mistake that makes an agent platform unsafe as it grows.
 ```
 
 ### 1. Your AmazAI account
-- **Is:** the Cognito `sub`. The single root of ownership.
+- **Is:** the Auth0 `sub`. The single root of ownership.
 - **Owns:** agents, connector authorizations, routines, workspaces, preferences,
   budget, audit history.
-- **Never:** used as an execution identity. No agent ever acts "as" your Cognito
+- **Never:** used as an execution identity. No agent ever acts "as" your Auth0
   identity. Every action is attributed to an agent, under a grant, in a run.
 - **Multi-user seam:** every row carries `ownerId`. Today it is always your
   `sub`. A future team model introduces an `orgId` above it and changes `ownerId`
@@ -81,7 +90,7 @@ resources.
 
 ### 5. Local companion / device registration
 - **Is:** a registered physical machine, with its own X.509 identity, entirely
-  separate from your Cognito login. Logging in does not register a device;
+  separate from your Auth0 login. Logging in does not register a device;
   registering a device does not grant it your account's authority.
 - **Direction:** outbound only. The Mac dials AWS IoT Core. Nothing dials the Mac.
 - **Revocation:** instant, and independent of everything else — revoking the
@@ -105,20 +114,25 @@ Each row: what legitimately crosses, what must never cross, and the mechanism
 that enforces it. "Enforced by" is the thing that fails closed.
 
 ### B1 · You → Desktop app
-- **Crosses:** password + TOTP; explicit approval decisions; connector consent.
+- **Crosses:** Auth0 Universal Login (the password stays at Auth0); explicit
+  approval decisions; connector consent.
 - **Never crosses:** connector passwords or MFA codes typed into an *agent* chat.
   Credential entry happens in the provider's own OAuth page or in a browser
   takeover session, never in a message box.
-- **Enforced by:** Cognito MFA policy; the console has no free-text field that
-  feeds secrets to an agent.
+- **Enforced by:** the console never collects a password. MFA, when required,
+  is an Auth0 tenant policy — this repo does not check a second factor. The
+  console has no free-text field that feeds secrets to an agent.
 
 ### B2 · Desktop app → API / control plane
-- **Crosses:** Cognito ID token in `authorization`, on every request.
+- **Crosses:** Auth0 access token in `authorization`, on every request.
 - **Never crosses:** anything trusted from the client. The client's claim about
   which agent it is acting as is re-derived server-side from the thread row.
-- **Enforced by:** API Gateway Cognito JWT authorizer, plus an `ownerId` check on
-  every DynamoDB read *and* write — the authorizer proves who you are, the
-  ownership check proves the row is yours.
+- **Enforced by:** API Gateway HTTP JWT authorizer (Auth0 issuer and audience
+  from `config/auth0.json`), then `identity.verify` (signature, issuer,
+  audience, expiry), then an `ownerId` check on every DynamoDB read *and*
+  write. The authorizer proves who you are; the ownership check proves the
+  row is yours. `assert_owner` is a further allowlist and is open when
+  `OWNER_SUBJECTS` and `OWNER_EMAILS` are both unset.
 
 ### B3 · API/control plane → Model provider (Bedrock)
 - **Crosses:** system prompt, conversation history, tool *schemas*, tool

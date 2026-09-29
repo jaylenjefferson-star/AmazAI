@@ -82,7 +82,7 @@ in either grant's `allowedTools` and admin-class tools cannot be pre-approved.
    YOU
     │ 1. sign in
     ▼
- COGNITO ─── JWT ───► λ api ──── authorizes ────► everything below
+ AUTH0 ───── JWT ───► λ api ──── authorizes ────► everything below
     │                                                    │
     │ 2. "Connect GitHub"                                │
     ▼                                                    │
@@ -107,7 +107,7 @@ in either grant's `allowedTools` and admin-class tools cannot be pre-approved.
 
 | System | Holds | Never holds |
 |---|---|---|
-| **Cognito** | Your login identity | Any connector credential |
+| **Auth0** | Your login identity | Any connector credential |
 | **AgentCore Identity vault** | OAuth access + refresh tokens, API keys | — |
 | **KMS** | The CMK encrypting the vault, S3 buckets, browser profiles | Plaintext anything |
 | **Secrets Manager** | Non-OAuth API keys that the vault cannot hold | OAuth tokens (the vault owns those) |
