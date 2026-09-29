@@ -26,8 +26,8 @@ export default function AuthGate({ children }) {
       <Screen
         state="blocked"
         title="Sign-in is not configured"
-        body="This build has no Auth0 domain or client ID, so there is nothing to sign in to."
-        hint="Set VITE_AUTH0_DOMAIN and VITE_AUTH0_CLIENT_ID and rebuild."
+        body="This build is missing the Auth0 domain, client ID, or API audience, so there is nothing to sign in to."
+        hint="Set VITE_AUTH0_DOMAIN, VITE_AUTH0_CLIENT_ID, and VITE_AUTH0_AUDIENCE (https://api.amazai.co) and rebuild."
       />
     );
   }

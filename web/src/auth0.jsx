@@ -20,11 +20,27 @@ export const config = {
   domain: import.meta.env.VITE_AUTH0_DOMAIN || '',
   clientId: import.meta.env.VITE_AUTH0_CLIENT_ID || '',
   // Must match config/auth0.json `audience`. Empty means Auth0 issues a
-  // token for the SPA client only, which identity.verify rejects.
+  // token for the SPA client only, which identity.verify rejects. The
+  // console treats that as a broken build, not as a session.
   audience: import.meta.env.VITE_AUTH0_AUDIENCE || '',
 };
 
-export const configured = Boolean(config.domain && config.clientId);
+/** Domain and client id are enough to mount the Auth0 SDK. Audience is not. */
+export const providerReady = Boolean(config.domain && config.clientId);
+
+export function authConfigured(cfg = config) {
+  return Boolean(cfg.domain && cfg.clientId && String(cfg.audience || '').trim());
+}
+
+/** False when the API audience is missing, so the gate shows a config error
+ * instead of a signed-in shell whose tokens the API will reject. */
+export const configured = authConfigured();
+
+if (providerReady && !configured) {
+  console.error(
+    'VITE_AUTH0_AUDIENCE is required. Set it to the API audience in config/auth0.json before using this build.',
+  );
+}
 
 let accessTokenProvider = null;
 
@@ -93,7 +109,9 @@ export function operatorFirstName(user) {
 }
 
 export function AmazAIAuthProvider({ children }) {
-  if (!configured) return children;
+  // Mount whenever the SDK can start. A missing audience still mounts so
+  // useAuth0() does not throw; AuthGate refuses to show the workspace.
+  if (!providerReady) return children;
 
   return (
     <Auth0Provider
