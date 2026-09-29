@@ -4,6 +4,7 @@ import PublicShell from '../../components/PublicShell';
 import Seo from '../../components/Seo';
 import { api } from '../../api';
 import { startLogin, useAuth0 } from '../../auth0';
+import { SIGNUP_RETURN } from '../../lib/billing';
 
 // These values mirror services/amazai/billing_plans.json, the checkout source
 // of truth. A marketing price that differs from the Stripe-backed plan is not
@@ -62,15 +63,11 @@ export default function Pricing() {
   const { isAuthenticated, loginWithRedirect } = useAuth0();
 
   // Signed in: start checkout for that exact plan and go straight to
-  // Stripe. Signed out: the same Universal Login signup every other "get
-  // started" button on this site uses -- a brand-new account still has
-  // onboarding to get through (meeting Chief) before a plan means anything,
-  // so this does not try to carry the chosen tier through that flow. The
-  // Billing page (linked from account nav once signed in) is one more click
-  // away to pick a plan for real.
+  // Stripe. Signed out: Universal Login, then the in-app plan picker.
+  // Auth0 has to come first — checkout is tied to the signed-in owner.
   async function getStarted(planKey) {
     if (!isAuthenticated) {
-      startLogin(loginWithRedirect, { signup: true, returnTo: '/welcome' });
+      startLogin(loginWithRedirect, { signup: true, returnTo: SIGNUP_RETURN });
       return;
     }
     setBusy(planKey); setError('');
@@ -79,7 +76,7 @@ export default function Pricing() {
       // from the request's own Origin header (services/handlers/api.py),
       // never from client input -- a client-supplied redirect target would
       // be an open redirect through Stripe's own domain.
-      const { url } = await api.billing.checkout({ planKey });
+      const { url } = await api.billing.checkout({ planKey, purpose: 'billing' });
       window.location.href = url;
     } catch (err) {
       setError(err.message);

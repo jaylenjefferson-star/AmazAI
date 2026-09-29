@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { startLogin, useAuth0 } from '../../auth0';
+import { SIGNUP_RETURN } from '../../lib/billing';
 import ProductFrame from './ProductFrame';
 
 /**
@@ -22,7 +23,7 @@ export default function Hero() {
           </p>
           <div className="mkt-hero-cta">
             <button className="mkt-btn mkt-btn-primary"
-                    onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: '/welcome' })}>
+                    onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: SIGNUP_RETURN })}>
               Start for free
             </button>
             <Link className="mkt-btn mkt-btn-ghost" to="/how-it-works">

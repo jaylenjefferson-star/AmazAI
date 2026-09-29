@@ -1,14 +1,11 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import PlanCards from './PlanCards';
+import { friendly } from '../lib/errors';
+import { TIER_LABEL, followBillingUrl, listedTopUps, orderedPlans } from '../lib/billing';
 
 const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
-
-const TIER_LABEL = {
-  trial: 'Free trial', explore: 'Explore', personal: 'Personal',
-  personal_plus: 'Personal+', pro: 'Pro', power: 'Power',
-};
-
-const PLAN_ORDER = ['explore', 'personal', 'personal_plus', 'pro', 'power'];
 
 /**
  * The account's own balance, tier, and subscription -- self-service, this
@@ -20,13 +17,23 @@ const PLAN_ORDER = ['explore', 'personal', 'personal_plus', 'pro', 'power'];
  * this redirects the browser to. AmazAI holds a reference to a subscription,
  * never a card number.
  */
+function checkoutNotice() {
+  if (typeof window === 'undefined') return '';
+  const checkout = new URLSearchParams(window.location.search).get('checkout');
+  if (checkout === 'success') return 'Stripe sent you back. The plan updates when the payment is confirmed.';
+  if (checkout === 'cancelled') return 'Checkout was cancelled. No charge was made.';
+  return '';
+}
+
 export default function BillingSummary() {
+  const navigate = useNavigate();
   const [billing, setBilling] = useState(null);
   const [plans, setPlans] = useState(null);
   const [ledger, setLedger] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
+  const [notice] = useState(checkoutNotice);
 
   useEffect(() => {
     let live = true;
@@ -44,9 +51,20 @@ export default function BillingSummary() {
     setBusy(key); setError('');
     try {
       const { url } = await promise;
-      window.location.href = url;
+      followBillingUrl(url, navigate);
     } catch (err) {
-      setError(err.message);
+      setError(friendly(err, "Couldn't open billing."));
+      setBusy('');
+    }
+  }
+
+  async function confirmExplore() {
+    setBusy('plan:explore'); setError('');
+    try {
+      setBilling(await api.billing.confirmExplore());
+    } catch (err) {
+      setError(friendly(err, "Couldn't select Explore."));
+    } finally {
       setBusy('');
     }
   }
@@ -87,50 +105,38 @@ export default function BillingSummary() {
         </dl>
       </section>
 
+      {notice && <p className="hint-text">{notice}</p>}
       {error && <div className="err"><span className="msg-text">{error}</span></div>}
 
       <section className="card-list">
         <h2 className="section-title">Plans</h2>
-        <div className="pricing-grid">
-          {PLAN_ORDER.filter((key) => plans?.plans?.[key]).map((key) => {
-            const p = plans.plans[key];
-            const current = billing.tier === key;
-            return (
-              <article key={key} className={current ? 'pricing-card featured' : 'pricing-card'}>
-                {current && <span className="pricing-badge">Current plan</span>}
-                <h2>{p.name}</h2>
-                <p className="pricing-price">
-                  <strong>${p.priceUsd % 1 === 0 ? p.priceUsd : p.priceUsd.toFixed(2)}</strong>
-                  /{p.interval}
-                </p>
-                <p className="pricing-credits">{p.creditsPerMonth.toLocaleString()} Amaz Credits</p>
-                <p className="pricing-tagline">{p.description}</p>
-                <button
-                  className={current ? 'ghost' : 'primary'}
-                  disabled={current || busy === `plan:${key}`}
-                  onClick={() => goTo(api.billing.checkout({ planKey: key }), `plan:${key}`)}
-                >
-                  {current ? 'Current plan' : busy === `plan:${key}` ? 'Redirecting…' : `Switch to ${p.name}`}
-                </button>
-              </article>
-            );
-          })}
-        </div>
+        <PlanCards
+          plans={orderedPlans(plans)}
+          currentTier={billing.tier}
+          busy={busy}
+          subscribed={!!billing.hasStripeCustomer}
+          onExplore={confirmExplore}
+          onCheckout={(planKey) => goTo(api.billing.checkout({ planKey, purpose: 'billing' }), `plan:${planKey}`)}
+        />
       </section>
 
-      {plans?.creditTopUps?.length > 0 && (
+      {listedTopUps(plans).length > 0 && (
         <section className="card-list">
           <h2 className="section-title">Buy more credits</h2>
           <p className="hint-text">A one-time top-up, on top of whatever plan you're already on.</p>
           <div className="picker">
-            {plans.creditTopUps.map((t) => (
+            {listedTopUps(plans).map((pack) => (
               <button
-                key={t.lookupKey}
+                type="button"
+                key={pack.lookupKey}
                 className="ghost"
-                disabled={busy === `topup:${t.lookupKey}`}
-                onClick={() => goTo(api.billing.checkout({ topUpKey: t.lookupKey }), `topup:${t.lookupKey}`)}
+                disabled={!pack.stripePriceId || busy === `topup:${pack.lookupKey}`}
+                onClick={() => goTo(
+                  api.billing.checkout({ topUpKey: pack.lookupKey, purpose: 'billing' }),
+                  `topup:${pack.lookupKey}`,
+                )}
               >
-                {busy === `topup:${t.lookupKey}` ? 'Redirecting…' : `${t.name} — ${usd(t.priceUsd)}`}
+                {busy === `topup:${pack.lookupKey}` ? 'Redirecting…' : `${pack.name} — ${usd(pack.priceUsd)}`}
               </button>
             ))}
           </div>
@@ -138,16 +144,19 @@ export default function BillingSummary() {
       )}
 
       <section className="card-list">
-        <h2 className="section-title">Subscription</h2>
+        <h2 className="section-title">Change plan</h2>
         <button
+          type="button"
           className="ghost"
-          disabled={busy === 'portal'}
+          disabled={!billing.hasStripeCustomer || busy === 'portal'}
           onClick={() => goTo(api.billing.portal(), 'portal')}
         >
-          {busy === 'portal' ? 'Redirecting…' : 'Manage subscription'}
+          {busy === 'portal' ? 'Redirecting…' : 'Change plan'}
         </button>
         <p className="hint-text">
-          Update your card, change your plan, or cancel — handled entirely on Stripe's side.
+          {billing.hasStripeCustomer
+            ? 'Opens Stripe\'s customer portal, where you can change plan, update the card, or cancel. AmazAI does not collect a card number.'
+            : 'A paid subscription has a Stripe customer. Explore does not. Choose a paid plan to open the portal.'}
         </p>
       </section>
 

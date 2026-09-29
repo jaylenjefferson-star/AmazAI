@@ -1,4 +1,5 @@
 import { startLogin, useAuth0 } from '../../auth0';
+import { SIGNUP_RETURN } from '../../lib/billing';
 
 /**
  * The closing call to action. Deliberately spare: a lot of whitespace, one
@@ -17,7 +18,7 @@ export default function FinalCta() {
         </p>
         <button
           className="mkt-btn mkt-btn-primary mkt-final-cta"
-          onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: '/welcome' })}
+          onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: SIGNUP_RETURN })}
         >
           Start free
         </button>

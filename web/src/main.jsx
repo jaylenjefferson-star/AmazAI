@@ -30,6 +30,9 @@ import aiTransparencyRaw from './content/ai-transparency.md?raw';
 import dataProcessingRaw from './content/data-processing-addendum.md?raw';
 import Onboarding from './screens/Onboarding';
 import { CHECKING, NEEDED, OFFER, useFirstRun } from './hooks/useFirstRun';
+import { CHECKING as REG_CHECKING, INCOMPLETE, useRegistration } from './hooks/useRegistration';
+import { plansPath } from './lib/billing';
+import Plans, { PlanSuccess } from './screens/Plans';
 import { DEMO } from './demo';
 import Inbox from './screens/Inbox';
 import { Artifacts, Routines } from './screens/Sections';
@@ -78,6 +81,23 @@ function Protected({ children }) {
 }
 
 /**
+ * A new account picks a plan before the rest of the app.
+ *
+ * This is a redirect, not a lock: the API still answers, /admin stays
+ * reachable, and a billing read that fails leaves the workspace open.
+ * Only `registrationIncomplete: true` comes here.
+ */
+function RegistrationGuard({ children }) {
+  const location = useLocation();
+  const registration = useRegistration();
+  if (registration === REG_CHECKING) return null;
+  if (registration === INCOMPLETE) {
+    return <Navigate to={plansPath(location.search)} replace />;
+  }
+  return children;
+}
+
+/**
  * Send a signed-in owner who has never set up to setup first.
  *
  * "Never set up" is a question about the account, so it is asked of the
@@ -96,7 +116,7 @@ function FirstRunGuard({ children }) {
   // first Bot (OFFER) is a working org and keeps its inbox; the inbox offers
   // the first Bot there instead of blocking the way to the rest.
   if (firstRun === NEEDED && location.pathname !== '/welcome') {
-    return <Navigate to="/welcome" replace />;
+    return <Navigate to={{ pathname: '/welcome', search: location.search }} replace />;
   }
   return children;
 }
@@ -184,11 +204,16 @@ function Router() {
       <Route path="/data-processing-addendum" element={<PolicyPage raw={dataProcessingRaw} path="/data-processing-addendum"
         description="Data-processing terms available to AmazAI business customers." />} />
 
+      {/* Plan picker. Outside the registration guard: this is where an
+          incomplete account is sent, and where Stripe returns. */}
+      <Route path="/plans" element={<Protected><Plans /></Protected>} />
+      <Route path="/plans/success" element={<Protected><PlanSuccess /></Protected>} />
+
       {/* First run */}
-      <Route path="/welcome" element={<Protected><SetupOnly><Onboarding /></SetupOnly></Protected>} />
+      <Route path="/welcome" element={<Protected><RegistrationGuard><SetupOnly><Onboarding /></SetupOnly></RegistrationGuard></Protected>} />
 
       {/* The application */}
-      <Route element={<Protected><FirstRunGuard><Shell /></FirstRunGuard></Protected>}>
+      <Route element={<Protected><RegistrationGuard><FirstRunGuard><Shell /></FirstRunGuard></RegistrationGuard></Protected>}>
         <Route path="/" element={<Inbox />} />
         <Route path="/agents" element={<Navigate to="/" replace />} />
         <Route path="/agents/new" element={<NewAgent />} />

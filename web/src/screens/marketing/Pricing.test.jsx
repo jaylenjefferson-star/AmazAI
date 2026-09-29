@@ -29,7 +29,7 @@ describe('Pricing', () => {
     renderIt();
     fireEvent.click(screen.getAllByRole('button', { name: 'Get started' })[0]); // Personal
     expect(mockLoginWithRedirect).toHaveBeenCalledWith(
-      expect.objectContaining({ signup: true, returnTo: '/welcome' }));
+      expect.objectContaining({ signup: true, returnTo: '/plans' }));
     expect(api.billing.checkout).not.toHaveBeenCalled();
   });
 
@@ -39,7 +39,7 @@ describe('Pricing', () => {
     renderIt();
     fireEvent.click(screen.getAllByRole('button', { name: 'Get started' })[3]); // Power
     await waitFor(() => expect(api.billing.checkout)
-      .toHaveBeenCalledWith({ planKey: 'power' }));
+      .toHaveBeenCalledWith({ planKey: 'power', purpose: 'billing' }));
     expect(mockLoginWithRedirect).not.toHaveBeenCalled();
   });
 

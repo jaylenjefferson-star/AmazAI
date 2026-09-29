@@ -190,6 +190,13 @@ def _composio():
 #: origins the gateway's CORS allows; anything else gets no callback at all.
 _CONSOLE_ORIGINS = ("https://amazai.co", "http://localhost:5173", "http://localhost:4173")
 
+# Checkout return paths. Values are paths on the allowlisted origin, never
+# a URL taken from the request body.
+_CHECKOUT_RETURNS = {
+    "billing": ("/billing?checkout=success", "/billing?checkout=cancelled"),
+    "signup": ("/plans/success", "/plans?checkout=cancelled"),
+}
+
 
 def _return_url(event, slug: str) -> str | None:
     origin = ((event.get("headers") or {}).get("origin") or "").rstrip("/")
@@ -978,14 +985,14 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
     # identity.load_membership's own "single-tenant seam" note; that is a
     # deliberately separate, larger piece of work.
     if path == "/billing" and method == "GET":
-        row = billing.ensure_billing_row(store)
-        return _resp(200, {
-            "balanceUsd": billing.balance_usd(store),
-            "creditsRemaining": billing.credits_remaining(store),
-            "tier": row.get("tier"),
-            "subscriptionStatus": row.get("subscriptionStatus"),
-            "hasCredit": billing.has_credit(store),
-        })
+        return _resp(200, billing.summary(store))
+
+    if path == "/billing/explore" and method == "POST":
+        # Explore is the free catalog plan: confirmed here, never Checkout.
+        try:
+            return _resp(200, billing.confirm_explore(store))
+        except ValueError as exc:
+            return _resp(400, {"error": "invalid_request", "detail": str(exc)})
 
     if path == "/billing/ledger" and method == "GET":
         qs = event.get("queryStringParameters") or {}
@@ -1004,11 +1011,22 @@ def _route(store: Store, method: str, path: str, body: dict, event: dict):
         origin = _billing_origin(event)
         if not origin:
             return _resp(400, {"error": "invalid_request", "detail": "unrecognized origin"})
+        # The return path is chosen from this allowlist, never from a
+        # client-supplied URL. Signup comes back to the plan picker; a
+        # purchase started from Billing comes back to Billing.
+        purpose = body.get("purpose") or "billing"
+        paths = _CHECKOUT_RETURNS.get(purpose)
+        if paths is None:
+            return _resp(400, {"error": "invalid_request", "detail": "unknown checkout purpose"})
+        if purpose == "signup" and body.get("topUpKey"):
+            return _resp(400, {"error": "invalid_request",
+                               "detail": "credit top-ups are not part of signup"})
+        success_path, cancel_path = paths
         try:
             url = billing.start_checkout(
                 store, plan_key=body.get("planKey"), top_up_key=body.get("topUpKey"),
-                success_url=f"{origin}/billing?checkout=success",
-                cancel_url=f"{origin}/billing?checkout=cancelled",
+                success_url=f"{origin}{success_path}",
+                cancel_url=f"{origin}{cancel_path}",
                 customer_email=_principal(event).email)
         except ValueError as exc:
             return _resp(400, {"error": "invalid_request", "detail": str(exc)})
