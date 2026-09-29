@@ -477,6 +477,18 @@ export class AmazaiStack extends cdk.Stack {
         `arn:aws:lambda:${this.region}:${this.account}:function:amazai-orchestrator`,
       ],
     }));
+    // Signup warm-up self-invokes this function (`provisionOwner`). A
+    // `functionArn` token here cycles the role through the function; the
+    // literal name is the same pattern as InvokeSelfForRetry above. Without
+    // this grant the invoke is AccessDenied, the exception is swallowed, and
+    // the head start never starts.
+    apiFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'InvokeSelfForHarnessWarmup',
+      actions: ['lambda:InvokeFunction'],
+      resources: [
+        `arn:aws:lambda:${this.region}:${this.account}:function:amazai-api`,
+      ],
+    }));
 
     apiFn.grantInvoke(wsFn);
     orchestratorFn.grantInvoke(apiFn);

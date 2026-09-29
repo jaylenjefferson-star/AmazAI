@@ -22,3 +22,42 @@ export function normalizePublicPath(pathname = '/') {
 export function isPublicPath(pathname) {
   return PUBLIC_PATHS.includes(normalizePublicPath(pathname));
 }
+
+/**
+ * Fixed client routes copied to `<route>/index.html` at build time.
+ *
+ * Amplify redirects `/welcome` to `/welcome/` and, with no object there,
+ * CloudFront answers 404 whose body happens to be index.html. A reload of
+ * that 404 restarts the wizard. These copies make the trailing-slash URL
+ * a real 200. Dynamic ids (`/agents/:id`) still need the SPA rewrite rule
+ * in `spaRewrite.js` — a directory per id cannot be generated ahead of time.
+ *
+ * Kept off PUBLIC_PATHS on purpose: `/welcome` is signed-in setup, not a
+ * marketing page.
+ */
+export const SPA_ENTRY_PATHS = [
+  '/welcome',
+  '/agents',
+  '/agents/new',
+  '/marketplace',
+  '/connectors',
+  '/rooms',
+  '/org',
+  '/routines',
+  '/routines/new',
+  '/artifacts',
+  '/settings',
+  '/usage',
+  '/billing',
+  '/plans',
+  '/plans/success',
+  '/characters',
+  '/admin',
+  '/admin/directory',
+  '/admin/killswitch',
+  '/admin/audit',
+];
+
+export function isWelcomePath(pathname) {
+  return normalizePublicPath(pathname) === '/welcome';
+}

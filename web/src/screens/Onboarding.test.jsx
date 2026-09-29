@@ -80,7 +80,41 @@ describe('Onboarding', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
 
     expect(api.createAgent).toHaveBeenCalledTimes(2);
+    expect(api.createAgent.mock.calls[0][1]).toBe(api.createAgent.mock.calls[1][1]);
     expect(mockNavigate).toHaveBeenCalledWith('/agents/chief', { replace: true });
+  });
+
+  it('a gateway timeout is retried the same way as a still-creating harness', async () => {
+    api.createAgent
+      .mockRejectedValueOnce(new Error('504 Gateway Timeout'))
+      .mockRejectedValueOnce(new Error('Internal Server Error'))
+      .mockResolvedValueOnce({ agentId: 'chief' });
+    api.saveSettings.mockResolvedValue({});
+    const finishBtn = await clickThroughToTheLastStep();
+    acceptPolicies();
+
+    await act(async () => { fireEvent.click(finishBtn); });
+    expect(screen.getByText(/still starting up/)).toBeTruthy();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+
+    expect(api.createAgent).toHaveBeenCalledTimes(3);
+    expect(api.createAgent.mock.calls[0][1]).toBe(api.createAgent.mock.calls[2][1]);
+    expect(mockNavigate).toHaveBeenCalledWith('/agents/chief', { replace: true });
+  });
+
+  it('a missing model id is not retried', async () => {
+    api.createAgent.mockRejectedValue(new Error(
+      'no modelId resolved for tier \'balanced\'; run scripts/resolve_models.py'));
+    const finishBtn = await clickThroughToTheLastStep();
+    acceptPolicies();
+
+    await act(async () => { fireEvent.click(finishBtn); });
+
+    expect(api.createAgent).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/no modelId resolved/)).toBeTruthy();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('a non-retriable error is shown immediately, with no retry delay', async () => {
@@ -103,9 +137,9 @@ describe('Onboarding', () => {
     acceptPolicies();
 
     await act(async () => { fireEvent.click(finishBtn); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(6000 * 8); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000 * 20); });
 
-    expect(api.createAgent).toHaveBeenCalledTimes(8);
+    expect(api.createAgent).toHaveBeenCalledTimes(20);
     expect(screen.getByText(/still CREATING/)).toBeTruthy();
     expect(mockNavigate).not.toHaveBeenCalled();
   });

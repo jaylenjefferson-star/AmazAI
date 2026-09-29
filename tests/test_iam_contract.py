@@ -76,9 +76,22 @@ def test_the_orchestrator_knows_which_role_a_new_bot_gets():
 def test_current_create_harness_dependencies_are_pinned_explicitly():
     # AWS's current Harness authorization table (2026-09-21) evaluates these
     # dependent actions in addition to the public CreateHarness name.
+    # CreateWorkloadIdentity and GetAgentRuntime are the two that already
+    # produced a live CREATE_FAILED on a new signup; the control-plane call
+    # does not spell them, so the same-named-action scan will not catch a drop.
     required = {"CreateHarness", "CreateAgentRuntime", "CreateMemory", "GetMemory",
-                "TagResource", "CreateHarnessEndpoint", "CreateAgentRuntimeEndpoint"}
+                "TagResource", "CreateHarnessEndpoint", "CreateAgentRuntimeEndpoint",
+                "CreateWorkloadIdentity", "GetAgentRuntime"}
     assert required <= granted()
+
+
+def test_api_can_invoke_itself_for_harness_warmup_without_a_cfn_cycle():
+    block = statement_for("apiFn", "InvokeSelfForHarnessWarmup")
+    assert "lambda:InvokeFunction" in block
+    assert "function:amazai-api" in block
+    # The construct token (`apiFn.functionArn`) cycles the role through the
+    # function. The literal name is what the orchestrator already uses.
+    assert "apiFn.functionArn" not in block
 
 
 def test_runtime_permissions_are_split_by_caller():

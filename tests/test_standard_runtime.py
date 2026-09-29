@@ -263,9 +263,15 @@ class TestHarnessReadinessAndRole:
         assert store.get(K.user_pk(store.owner_id), K.runtime_sk())["state"] == RT.FAILED
 
     def test_a_bot_is_not_marked_active_while_the_harness_is_creating(self, store):
-        with pytest.raises(RT.RuntimeUnavailable, match="still CREATING"):
+        with pytest.raises(RT.StillCreating, match="still CREATING"):
             RT.ensure_shared_harness(store, client=Core(status="CREATING"),
                                      ready_wait_seconds=0)
+        row = store.get(K.user_pk(store.owner_id), K.runtime_sk())
+        # CREATING is not a failure, and the lease is dropped so the long
+        # worker can take the same name instead of waiting out the stale window.
+        assert row["state"] == RT.PROVISIONING
+        assert row["claimedAt"] == "1970-01-01T00:00:00Z"
+        assert row.get("rotateName") is False
 
     def test_provisioning_polls_until_ready(self, store, monkeypatch):
         statuses = iter(["CREATING", "READY"])
@@ -434,6 +440,58 @@ class TestARowThatSaysFailedIsNotAlwaysStillFailed:
             RT.ensure_shared_harness(store, client=core, wait_seconds=0)
 
         assert core.finds == [], "the live-adopt check must not fire while a claim is active"
+
+
+def test_choose_ready_harness_prefers_generation_2_over_the_live_create_failed():
+    """Inventory 2026-09-28: amazai_shared_6c5bb78ac28b_3 is CREATE_FAILED
+    and generation 2 of that digest is READY. Adopt 2, do not mint 4."""
+    records = [
+        {"name": "amazai_shared_6c5bb78ac28b", "status": "CREATE_FAILED", "arn": "arn-1"},
+        {"name": "amazai_shared_6c5bb78ac28b_2", "status": "READY", "arn": "arn-2"},
+        {"name": RT.STUCK_SHARED_HARNESS, "status": "CREATE_FAILED", "arn": "arn-3"},
+    ]
+    chosen = RT.choose_ready_harness(records)
+    assert chosen["name"] == "amazai_shared_6c5bb78ac28b_2"
+    assert chosen["arn"] == "arn-2"
+
+
+def test_a_create_failed_generation_adopts_an_older_ready_harness(store):
+    owner = store.owner_id
+    failed = RT.shared_harness_name(owner, 3)
+    ready = RT.shared_harness_name(owner, 2)
+    store.put({
+        "pk": K.user_pk(owner), "sk": K.runtime_sk(),
+        "entity": "AccountRuntime", "runtimeKind": "standard",
+        "state": RT.FAILED, "harnessName": failed, "generation": 3,
+        "harnessArn": None, "executionRoleArn": ROLE,
+        "claimToken": "rtclaim_stuck", "claimedAt": "2026-09-23T05:03:25Z",
+        "rotateName": True,
+        "error": "HarnessRejected: the account harness entered CREATE_FAILED",
+    }, unique=True)
+
+    class Generations(Core):
+        def find_harness(self, name):
+            self.finds.append(name)
+            if name == ready:
+                return "arn-ready"
+            if name == failed:
+                return "arn-failed"
+            return None
+
+        def get_harness(self, harness_arn):
+            self.gets.append(harness_arn)
+            status = "READY" if harness_arn == "arn-ready" else "CREATE_FAILED"
+            return {"harness": {"arn": harness_arn, "status": status,
+                                "executionRoleArn": ROLE}}
+
+    core = Generations()
+    assert RT.ensure_shared_harness(store, client=core, wait_seconds=0) == "arn-ready"
+    assert core.creates == []
+    row = store.get(K.user_pk(owner), K.runtime_sk())
+    assert row["state"] == RT.READY
+    assert row["generation"] == 2
+    assert row["harnessName"] == ready
+    assert row["rotateName"] is False
 
 
 def test_duplicate_worker_adopts_the_first_runtime_pin(store, monkeypatch):

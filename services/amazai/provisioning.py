@@ -95,7 +95,10 @@ def resolve_model_id(agent: dict, seated: list[dict], *, table=None) -> None:
         agent["model"]["modelId"] = resolved
 
 
-def provision_harness(store: Store, agent: dict) -> dict:
+def provision_harness(store: Store, agent: dict, *,
+                      wait_seconds: float | None = None,
+                      ready_wait_seconds: float | None = None,
+                      release_on_timeout: bool = True) -> dict:
     """Attach a logical Bot to the owner's standard AgentCore runtime.
 
     Bot identity and authority live in the control plane and travel on every
@@ -119,7 +122,11 @@ def provision_harness(store: Store, agent: dict) -> dict:
             "run scripts/resolve_models.py against this account first"
         )
 
-    provisioned = standard_runtime.provision_bot(store, agent)
+    provisioned = standard_runtime.provision_bot(
+        store, agent, wait_seconds=wait_seconds,
+        ready_wait_seconds=ready_wait_seconds,
+        release_on_timeout=release_on_timeout,
+    )
     # Seed the cross-owner registry from a Bot that just resolved a model, so the
     # next self-serve signup's first Bot has a model to reuse without a
     # resolve_models.py re-run. Best-effort; never fails a successful create.

@@ -181,8 +181,44 @@ def _owner() -> str:
     return os.environ.get("OWNER_ID", "owner")
 
 
+def _provision_owner_harness(owner_id: str) -> dict:
+    """Poll the owner's shared harness for up to WORKER_READY_SECONDS.
+
+    This is the wait the API must not do. A still-CREATING harness stays
+    PROVISIONING; only a terminal provider status is recorded as failed,
+    and that recording happens inside `ensure_shared_harness`.
+    """
+    store = Store(owner_id)
+    try:
+        harness_arn = standard_runtime.ensure_shared_harness(
+            store,
+            wait_seconds=standard_runtime.WORKER_WAIT_SECONDS,
+            ready_wait_seconds=standard_runtime.WORKER_READY_SECONDS,
+            takeover_after_wait=True,
+            release_on_timeout=True,
+        )
+        return {"ok": True, "harnessArn": harness_arn}
+    except standard_runtime.StillCreating as exc:
+        return {"ok": False, "pending": True, "error": str(exc)}
+    except standard_runtime.HarnessRejected as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    except standard_runtime.RuntimeUnavailable as exc:
+        return {"ok": False, "pending": True, "error": f"{type(exc).__name__}: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def handler(event, context):  # noqa: ARG001
-    """Invoked asynchronously with {"runId": ...} or {"runId":..., "resume": true}."""
+    """Invoked asynchronously with {"runId": ...} or {"runId":..., "resume": true}.
+
+    `provisionOwner` without a runId is the long half of account-harness
+    creation. It must be handled before the run lookup: a warm-up event has
+    no run, and treating it as one would seal a phantom failure.
+    """
+    if event.get("provisionOwner") and not event.get("runId"):
+        return _provision_owner_harness(str(event["provisionOwner"]))
+
     run_id = event["runId"]
     store = Store(event.get("ownerId") or _owner())
     run = store.get(K.run_pk(run_id), "META")

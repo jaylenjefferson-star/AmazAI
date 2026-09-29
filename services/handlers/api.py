@@ -1760,6 +1760,18 @@ def _create_agent(store: Store, body: dict, event: dict):
         store.transact_delete(plan.rollback_keys)
         store.put(A.audit_event(plan.agent_id, "agent.provision_failed", actor,
                                 detail=f"{type(exc).__name__}: {exc}"))
+        if _provision_is_retryable(exc) and standard_runtime.shared_enabled():
+            _continue_harness_on_orchestrator(store.owner_id)
+            detail = str(exc)
+            if "retry this request" not in detail:
+                detail = f"{detail}; retry this request"
+            return _resp(503, {
+                "error": "provisioning",
+                "detail": detail,
+                "retryable": True,
+                "agentId": plan.agent_id,
+                "note": "nothing was left behind; the same request can be retried",
+            })
         return _resp(502, {
             "error": "provisioning_failed",
             "detail": f"{type(exc).__name__}: {exc}",
@@ -1780,9 +1792,42 @@ def _schedule(store: Store, routine: dict) -> None:
     schedules.put(routine, store.owner_id)
 
 
+def _runtime_is_ready(store: Store) -> bool:
+    row = store.try_get(K.user_pk(store.owner_id), K.runtime_sk())
+    return bool(row and row.get("state") == standard_runtime.READY and row.get("harnessArn"))
+
+
+def _provision_is_retryable(exc: BaseException) -> bool:
+    """True when another attempt can succeed without a human changing anything.
+
+    A missing model id is not one of those: retrying it only repeats the
+    same sentence. A harness AWS is still creating is.
+    """
+    if isinstance(exc, standard_runtime.StillCreating):
+        return True
+    text = str(exc)
+    if "no modelId resolved" in text:
+        return False
+    return ("retry this request" in text or "still CREATING" in text
+            or "still being provisioned" in text)
+
+
 def _provision_harness(store: Store, agent: dict) -> dict:
-    """Give the agent its runtime identity and mark it runnable (`provisioning`)."""
-    return provisioning.provision_harness(store, agent)
+    """Give the agent its runtime identity and mark it runnable (`provisioning`).
+
+    The request itself only waits a few seconds. Harness creation on this
+    account can take minutes, which API Gateway will kill at 30s — and a
+    killed request used to stamp the runtime FAILED while AWS was still
+    CREATING. The orchestrator owns that wait.
+    """
+    if standard_runtime.shared_enabled() and not _runtime_is_ready(store):
+        _continue_harness_on_orchestrator(store.owner_id)
+    return provisioning.provision_harness(
+        store, agent,
+        wait_seconds=standard_runtime.REQUEST_WAIT_SECONDS,
+        ready_wait_seconds=standard_runtime.REQUEST_READY_SECONDS,
+        release_on_timeout=True,
+    )
 
 
 def _priority_label(agent_message: dict) -> str:
@@ -2390,12 +2435,48 @@ def _warm_account_harness(context, owner_id: str) -> None:
         traceback.print_exc()
 
 
-def _provision_owner_harness(owner_id: str) -> dict:
-    """The async-invoked half of `_warm_account_harness`."""
-    store = Store(owner_id)
+def _continue_harness_on_orchestrator(owner_id: str) -> None:
+    """Hand the long readiness wait to the 15-minute worker.
+
+    The API function cannot outlive API Gateway, and invoking it again only
+    buys another 30 seconds. `ORCHESTRATOR_FN_ARN` is already granted to this
+    function; a missing value (tests, local) is a quiet no-op.
+    """
+    fn = os.environ.get("ORCHESTRATOR_FN_ARN")
+    if not fn or not owner_id:
+        return
     try:
-        harness_arn = standard_runtime.ensure_shared_harness(store)
+        boto3.client("lambda").invoke(
+            FunctionName=fn, InvocationType="Event",
+            Payload=json.dumps({"provisionOwner": owner_id}).encode(),
+        )
+    except Exception:  # noqa: BLE001 -- signup/create must not fail because this did
+        traceback.print_exc()
+
+
+def _provision_owner_harness(owner_id: str) -> dict:
+    """The async-invoked half of `_warm_account_harness`.
+
+    Schedule the long worker first, then use the rest of this 30s invocation
+    as a head start. If the function is killed mid-create, the worker is
+    already polling and the row is left PROVISIONING rather than FAILED.
+    """
+    store = Store(owner_id)
+    if not _runtime_is_ready(store):
+        _continue_harness_on_orchestrator(owner_id)
+    try:
+        harness_arn = standard_runtime.ensure_shared_harness(
+            store,
+            wait_seconds=standard_runtime.REQUEST_WAIT_SECONDS,
+            ready_wait_seconds=standard_runtime.WARM_READY_SECONDS,
+            release_on_timeout=True,
+        )
         return {"ok": True, "harnessArn": harness_arn}
+    except standard_runtime.StillCreating as exc:
+        return {"ok": False, "pending": True, "error": str(exc)}
+    except standard_runtime.RuntimeUnavailable as exc:
+        return {"ok": False, "pending": _provision_is_retryable(exc),
+                "error": f"{type(exc).__name__}: {exc}"}
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}

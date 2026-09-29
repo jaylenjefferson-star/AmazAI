@@ -126,4 +126,17 @@ jobs:
       # and 404 on every deep link.
       - name: The build produced an entry point
         working-directory: web
-        run: test -f dist/index.html
+        run: |
+          test -f dist/index.html
+          # /welcome/ must be a real object. Amplify 301s /welcome to
+          # /welcome/; without this file that URL is a 404 whose body is
+          # index.html, and a reload restarts setup.
+          test -f dist/welcome/index.html
+          cmp dist/index.html dist/welcome/index.html
+          # Plan picker and Stripe return paths are client routes too.
+          # A hard load of /plans or /billing must be index.html at 200,
+          # the same way /welcome is.
+          for route in billing plans plans/success; do
+            test -f "dist/${route}/index.html"
+            cmp dist/index.html "dist/${route}/index.html"
+          done
