@@ -10,7 +10,7 @@ import './characters/characters.css';
 
 import { AmazAIAuthProvider, configured, isOwner, useAuth0 } from './auth0';
 import { syncToPath } from './theme';
-import { isPublicPath } from './publicRoutes';
+import { isPublicPath, isWelcomePath, normalizePublicPath } from './publicRoutes';
 import AuthGate from './components/AuthGate';
 import Shell from './app/Shell';
 import { keyedBy } from './app/keyedRoute';
@@ -115,7 +115,11 @@ function FirstRunGuard({ children }) {
   // Only an account with nobody in it is walled in. One that has agents but no
   // first Bot (OFFER) is a working org and keeps its inbox; the inbox offers
   // the first Bot there instead of blocking the way to the rest.
-  if (firstRun === NEEDED && location.pathname !== '/welcome') {
+  // `/welcome/` is the URL Amplify serves after its trailing-slash redirect.
+  // Comparing the raw pathname sent a signed-in owner to `/` and straight
+  // back here, which is the reload loop on top of a failed first Bot.
+  // The query string stays so a plan-picker return is not dropped on the way in.
+  if (firstRun === NEEDED && !isWelcomePath(location.pathname)) {
     return <Navigate to={{ pathname: '/welcome', search: location.search }} replace />;
   }
   return children;
@@ -168,8 +172,12 @@ function AdminOnly({ children }) {
 }
 
 function Router() {
+  const location = useLocation();
+  // Match `/welcome/` as `/welcome` before the `*` route turns it into `/`.
+  const pathname = normalizePublicPath(location.pathname);
+  const matched = pathname === location.pathname ? location : { ...location, pathname };
   return (
-    <Routes>
+    <Routes location={matched}>
       {/* Public */}
       <Route path="/welcome-to-amazai" element={<PublicOnly><Landing /></PublicOnly>} />
       <Route path="/about" element={<About />} />

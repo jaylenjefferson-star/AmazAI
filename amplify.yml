@@ -15,6 +15,11 @@ applications:
         build:
           commands:
             - npm run build
+            # Merge the SPA 200 rewrite onto this Amplify app so /welcome and
+            # /agents/:id hard-loads are index.html with status 200, not
+            # 301→404. Static copies from the build already cover /welcome/
+            # if this call cannot auth. A permission miss must not fail deploy.
+            - node scripts/apply-amplify-spa-rewrite.mjs --apply || echo "Amplify SPA rewrite was not applied; dist/welcome/index.html still ships"
       artifacts:
         baseDirectory: dist
         files:

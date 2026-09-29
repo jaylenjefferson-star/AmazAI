@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPublicPath, normalizePublicPath } from './publicRoutes';
+import { SPA_ENTRY_PATHS, isPublicPath, isWelcomePath, normalizePublicPath } from './publicRoutes';
 
 describe('public route matching', () => {
   it('treats canonical and trailing-slash policy URLs as the same public route', () => {
@@ -16,5 +16,18 @@ describe('public route matching', () => {
   it('normalizes only trailing slashes', () => {
     expect(normalizePublicPath('/acceptable-use/')).toBe('/acceptable-use');
     expect(normalizePublicPath('/')).toBe('/');
+  });
+
+  it('treats /welcome/ as setup, not a public marketing page', () => {
+    expect(isWelcomePath('/welcome')).toBe(true);
+    expect(isWelcomePath('/welcome/')).toBe(true);
+    expect(isWelcomePath('/welcome-to-amazai')).toBe(false);
+    expect(isPublicPath('/welcome')).toBe(false);
+    expect(isPublicPath('/welcome/')).toBe(false);
+    expect(SPA_ENTRY_PATHS).toContain('/welcome');
+    expect(SPA_ENTRY_PATHS).toEqual(expect.arrayContaining([
+      '/billing', '/plans', '/plans/success',
+    ]));
+    expect(SPA_ENTRY_PATHS.some((path) => isPublicPath(path))).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import { ARCHETYPES, ARCHETYPE_KEYS } from '../characters/archetypes';
 import { operatorFirstName, useAuth0 } from '../auth0';
 import { api } from '../api';
 import { rememberSetupDone } from '../hooks/useFirstRun';
+import { isRetryableProvisionError } from '../lib/provisionRetry';
 
 // Six of the ten the API accepts (`agents.AVATAR_COLORS`). Kept as a short
 // list rather than the full palette because this is the first screen anyone
@@ -146,14 +147,14 @@ export default function Onboarding() {
   // A brand-new owner's account runtime is created lazily, warmed by a
   // best-effort async call the moment they signed in (api._warm_account_harness)
   // -- a head start, not a guarantee. Real AgentCore harness creation is
-  // genuinely variable (seconds to a couple of minutes), so the very first
-  // create-Bot call landing before it is ready is expected, not exceptional:
-  // the server says so explicitly ("...; retry this request"). This is the
-  // one place in the whole console that error text is pattern-matched rather
-  // than just shown, because it is the one place a brand-new person's very
-  // first click would otherwise show them a raw backend exception instead of
-  // "hang on, this can take a minute."
-  const PROVISIONING_RETRY_MAX = 8;
+  // genuinely variable (seconds to a couple of minutes). The server says
+  // "retry this request" when it still owns the wait; API Gateway does not,
+  // and its 30s kill is "Internal Server Error" / 504. Both are the same
+  // wait. Twenty tries at 6s covers that window without hanging a permanent
+  // failure (a missing model id, a name conflict) which is not retried.
+  // One idempotency key for the whole loop, so a timeout that did create
+  // the Bot resolves to it instead of a second one.
+  const PROVISIONING_RETRY_MAX = 20;
   const PROVISIONING_RETRY_DELAY_MS = 6000;
 
   async function finish() {
@@ -184,7 +185,7 @@ export default function Onboarding() {
         nav(`/agents/${bot.agentId}`, { replace: true });
         return;
       } catch (err) {
-        const stillSettingUp = /retry this request/i.test(err.message);
+        const stillSettingUp = isRetryableProvisionError(err.message);
         if (stillSettingUp && attempt < PROVISIONING_RETRY_MAX) {
           setRetrying(true);
           // eslint-disable-next-line no-await-in-loop

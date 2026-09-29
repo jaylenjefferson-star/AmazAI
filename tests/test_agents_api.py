@@ -152,6 +152,26 @@ class TestCreate:
         status, threads = call("GET", "/threads")
         assert "dm-cloud-operations" in [t["threadId"] for t in threads["threads"]]
 
+    def test_a_harness_still_creating_is_retryable_and_leaves_no_bot(self, api_table, monkeypatch):
+        from amazai import standard_runtime as RT
+
+        def still(store, agent):
+            raise RT.StillCreating(
+                "the account harness is still CREATING; retry this request")
+
+        monkeypatch.setattr(api, "_provision_harness", still)
+        kicked = []
+        monkeypatch.setattr(api, "_continue_harness_on_orchestrator",
+                            lambda owner: kicked.append(owner))
+
+        status, body = call("POST", "/agents", NEW_AGENT)
+
+        assert status == 503
+        assert body["retryable"] is True
+        assert "retry this request" in body["detail"]
+        assert kicked == ["owner-a"]
+        assert call("GET", "/agents")[1]["agents"] == []
+
     def test_a_failed_harness_leaves_nothing_behind(self, api_table, monkeypatch):
         """The guarantee: if provisioning fails, there is no agent — not an
         inert one, not one missing its grants."""
