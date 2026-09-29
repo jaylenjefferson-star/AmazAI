@@ -19,8 +19,8 @@ import { Auth0Provider, useAuth0 } from '@auth0/auth0-react';
 export const config = {
   domain: import.meta.env.VITE_AUTH0_DOMAIN || '',
   clientId: import.meta.env.VITE_AUTH0_CLIENT_ID || '',
-  // Only set once an API actually validates access tokens. Asking for an
-  // audience that nothing checks yields a token nothing checks.
+  // Must match config/auth0.json `audience`. Empty means Auth0 issues a
+  // token for the SPA client only, which identity.verify rejects.
   audience: import.meta.env.VITE_AUTH0_AUDIENCE || '',
 };
 
@@ -100,6 +100,11 @@ export function AmazAIAuthProvider({ children }) {
       domain={config.domain}
       clientId={config.clientId}
       authorizationParams={{
+        // Auth0 must allow this exact origin as a callback URL, a logout URL,
+        // and a web origin. Hosts the console is served from: https://amazai.co
+        // (www.amazai.co 301s to the apex before this SPA runs), the Amplify
+        // branch https://main.d2qtxrhp46u9pz.amplifyapp.com, and local Vite
+        // on ports 5173 and 4173.
         redirect_uri: window.location.origin,
         ...(config.audience ? { audience: config.audience } : {}),
       }}

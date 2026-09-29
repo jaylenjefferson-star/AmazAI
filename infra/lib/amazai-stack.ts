@@ -523,7 +523,15 @@ export class AmazaiStack extends cdk.Stack {
       },
     });
 
-    const auth0Issuer = `https://${props.auth0Domain.replace(/^https:\/\//, '').replace(/\/$/, '')}/`;
+    if (!props.auth0Domain || !props.auth0Audience
+        || props.auth0Domain.includes('://') || props.auth0Domain.includes('/')) {
+      throw new Error(
+        'auth0Domain must be a bare host and auth0Audience must be set, '
+        + 'matching config/auth0.json and identity.issuer()',
+      );
+    }
+    // Same string identity.issuer() builds from AUTH0_DOMAIN: https://<bare-host>/
+    const auth0Issuer = `https://${props.auth0Domain}/`;
     const httpAuthorizer = new apigwv2auth.HttpJwtAuthorizer('Auth0JwtAuth', auth0Issuer, {
       jwtAudience: [props.auth0Audience],
     });

@@ -213,7 +213,7 @@ the path of least resistance.
 
 | Section | Contents |
 |---|---|
-| **Account** | Cognito identity, MFA devices, sign-out everywhere. |
+| **Account** | Auth0 identity, sign-out. MFA devices are an Auth0 tenant setting. |
 | **Connectors** | Every authorization: provider, account, scopes, capability class, expiry/refresh state, **which agents hold grants**, last used. Revoke — with a warning naming the agents and routines that will break. |
 | **Devices** | Registered machines, last seen, pause / revoke / remove. (M5) |
 | **Security** | Always-approve list (editable, with a non-removable floor — see [10](10-approvals-and-evidence.md)), approval expiry windows, takeover timeout. |

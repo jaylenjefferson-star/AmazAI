@@ -177,21 +177,25 @@ you find. ([D4](docs/architecture/15-open-decisions.md))
 - DynamoDB table + `gsi1` + `gsi2`, PITR on, `RemovalPolicy.RETAIN`
 - S3 drive bucket (versioned, encrypted, block public access)
 - S3 evidence bucket (versioned, **no lifecycle delete**)
-- Cognito user pool: `selfSignUpEnabled: false`, TOTP MFA required, one user
+- Auth0 JWT authorizer (no Cognito user pool). Issuer and audience come from
+  [`config/auth0.json`](config/auth0.json): tenant
+  `dev-msijboy7a85k3chd.us.auth0.com`, audience `https://api.amazai.co`. The
+  same values are the Lambda `AUTH0_DOMAIN` / `AUTH0_AUDIENCE` environment.
+  Signup and MFA are Auth0 dashboard policy, not CloudFormation.
 - **One harness execution role per seat**, trusted by
   `bedrock-agentcore.amazonaws.com`, granting only: that agent's S3 prefix,
   `bedrock:InvokeModel*`, and its own log group
 - Lambda layer from `layer/` (built by `scripts/build_layer.sh`)
 - Five Python 3.12 arm64 Lambdas: `api`, `ws`, `orchestrator` (15 min),
   `routine` (15 min), `sweeper`
-- HTTP API with Cognito JWT authorizer, `ANY /{proxy+}` → `api`
+- HTTP API with Auth0 JWT authorizer, `ANY /{proxy+}` → `api`
 - WebSocket API `$connect` / `$disconnect` / `$default` → `ws`, stage `live`
 - EventBridge rule → `sweeper` every 5 minutes
 - EventBridge Scheduler role; `api` gets `scheduler:*Schedule` scoped to
   `amazai-*` plus `iam:PassRole` conditioned on
   `iam:PassedToService = scheduler.amazonaws.com`
 - S3 + CloudFront (OAC), SPA error mappings 403/404 → `/index.html`
-- Outputs: ConsoleUrl, ApiUrl, WsUrl, UserPoolId, UserPoolClientId,
+- Outputs: ApiUrl, WsUrl, Auth0Domain, Auth0Audience,
   DriveBucket, EvidenceBucket, the restricted DynamicAgentRoleArn, and retained
   dedicated-role outputs for rollback/specialized compute
 
@@ -282,7 +286,8 @@ Three columns: sidebar / chat+timeline / right panel. Full IA in
   countdown), Browser (screenshot + takeover), Routines, Evidence.
 - **Agent detail** — eight tabs: Identity, Instructions, Memory, Access,
   Workspace, Routines, Activity, Usage.
-- Auth: `amazon-cognito-identity-js`, ID token in `authorization`, TOTP prompt.
+- Auth: `@auth0/auth0-react` (Auth0 SPA JS, authorization code + PKCE). Access
+  token in `authorization`. Domain and audience match `config/auth0.json`.
 - One WebSocket, exponential backoff reconnect.
 
 The Computer tab's terminal uses `invoke_agent_runtime_command` — no model, no
@@ -334,9 +339,9 @@ two is not optional — a connector whose risky actions render as a generic
 cd infra && npm install && npx cdk bootstrap && npx cdk deploy
 # note the outputs
 
-# 2. your one account
-aws cognito-idp admin-create-user \
-  --user-pool-id <UserPoolId> --username jaylen.jefferson@amazflow.com
+# 2. the owner, in Auth0 (there is no Cognito user pool)
+#    Create the user in the tenant from config/auth0.json.
+#    See docs/ADMIN_BOOTSTRAP.md. Do not store the password in this repo.
 
 # 3. resolve the model ID for this account, then write it into seats.json
 aws bedrock list-inference-profiles --region us-west-2
@@ -377,7 +382,7 @@ The shape still holds:
 | Harness microVM | ~$7/mo at ~2 active hrs/day, 1 vCPU / 2 GB |
 | DynamoDB + Lambda + APIs + session storage | ~$3/mo |
 | S3 (drive + evidence) + CloudFront | ~$2–4/mo |
-| Cognito, Gateway, Identity | ~$0 |
+| Auth0 (external), Gateway, Identity | ~$0 |
 
 Idle cost is near zero — nothing runs between conversations. Containment: pin
 `maxTokens` per seat, enforce per-run and per-month budgets in code, cap tool

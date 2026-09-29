@@ -28,11 +28,11 @@ Each step ends somewhere you can stop with something that works.
 
 **1 · Infrastructure (CDK, TypeScript)** — one stack.
 DynamoDB + `gsi1` + `gsi2`, PITR, RETAIN. S3 drive bucket (versioned) and
-evidence bucket (versioned, no lifecycle delete). Cognito pool, self-signup off,
-TOTP required, one user. **One harness execution role for the Engineering seat**,
+evidence bucket (versioned, no lifecycle delete). Auth0 JWT authorizer
+(issuer and audience in `config/auth0.json`; no Cognito user pool). **One harness execution role for the Engineering seat**,
 S3 prefix-scoped. Lambda layer from `scripts/build_layer.sh`. Five Python 3.12
 arm64 Lambdas: `api`, `ws`, `orchestrator` (15 min), `routine` (15 min),
-`sweeper`. HTTP API with Cognito JWT authorizer. WebSocket API, stage `live`.
+`sweeper`. HTTP API with Auth0 JWT authorizer. WebSocket API, stage `live`.
 EventBridge rule → `sweeper` every 5 min. S3 + CloudFront (OAC, 403/404 →
 `/index.html`).
 → **Checkpoint:** `npx cdk synth` clean.
@@ -72,8 +72,8 @@ catalog with capability classes, `GRANT#` rows, tool resolution.
 
 **9 · Console.** Three columns. Sidebar, chat+timeline, right panel with
 Computer / Browser / Evidence tabs. Approval cards. Agent detail: Identity,
-Instructions, Memory, Access, Workspace, Activity, Usage. Cognito auth with
-TOTP. One WebSocket with backoff reconnect.
+Instructions, Memory, Access, Workspace, Activity, Usage. Auth0 SPA login
+(authorization code + PKCE). One WebSocket with backoff reconnect.
 → **Checkpoint:** the acceptance test below, entirely in the UI.
 
 ### Acceptance test

@@ -17,6 +17,11 @@ one is a token that was valid, which is not the same thing.
 Cognito is gone from this path rather than kept alongside. Two identity
 systems that both "work" is how a request ends up authenticated by whichever
 one happened to be checked first.
+
+The issuer and audience are ``AUTH0_DOMAIN`` and ``AUTH0_AUDIENCE``, which
+the stack copies from ``config/auth0.json`` onto the Lambda. ``check_config``
+refuses a missing value or a domain that is not a bare host, because that is
+how ``issuer()`` would stop matching the API Gateway authorizer.
 """
 
 from __future__ import annotations
@@ -57,6 +62,22 @@ def issuer() -> str:
 
 def configured() -> bool:
     return bool(domain() and audience())
+
+
+def check_config() -> None:
+    """Refuse to verify when issuer or audience is missing or malformed.
+
+    The Lambda receives ``AUTH0_DOMAIN`` and ``AUTH0_AUDIENCE`` from the
+    stack, which reads ``config/auth0.json``. ``issuer()`` is
+    ``https://{domain}/``. A domain that still carries a scheme or a path
+    would make that a different issuer from the API Gateway authorizer,
+    which is built the same way from the bare host.
+    """
+    d, a = domain(), audience()
+    if not d or not a:
+        raise AuthError("AUTH0_DOMAIN and AUTH0_AUDIENCE are not configured")
+    if "://" in d or "/" in d:
+        raise AuthError("AUTH0_DOMAIN must be the bare tenant host")
 
 
 _jwks: dict | None = None
@@ -127,8 +148,7 @@ def verify(token: str) -> Principal:
     """Verify an Auth0 access token and return the caller it names."""
     import jwt
 
-    if not configured():
-        raise AuthError("AUTH0_DOMAIN and AUTH0_AUDIENCE are not configured")
+    check_config()
     if not token:
         raise AuthError("no bearer token")
 

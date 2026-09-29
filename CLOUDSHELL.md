@@ -88,7 +88,7 @@ The failure modes worth knowing, in the order you are likely to hit them:
 | `resolve_models.py` finds nothing | Model access not enabled — see above |
 | `AccessDeniedException` on `bedrock-agentcore` | Your IAM identity lacks AgentCore permissions |
 | `cdk bootstrap` fails | The account has never used CDK in this region; the script runs it for you, but it needs permission to create the bootstrap stack |
-| Console loads but sign-in fails | The Cognito user does not exist yet — step 1 of the printed next steps |
+| Console loads but sign-in fails | Auth0 callback URL, client id, or audience does not match this deploy — see the printed next steps and `config/auth0.json` |
 | Agent replies with "no modelId configured" | `seats.json` was not written; re-run step 3 |
 
 Send me whatever it prints and I will fix it.

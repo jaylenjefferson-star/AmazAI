@@ -87,11 +87,11 @@ there is no way to share them in plain CSS.
 `import.meta.env.DEV` so it is absent from a production bundle. It exists
 because the console is otherwise unreviewable until the stack is deployed.
 
-Three bugs fixed while wiring this up, all of which blanked the page:
-`global` undefined (Vite vs. `amazon-cognito-identity-js`, fixed by `define`),
-`CognitoUserPool` throwing at import when `.env` was unfilled (now lazy, with
-a real message), and an approval arriving mid-stream rendering above the
-sentence explaining it (now flushed in order).
+An approval arriving mid-stream used to render above the sentence explaining
+it; the stream is flushed in order now. An earlier blank page came from
+`amazon-cognito-identity-js` (`global` undefined, and `CognitoUserPool`
+throwing at import when `.env` was unfilled). That library is gone. Auth0 is
+the only login, and `config/auth0.json` is the issuer and audience.
 
 ## Connectors
 
