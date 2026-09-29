@@ -93,6 +93,13 @@ def ensure_billing_row(store: Store) -> dict:
         "stripeCustomerId": None,
         "stripeSubscriptionId": None,
         "subscriptionStatus": None,
+        # A brand-new row has not picked a plan. The console sends that
+        # account to the plan picker. A row that already exists lacks this
+        # field and stays open: reading "missing" as "locked" would wall in
+        # every account that predates the picker, including when billing
+        # cannot be read. The trial grant above is unchanged — choosing
+        # Explore or a paid plan does not remove it.
+        "registrationIncomplete": True,
         "createdAt": now_iso(), "updatedAt": now_iso(),
     })
     _ledger_entry(store, kind="trial_grant", amount_usd=TRIAL_GRANT_USD,
@@ -149,6 +156,24 @@ def has_credit(store: Store) -> bool:
     if not row:
         return True
     return _to_usd(row.get("creditBalanceMicros", 0)) > 0.0
+
+
+def summary(store: Store) -> dict:
+    """The account billing view GET /billing returns.
+
+    `registrationIncomplete` is true only when the row says so. Absent
+    means the account predates the plan picker and is not gated.
+    """
+    row = ensure_billing_row(store)
+    return {
+        "balanceUsd": balance_usd(store),
+        "creditsRemaining": credits_remaining(store),
+        "tier": row.get("tier"),
+        "subscriptionStatus": row.get("subscriptionStatus"),
+        "hasCredit": has_credit(store),
+        "registrationIncomplete": row.get("registrationIncomplete") is True,
+        "hasStripeCustomer": bool(row.get("stripeCustomerId")),
+    }
 
 
 def spend(store: Store, amount_usd: float, *, run_id: str, agent_id: str) -> float:
@@ -238,11 +263,50 @@ def load_plans() -> dict:
     return json.loads(_PLANS_PATH.read_text())
 
 
+EXPLORE_PLAN = "explore"
+
+
 def plan(key: str) -> dict:
     plans = load_plans()["plans"]
     if key not in plans:
         raise ValueError(f"unknown plan {key!r}")
     return plans[key]
+
+
+def plan_for_price(*, price_id: str | None = None,
+                   lookup_key: str | None = None) -> tuple[str, dict] | None:
+    """The catalog plan a Stripe price id or lookup key names, if it is one
+    of ours. An unrecognized price is not mapped to a nearby tier."""
+    plans = load_plans()["plans"]
+    if price_id:
+        for key, row in plans.items():
+            if row.get("stripePriceId") == price_id:
+                return key, row
+    if lookup_key:
+        for key, row in plans.items():
+            if row.get("lookupKey") == lookup_key:
+                return key, row
+    return None
+
+
+def confirm_explore(store: Store) -> dict:
+    """Select Explore without Stripe Checkout.
+
+    Explore is the free plan in the catalog: no card, no Stripe customer.
+    Choosing it counts as plan selected (`registrationIncomplete` clears).
+    It does not grant credits — the trial balance already on the row stays
+    exactly as `ensure_billing_row` left it.
+    """
+    row = plan(EXPLORE_PLAN)
+    if float(row.get("priceUsd", -1)) != 0.0:
+        raise ValueError("explore is not a free plan in the current catalog")
+    ensure_billing_row(store)
+    store.update(_pk(store), BILLING_SK, {
+        "tier": EXPLORE_PLAN,
+        "creditRateUsd": row.get("creditRateUsd"),
+        "registrationIncomplete": False,
+    })
+    return summary(store)
 
 
 def credit_top_up(lookup_key: str) -> dict:
@@ -297,6 +361,9 @@ def start_checkout(store: Store, *, plan_key: str | None = None,
                    cancel_url: str, customer_email: str | None = None) -> str:
     """Return a Stripe Checkout URL for a subscription plan or a one-time
     credit top-up -- exactly one of `plan_key`/`top_up_key` is given."""
+    if plan_key == EXPLORE_PLAN:
+        raise ValueError(
+            "explore is confirmed in the app without a card; it is not a Checkout plan")
     if plan_key:
         row, mode, metadata = plan(plan_key), "subscription", {"planKey": plan_key}
     elif top_up_key:
@@ -379,6 +446,7 @@ def _on_checkout_completed(session: dict, event_id: str, *, table=None) -> dict:
             row = plan(plan_key)
             store.update(_pk(store), BILLING_SK, {
                 "tier": plan_key, "creditRateUsd": row.get("creditRateUsd"),
+                "registrationIncomplete": False,
             })
     return {"handled": True, "ownerId": owner_id}
 
@@ -402,7 +470,30 @@ def _on_subscription_changed(sub: dict, kind: str, *, table=None) -> dict:
     if not store:
         return {"handled": False, "reason": "unknown customer"}
     status = "canceled" if kind == "customer.subscription.deleted" else sub.get("status")
-    store.update(_pk(store), BILLING_SK, {
-        "subscriptionStatus": status, "stripeSubscriptionId": sub.get("id"),
-    })
+    changes = {"subscriptionStatus": status, "stripeSubscriptionId": sub.get("id")}
+    # A portal plan change does not echo the checkout session's planKey.
+    # The subscription's price is the entitlement, and only a price this
+    # catalog actually lists may move the tier. Anything else updates the
+    # status and leaves the tier where it was.
+    if kind != "customer.subscription.deleted":
+        price_id, lookup_key = _price_identity(sub)
+        found = plan_for_price(price_id=price_id, lookup_key=lookup_key)
+        if found:
+            key, row = found
+            changes["tier"] = key
+            changes["creditRateUsd"] = row.get("creditRateUsd")
+            changes["registrationIncomplete"] = False
+    store.update(_pk(store), BILLING_SK, changes)
     return {"handled": True, "ownerId": store.owner_id}
+
+
+def _price_identity(sub: dict) -> tuple[str | None, str | None]:
+    items = ((sub.get("items") or {}).get("data")) or []
+    if not items:
+        return None, None
+    price = (items[0] or {}).get("price")
+    if isinstance(price, str):
+        return price, None
+    if isinstance(price, dict):
+        return price.get("id"), price.get("lookup_key")
+    return None, None

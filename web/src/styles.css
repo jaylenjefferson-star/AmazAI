@@ -1793,6 +1793,16 @@ button.lg { min-height: 46px; padding: 0 24px; font-size: 14.5px; }
 .pricing-card ul { padding-left: 0; }
 .pricing-card button, .pricing-card .ghost { margin-top: auto; }
 
+.plans-page { min-height: 100%; padding: 32px 20px 64px; }
+.plans-page-inner { max-width: 1100px; margin: 0 auto; }
+.plans-page h1 { margin: 14px 0 8px; font-size: 28px; letter-spacing: -.03em; }
+.plans-lead { margin: 0 0 18px; color: var(--dim); max-width: 62ch; }
+.plans-continue { margin: 0 0 18px; }
+@media (max-width: 720px) {
+  .plans-page { padding: 20px 16px 40px; }
+  .plans-page h1 { font-size: 24px; }
+}
+
 .pricing-teams {
   text-align: center; padding: 28px 20px; margin-bottom: 44px;
   border: 1px solid var(--hairline); border-radius: var(--r-lg); background: var(--raised);

@@ -16,6 +16,7 @@ class TestTheFreeTrialGrant:
     def test_first_sight_creates_the_row_with_the_trial_balance(self, store):
         row = B.ensure_billing_row(store)
         assert row["tier"] == B.TIER_TRIAL
+        assert row["registrationIncomplete"] is True
         assert B.balance_usd(store) == B.TRIAL_GRANT_USD
 
     def test_a_second_call_does_not_grant_a_second_trial(self, store):
@@ -292,6 +293,11 @@ class TestStartCheckout:
         with pytest.raises(ValueError, match="exactly one"):
             B.start_checkout(store, success_url="https://x", cancel_url="https://x")
 
+    def test_explore_is_not_a_checkout_plan(self, store):
+        with pytest.raises(ValueError, match="without a card"):
+            B.start_checkout(store, plan_key="explore",
+                             success_url="https://x", cancel_url="https://x")
+
     def test_a_plan_with_no_stripe_price_yet_refuses_clearly(self, store, monkeypatch):
         # A plan not yet run through scripts/stripe_setup.py still ships
         # stripePriceId: null -- simulated here rather than depending on the
@@ -336,6 +342,10 @@ class TestWebhookDispatch:
         assert result["handled"] is True
         assert B.balance_usd(store) == pytest.approx(B.TRIAL_GRANT_USD + 50.0)
         assert B.owner_for_stripe_customer("cus_1", table=table) == store.owner_id
+        # A credit pack is not a plan. Signup stays incomplete until a plan is named.
+        row = store.get(K_user_pk(store), B.BILLING_SK)
+        assert row["registrationIncomplete"] is True
+        assert row["tier"] == B.TIER_TRIAL
 
     def test_checkout_completed_for_a_subscription_sets_the_tier_without_double_granting(
             self, store, table):
@@ -350,6 +360,7 @@ class TestWebhookDispatch:
         row = store.get(K_user_pk(store), B.BILLING_SK)
         assert row["tier"] == "personal"
         assert row["creditRateUsd"] == pytest.approx(0.019)
+        assert row["registrationIncomplete"] is False
         assert B.balance_usd(store) == before  # invoice.paid grants the period, not this
 
     def test_checkout_completed_replayed_does_not_double_grant_a_top_up(self, store, table):
@@ -397,3 +408,42 @@ class TestWebhookDispatch:
         B.handle_webhook_event(event, table=table)
         row = store.get(K_user_pk(store), B.BILLING_SK)
         assert row["subscriptionStatus"] == "past_due"
+        # An unrecognized price must not invent a tier.
+        assert row["tier"] == B.TIER_TRIAL
+        assert row["registrationIncomplete"] is True
+
+    def test_subscription_updated_adopts_a_catalog_price(self, store, table):
+        B.ensure_billing_row(store)
+        B.link_stripe_customer(store, "cus_8", table=table)
+        price_id = B.plan("power")["stripePriceId"]
+        event = {"id": "evt_8", "type": "customer.subscription.updated",
+                 "data": {"object": {
+                     "customer": "cus_8", "id": "sub_2", "status": "active",
+                     "items": {"data": [{"price": {"id": price_id,
+                                                   "lookup_key": "amazai_power_monthly"}}]},
+                 }}}
+        B.handle_webhook_event(event, table=table)
+        row = store.get(K_user_pk(store), B.BILLING_SK)
+        assert row["tier"] == "power"
+        # The store keeps rates at six decimal places. Compare the persisted value.
+        assert row["creditRateUsd"] == pytest.approx(round(B.plan("power")["creditRateUsd"], 6))
+        assert row["registrationIncomplete"] is False
+        assert row["subscriptionStatus"] == "active"
+        assert B.balance_usd(store) == B.TRIAL_GRANT_USD
+
+
+class TestConfirmExplore:
+    def test_selects_explore_without_stripe_or_a_second_grant(self, store, monkeypatch):
+        def boom(*_a, **_k):
+            raise AssertionError("stripe")
+        monkeypatch.setattr(B.stripe_client, "StripeClient", boom)
+        B.ensure_billing_row(store)
+        before = B.balance_usd(store)
+        view = B.confirm_explore(store)
+        assert view["tier"] == "explore"
+        assert view["registrationIncomplete"] is False
+        assert view["hasStripeCustomer"] is False
+        assert view["balanceUsd"] == before
+        again = B.confirm_explore(store)
+        assert again["balanceUsd"] == before
+        assert len(B.ledger(store)) == 1  # the original trial grant only

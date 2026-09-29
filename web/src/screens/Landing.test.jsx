@@ -23,7 +23,7 @@ describe('Landing homepage', () => {
     expect(screen.getByText('No credit card required · Set up in minutes')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Start for free' }));
     expect(mockLoginWithRedirect).toHaveBeenCalledWith(
-      expect.objectContaining({ signup: true, returnTo: '/welcome' }));
+      expect.objectContaining({ signup: true, returnTo: '/plans' }));
   });
 
   it('introduces each product concept with a stable anchor id', () => {

@@ -132,6 +132,8 @@ const live = {
     ledger: (limit) => call('GET', `/billing/ledger${limit ? `?limit=${limit}` : ''}`),
     plans: () => call('GET', '/billing/plans'),
     checkout: (body) => call('POST', '/billing/checkout', body),
+    // Explore is the free plan: confirmed here, never a Checkout session.
+    confirmExplore: () => call('POST', '/billing/explore', {}),
     portal: () => call('POST', '/billing/portal', {}),
   },
 

@@ -53,7 +53,75 @@ class TestGetBillingPlans:
             assert key in body["plans"]
 
 
+class TestGetBilling:
+    def test_a_new_account_is_registration_incomplete(self, api_table):
+        status, body = call("GET", "/billing")
+        assert status == 200
+        assert body["tier"] == "trial"
+        assert body["registrationIncomplete"] is True
+        assert body["hasStripeCustomer"] is False
+        assert body["balanceUsd"] == billing.TRIAL_GRANT_USD
+
+
+class TestConfirmExplore:
+    def test_confirm_sets_explore_and_keeps_the_trial_balance(self, api_table):
+        status, body = call("POST", "/billing/explore", {})
+        assert status == 200
+        assert body["tier"] == "explore"
+        assert body["registrationIncomplete"] is False
+        assert body["hasStripeCustomer"] is False
+        assert body["balanceUsd"] == billing.TRIAL_GRANT_USD
+
+
 class TestPostCheckout:
+    def test_signup_checkout_returns_to_the_plan_picker(self, api_table, monkeypatch):
+        seen = {}
+
+        def capture(store, **kw):
+            seen.update(kw)
+            return "https://checkout.stripe.com/c/pay_x"
+
+        monkeypatch.setattr(api.billing, "start_checkout", capture)
+        status, body = call("POST", "/billing/checkout",
+                            {"planKey": "personal", "purpose": "signup"})
+        assert status == 200
+        assert body["url"] == "https://checkout.stripe.com/c/pay_x"
+        assert seen["success_url"] == f"{ORIGIN}/plans/success"
+        assert seen["cancel_url"] == f"{ORIGIN}/plans?checkout=cancelled"
+        assert seen["plan_key"] == "personal"
+
+    def test_billing_checkout_still_returns_to_billing(self, api_table, monkeypatch):
+        seen = {}
+
+        def capture(store, **kw):
+            seen.update(kw)
+            return "https://checkout.stripe.com/c/pay_x"
+
+        monkeypatch.setattr(api.billing, "start_checkout", capture)
+        status, _body = call("POST", "/billing/checkout", {"planKey": "personal"})
+        assert status == 200
+        assert seen["success_url"] == f"{ORIGIN}/billing?checkout=success"
+        assert seen["cancel_url"] == f"{ORIGIN}/billing?checkout=cancelled"
+
+    def test_an_unknown_purpose_is_refused(self, api_table, monkeypatch):
+        monkeypatch.setattr(api.billing, "start_checkout", lambda store, **kw: "https://x")
+        status, body = call("POST", "/billing/checkout",
+                            {"planKey": "personal", "purpose": "https://evil.example"})
+        assert status == 400
+        assert body["error"] == "invalid_request"
+
+    def test_signup_cannot_start_a_credit_top_up(self, api_table, monkeypatch):
+        monkeypatch.setattr(api.billing, "start_checkout", lambda store, **kw: "https://x")
+        status, body = call("POST", "/billing/checkout",
+                            {"topUpKey": "amazai_credits_50", "purpose": "signup"})
+        assert status == 400
+        assert "top-up" in body["detail"]
+
+    def test_explore_checkout_is_refused(self, api_table):
+        status, body = call("POST", "/billing/checkout", {"planKey": "explore"})
+        assert status == 400
+        assert "card" in body["detail"]
+
     def test_a_recognized_origin_starts_a_checkout(self, api_table, monkeypatch):
         monkeypatch.setattr(api.billing, "start_checkout",
                             lambda store, **kw: "https://checkout.stripe.com/x")

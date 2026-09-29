@@ -23,7 +23,7 @@ const iso = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString();
  * which one you are in:
  *
  *   ?demo=1            a working org, first Bot included
- *   ?demo=1&fresh=1    nobody here yet -- first-run setup
+ *   ?demo=1&fresh=1    nobody here yet -- plan picker, then first-run setup
  *   ?demo=1&offer=1    a fresh deploy: only the Engineering seat, no first Bot,
  *                      never onboarded. Before the fix this account skipped
  *                      setup and its first conversation was /agents/eng.
@@ -346,10 +346,19 @@ const OPTIONS = {
 // Mirrors the live shape (services/amazai/billing.py, billing_plans.json)
 // exactly -- same field names, same five real tiers -- so wiring this screen
 // to the real ledger is replacing the fixture calls, not redesigning it.
-let DEMO_BILLING = {
-  balanceUsd: 14.32, creditsRemaining: 754, tier: 'personal',
-  subscriptionStatus: 'active', hasCredit: true,
-};
+// `fresh` has not picked a plan. Every other demo account is already on
+// Personal, with a Stripe customer, so Change plan and the inbox both render.
+let DEMO_BILLING = MODE === 'fresh'
+  ? {
+      balanceUsd: 5, creditsRemaining: 263.16, tier: 'trial',
+      subscriptionStatus: null, hasCredit: true,
+      registrationIncomplete: true, hasStripeCustomer: false,
+    }
+  : {
+      balanceUsd: 14.32, creditsRemaining: 754, tier: 'personal',
+      subscriptionStatus: 'active', hasCredit: true,
+      registrationIncomplete: false, hasStripeCustomer: true,
+    };
 const DEMO_LEDGER = [
   { sk: 'l1', kind: 'subscription_renewal', amountUsd: 19.0, balanceAfterUsd: 19.0,
     detail: 'subscription period', createdAt: iso(-3 * 86400_000) },
@@ -358,23 +367,33 @@ const DEMO_LEDGER = [
   { sk: 'l3', kind: 'spend', amountUsd: -2.54, balanceAfterUsd: 14.32,
     detail: 'run run_c710', createdAt: iso(-3_600_000) },
 ];
+// Same price ids as services/amazai/billing_plans.json (AmazFlow LLC live
+// catalog). The demo does not charge; the ids are what the buttons key off
+// so a missing price still reads as "not available yet".
 const DEMO_PLANS = {
   currency: 'usd',
   plans: {
-    explore: { name: 'AmazAI Explore', description: 'Build your first AI team.',
-      priceUsd: 0, creditsPerMonth: 100, interval: 'month' },
-    personal: { name: 'AmazAI Personal', description: 'Your work, delegated.',
-      priceUsd: 19, creditsPerMonth: 1000, interval: 'month' },
-    personal_plus: { name: 'AmazAI Personal+', description: 'More capacity for daily work.',
-      priceUsd: 39, creditsPerMonth: 2500, interval: 'month' },
-    pro: { name: 'AmazAI Pro', description: 'For power users.',
-      priceUsd: 79, creditsPerMonth: 6000, interval: 'month' },
-    power: { name: 'AmazAI Power', description: 'For people who run their work through AmazAI.',
-      priceUsd: 149, creditsPerMonth: 12000, interval: 'month' },
+    explore: { name: 'AmazAI Explore', description: 'Build your first AI team. Try skills, agents, and safe tasks.',
+      priceUsd: 0, creditsPerMonth: 100, interval: 'month',
+      stripePriceId: 'price_1UIc2GC4NrBvP4LBAje0wRQD' },
+    personal: { name: 'AmazAI Personal', description: 'Your work, delegated. Agent workspace, connected tools, approval-first actions.',
+      priceUsd: 19, creditsPerMonth: 1000, interval: 'month',
+      stripePriceId: 'price_1UIc2MC4NrBvP4LBa9KfvJcm' },
+    personal_plus: { name: 'AmazAI Personal+', description: 'More capacity for daily work. More agents, more routines, add-on credits.',
+      priceUsd: 39, creditsPerMonth: 2500, interval: 'month',
+      stripePriceId: 'price_1UIc2QC4NrBvP4LBIjmeTR3n' },
+    pro: { name: 'AmazAI Pro', description: 'For power users. Priority runs, advanced Skills, more connected work.',
+      priceUsd: 79, creditsPerMonth: 6000, interval: 'month',
+      stripePriceId: 'price_1UIc2UC4NrBvP4LBs7EtQpTT' },
+    power: { name: 'AmazAI Power', description: 'For people who run their work through AmazAI. Maximum capacity, advanced controls, priority support.',
+      priceUsd: 149, creditsPerMonth: 12000, interval: 'month',
+      stripePriceId: 'price_1UIc2YC4NrBvP4LBfexRWPRb' },
   },
   creditTopUps: [
-    { name: '50 Amaz Credits', priceUsd: 50, lookupKey: 'amazai_credits_50' },
-    { name: '200 Amaz Credits', priceUsd: 200, lookupKey: 'amazai_credits_200' },
+    { name: '50 Amaz Credits', priceUsd: 50, lookupKey: 'amazai_credits_50',
+      stripePriceId: 'price_1UIc2cC4NrBvP4LBMe2o7fLT' },
+    { name: '200 Amaz Credits', priceUsd: 200, lookupKey: 'amazai_credits_200',
+      stripePriceId: 'price_1UIc2hC4NrBvP4LB4Ws6zG99' },
   ],
 };
 
@@ -733,8 +752,42 @@ export const demoApi = {
     get: async () => (await wait(80), { ...DEMO_BILLING }),
     ledger: async () => (await wait(80), { entries: [...DEMO_LEDGER].reverse() }),
     plans: async () => (await wait(60), DEMO_PLANS),
-    checkout: async () => (await wait(200), { url: '#demo-checkout' }),
-    portal: async () => (await wait(200), { url: '#demo-portal' }),
+    confirmExplore: async () => {
+      await wait(120);
+      DEMO_BILLING = {
+        ...DEMO_BILLING,
+        tier: 'explore',
+        registrationIncomplete: false,
+        hasStripeCustomer: false,
+      };
+      return { ...DEMO_BILLING };
+    },
+    checkout: async (body = {}) => {
+      await wait(200);
+      if (body.topUpKey) return { url: '#demo-checkout' };
+      if (body.planKey === 'explore') {
+        throw new Error('explore is confirmed in the app without a card; it is not a Checkout plan');
+      }
+      if (!body.planKey) throw new Error('exactly one of planKey or topUpKey is required');
+      DEMO_BILLING = {
+        ...DEMO_BILLING,
+        tier: body.planKey,
+        registrationIncomplete: false,
+        hasStripeCustomer: true,
+        subscriptionStatus: 'active',
+      };
+      // Signup returns in-app so the success screen can be reviewed without
+      // Stripe. A live checkout is a Stripe-hosted URL, which leaves the app.
+      if (body.purpose === 'signup') return { url: '/plans/success' };
+      return { url: '#demo-checkout' };
+    },
+    portal: async () => {
+      await wait(200);
+      if (!DEMO_BILLING.hasStripeCustomer) {
+        throw new Error('this account has no Stripe customer yet; subscribe first');
+      }
+      return { url: '#demo-portal' };
+    },
   },
 
   // The admin governance surface, against fixtures so the console renders

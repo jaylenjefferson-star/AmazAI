@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import Logo from './Logo';
 import { startLogin, useAuth0 } from '../auth0';
+import { SIGNUP_RETURN } from '../lib/billing';
 
 /**
  * Chrome shared by every logged-out page: the marketing pages, the Resources
@@ -160,7 +161,7 @@ export function TopNav() {
           <button
             type="button"
             className="mkt-nav-start"
-            onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: '/welcome' })}
+            onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: SIGNUP_RETURN })}
           >
             Start free
           </button>
@@ -211,7 +212,7 @@ export function TopNav() {
             <button
               type="button"
               className="mkt-nav-start"
-              onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: '/welcome' })}
+              onClick={() => startLogin(loginWithRedirect, { signup: true, returnTo: SIGNUP_RETURN })}
             >
               Start free
             </button>
